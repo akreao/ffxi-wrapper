@@ -16,12 +16,14 @@ x-logging: &logging
 # names one (an IPv4 address of this computer, such as its LAN or VPN
 # address), which keeps them off other networks the computer is on.
 
-# Every LSB service runs the same image. Only db-init has `build:`, so the
-# image is built once (when missing, or with --build) and the others use it.
-# LSB_IMAGE lets the desktop app build under another name, or point at a
-# prebuilt image such as ghcr.io/landsandboat/server:latest.
+# Every LSB service runs the same image: the one this repository's GitHub
+# workflow builds from the pinned commit and publishes. When it's missing,
+# `up` pulls it; if the pull fails (no image published for that commit, or
+# no internet), db-init's `build:` compiles it here instead, and the others
+# use that. `--build` always compiles here.
+# LSB_IMAGE points at any other image, such as ghcr.io/landsandboat/server:latest.
 x-lsb: &lsb
-  image: ${LSB_IMAGE:-ffxi-wrapper/lsb:local}
+  image: ${LSB_IMAGE:-ghcr.io/akreao/ffxi-wrapper/lsb:${LSB_COMMIT:-6cc5715c79331addb38e2bd20445d1b3d3e48504}}
   pull_policy: missing
   restart: on-failure
   logging: *logging
@@ -66,6 +68,7 @@ services:
   # migrations after that, then sets the address players are sent to.
   db-init:
     <<: *lsb
+    # Used only when the image can't be pulled (see x-lsb above).
     build:
       # LSB's own Dockerfile, at the pinned commit of the fork.
       # Submodules (LSB's navmeshes) aren't needed to build; meshes fills them.
@@ -78,7 +81,6 @@ services:
         BUILDKIT_CONTEXT_KEEP_GIT_DIR: "1"
         REPO_URL: ${LSB_REPO:-https://github.com/akreao/lsb.git}
         COMMIT_SHA: ${LSB_COMMIT:-6cc5715c79331addb38e2bd20445d1b3d3e48504}
-    pull_policy: !reset null
     command: ["/bin/sh", "/wrapper/db-init.sh"]
     # Root so it can write dbtool's state into DATA_DIR.
     user: root
