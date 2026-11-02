@@ -42,7 +42,8 @@ impl Ctx {
         let _ = self.handle.emit("task-line", line.into());
     }
 
-    fn track(&self, child: Option<Arc<Mutex<Child>>>) {
+    /// Records the process the task is waiting on, so a cancel stops it.
+    pub fn track(&self, child: Option<Arc<Mutex<Child>>>) {
         if let Some(running) = self.slot.lock().unwrap().as_mut() {
             running.child = child;
         }
@@ -63,12 +64,7 @@ impl Ctx {
         self.track(Some(child.clone()));
         let _ = done.join();
         // The streams are closed, so the process has ended or is about to.
-        let status = loop {
-            if let Some(status) = child.lock().unwrap().try_wait().map_err(|e| e.to_string())? {
-                break status;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        };
+        let status = wait(&child)?;
         self.track(None);
         if status.success() {
             return Ok(());
@@ -78,5 +74,16 @@ impl Ctx {
             Some(code) => format!("The command stopped with exit code {code}."),
             None => "The command was stopped.".into(),
         })
+    }
+}
+
+/// Waits for a tracked process without holding its lock, so a cancel can
+/// still reach it.
+pub fn wait(child: &Arc<Mutex<Child>>) -> Result<std::process::ExitStatus, String> {
+    loop {
+        if let Some(status) = child.lock().unwrap().try_wait().map_err(|e| e.to_string())? {
+            return Ok(status);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
     }
 }

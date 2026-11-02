@@ -73,6 +73,16 @@
         <button id="save-settings" type="button">Save</button>
         <p id="settings-error" class="error-text" hidden></p>
 
+        <h2>Game settings</h2>
+        <details id="game-settings">
+          <summary>Rates, new characters and more</summary>
+          <form id="game-form"></form>
+          <button id="save-game" type="button">Save</button>
+          <button id="reset-game" type="button" title="Put every value back to LandSandBoat's default">Defaults</button>
+          <p id="game-error" class="error-text" hidden></p>
+          <p class="hint">Saved to <code>overrides/settings/zz_app.lua</code>, which wins over the same settings in your own files there. A running server needs a restart to use them.</p>
+        </details>
+
         <h2>Game client</h2>
         <p class="hint" id="client-state"></p>
         <div id="client-download-box" hidden>
@@ -94,11 +104,20 @@
           <p class="hint">Create your account on the client's login screen (Create account), then log in.</p>
         </div>
 
+        <h2>Backups</h2>
+        <p class="hint" id="backups-state"></p>
+        <ul id="backups" class="backups" hidden></ul>
+        <div class="row-buttons">
+          <button id="backup-now" type="button">Back up now</button>
+          <button id="open-backups" type="button">Open backups folder</button>
+        </div>
+        <p class="hint">Stop backs up the database first when there's no backup from the last day. The newest 10 made by hand and 10 made automatically are kept.</p>
+
         <h2>Files</h2>
         <p class="hint"><span id="stack-dir"></span></p>
         <p class="hint" id="db-where"></p>
         <button id="open-dir" type="button">Open folder</button>
-        <p class="hint">The server keeps running when you close this app. Stop it here first to shut it down.</p>
+        <p class="hint">Closing this window leaves the app in the tray; Quit is there. The server keeps running until you Stop it, even after quitting.</p>
       </section>
 
       <section class="pane">

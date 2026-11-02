@@ -115,6 +115,8 @@ function showMain() {
     updateButtons();
     refreshServices();
     refreshClient();
+    refreshBackups();
+    loadGameSettings();
   }
 }
 
@@ -231,7 +233,8 @@ function updateButtons() {
   $("stop").disabled = busy || !running;
   $("build").disabled = busy || !!overview.docker_error;
   show($("cancel"), busy && task !== "stop");
-  for (const id of ["client-download", "client-install", "client-update"]) $(id).disabled = busy;
+  for (const id of ["client-download", "client-install", "client-update", "backup-now"]) $(id).disabled = busy;
+  for (const b of document.querySelectorAll(".backups button")) b.disabled = busy;
   show($("first-build"), !overview.image_ready && !overview.docker_error);
 }
 
@@ -268,6 +271,7 @@ listen("task", (event) => {
     }
     if (["start", "restart"].includes(kind) && ok) show($("restart-bar"), false);
     refreshClient();
+    refreshBackups();
     invoke("overview").then((o) => {
       overview = o;
       updateButtons();
@@ -374,3 +378,176 @@ setInterval(refreshServices, 3000);
 setInterval(() => {
   if (overview && overview.docker_error) refresh();
 }, 10000);
+
+// ---------- backups ----------
+
+const REASONS = {
+  manual: "made by hand",
+  daily: "daily, on Stop",
+  "before-restore": "before a restore",
+};
+
+function size(bytes) {
+  if (bytes >= 1 << 20) return `${(bytes / (1 << 20)).toFixed(1)} MB`;
+  if (bytes >= 1 << 10) return `${Math.round(bytes / (1 << 10))} KB`;
+  return `${bytes} bytes`;
+}
+
+async function refreshBackups() {
+  if ($("main").hidden) return;
+  let b;
+  try {
+    b = await invoke("backups");
+  } catch (e) {
+    return;
+  }
+  const list = $("backups");
+  list.replaceChildren();
+  for (const backup of b.backups) {
+    const li = document.createElement("li");
+    const text = document.createElement("div");
+    const when = document.createElement("div");
+    when.className = "when";
+    when.textContent = backup.created.slice(0, 16);
+    const what = document.createElement("div");
+    what.className = "what";
+    what.textContent = `${REASONS[backup.reason] || backup.reason} · ${size(backup.size)}`;
+    text.append(when, what);
+    const restore = document.createElement("button");
+    restore.type = "button";
+    restore.textContent = "Restore";
+    restore.disabled = !!task;
+    restore.onclick = () => restoreBackup(backup);
+    li.append(text, restore);
+    list.append(li);
+  }
+  show(list, b.backups.length > 0);
+  $("backups-state").textContent = b.backups.length
+    ? `In ${b.folder}.`
+    : "No backups yet.";
+}
+
+async function restoreBackup(backup) {
+  const sure = await window.__TAURI__.dialog.ask(
+    `Replace the database with the backup from ${backup.created.slice(0, 16)}?\n\n` +
+      "Everything since then (accounts, characters, items) is replaced. The game servers stop while it loads, " +
+      "and the current database is backed up first, so this can be undone by restoring that.",
+    { title: "Restore a backup", kind: "warning", okLabel: "Restore", cancelLabel: "Cancel" },
+  );
+  if (sure) runTask("restore", backup.file);
+}
+
+$("backup-now").onclick = () => runTask("backup");
+$("open-backups").onclick = () => invoke("open_backups").catch((e) => alert(message(e)));
+
+// ---------- game settings ----------
+
+let gameSettings = null;
+
+async function loadGameSettings() {
+  try {
+    gameSettings = await invoke("game_settings");
+  } catch (e) {
+    return;
+  }
+  drawGameSettings(gameSettings.values);
+}
+
+function settingId(s) {
+  return `${s.file}.${s.key}`;
+}
+
+function drawGameSettings(values) {
+  const form = $("game-form");
+  form.replaceChildren();
+  let group = null;
+  for (const s of gameSettings.settings) {
+    if (s.group !== group) {
+      group = s.group;
+      const h = document.createElement("h3");
+      h.textContent = group;
+      form.append(h);
+    }
+    const id = "gs-" + settingId(s).replace(".", "-");
+    const row = document.createElement("div");
+    row.className = "setting";
+    const label = document.createElement("label");
+    label.htmlFor = id;
+    label.textContent = s.label;
+    let input;
+    if (s.type === "bool" || s.type === "switch") {
+      input = document.createElement("input");
+      input.type = "checkbox";
+      input.checked = values[settingId(s)] === 1;
+    } else if (s.type === "choice") {
+      input = document.createElement("select");
+      for (const [value, text] of s.options) {
+        const o = document.createElement("option");
+        o.value = value;
+        o.textContent = text;
+        input.append(o);
+      }
+      input.value = values[settingId(s)];
+    } else {
+      input = document.createElement("input");
+      input.type = "number";
+      input.min = s.min;
+      input.max = s.max;
+      input.step = s.whole ? 1 : 0.1;
+      input.value = values[settingId(s)];
+    }
+    input.id = id;
+    input.dataset.setting = settingId(s);
+    const mark = () => row.classList.toggle("changed", gameValue(s, input) !== s.default);
+    input.addEventListener("input", mark);
+    input.addEventListener("change", mark);
+    mark();
+    row.append(label, input);
+    if (s.hint) {
+      const hint = document.createElement("p");
+      hint.className = "hint";
+      hint.textContent = s.hint;
+      row.append(hint);
+    }
+    form.append(row);
+  }
+}
+
+function gameValue(s, input) {
+  if (input.type === "checkbox") return input.checked ? 1 : 0;
+  return Number(input.value);
+}
+
+$("save-game").onclick = async () => {
+  const values = {};
+  for (const s of gameSettings.settings) {
+    const input = document.querySelector(`[data-setting="${settingId(s)}"]`);
+    if (input.type === "number" && input.value.trim() === "") {
+      $("game-error").textContent = `${s.label} needs a value.`;
+      show($("game-error"), true);
+      return;
+    }
+    values[settingId(s)] = gameValue(s, input);
+  }
+  try {
+    const restart = await invoke("set_game_settings", { values });
+    show($("game-error"), false);
+    if (restart) show($("restart-bar"), true);
+    await loadGameSettings();
+  } catch (e) {
+    $("game-error").textContent = message(e);
+    show($("game-error"), true);
+  }
+};
+
+$("reset-game").onclick = () => {
+  const defaults = {};
+  for (const s of gameSettings.settings) defaults[settingId(s)] = s.default;
+  drawGameSettings(defaults);
+};
+
+// ---------- tray ----------
+
+listen("tray", (event) => {
+  if (!task) runTask(event.payload);
+});
