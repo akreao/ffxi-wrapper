@@ -1,0 +1,194 @@
+# Builds the game client, vana-client, from the fork at the commit pinned in
+# .env.example (CLIENT_REPO, CLIENT_COMMIT), for Linux and Windows, and
+# publishes both as a GitHub release of this repository tagged
+# client-<first 12 characters of the commit>. The desktop app downloads it
+# from there. A commit that's already published is skipped.
+#
+# The builds follow vana-client's own release/build-*.sh: Linux in the Steam
+# Runtime "sniper" SDK so one binary runs on every current distribution, and
+# Windows cross-built with MinGW, statically linked.
+#
+# Pull requests that touch this file build both without publishing.
+
+name: Game client
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .env.example
+      - .github/workflows/client.yml
+  pull_request:
+    paths:
+      - .github/workflows/client.yml
+  workflow_dispatch:
+    inputs:
+      rebuild:
+        description: Build and publish even if this commit's release exists (replaces its files).
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: client-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  pin:
+    name: What to build
+    runs-on: ubuntu-24.04
+    outputs:
+      repo: ${{ steps.pin.outputs.repo }}
+      slug: ${{ steps.pin.outputs.slug }}
+      commit: ${{ steps.pin.outputs.commit }}
+      tag: ${{ steps.pin.outputs.tag }}
+      build: ${{ steps.pin.outputs.build }}
+      publish: ${{ steps.pin.outputs.publish }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: The pinned commit, and whether it's published
+        id: pin
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REBUILD: ${{ inputs.rebuild }}
+        run: |
+          set -eu
+          get() { sed -n "s/^$1=//p" .env.example | tr -d '\r' | tail -n1; }
+          repo="$(get CLIENT_REPO)"
+          commit="$(get CLIENT_COMMIT)"
+          case "$commit" in
+            *[!0-9a-f]* | "") echo "::error::CLIENT_COMMIT isn't a commit SHA: '$commit'"; exit 1 ;;
+          esac
+          if [ "${#commit}" -ne 40 ]; then
+            echo "::error::Use the full 40-character commit SHA in CLIENT_COMMIT, got '$commit'"; exit 1
+          fi
+          repo="${repo%/}"
+          repo="${repo%.git}"
+          slug="${repo#https://github.com/}"
+          case "$slug" in
+            */*/* | *:* | "") echo "::error::CLIENT_REPO isn't a GitHub repository: '$repo'"; exit 1 ;;
+          esac
+          tag="client-${commit:0:12}"
+          published=false
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then published=true; fi
+          build=true
+          publish=false
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            if [ "$published" = true ] && [ "$REBUILD" != true ]; then
+              build=false
+              echo "$tag is already published."
+            else
+              publish=true
+            fi
+          fi
+          {
+            echo "repo=$repo"
+            echo "slug=$slug"
+            echo "commit=$commit"
+            echo "tag=$tag"
+            echo "build=$build"
+            echo "publish=$publish"
+          } >> "$GITHUB_OUTPUT"
+          echo "vana-client from $repo at $commit as $tag (build: $build, publish: $publish)"
+
+  linux:
+    name: Linux build
+    needs: pin
+    if: needs.pin.outputs.build == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    # glibc 2.31, so the binary runs on older distributions than the runner's.
+    container: registry.gitlab.steamos.cloud/steamrt/sniper/sdk:latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.pin.outputs.slug }}
+          ref: ${{ needs.pin.outputs.commit }}
+      - name: Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Build
+        env:
+          LIBCLANG_PATH: /usr/lib/llvm-11/lib
+          RUSTFLAGS: -C target-cpu=x86-64-v2
+        run: |
+          cargo build --locked --profile dist
+          mkdir -p assets
+          cp target/dist/vana-client assets/vana-client-linux-x86_64
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: vana-client-linux
+          path: assets/vana-client-linux-x86_64
+          retention-days: 7
+
+  windows:
+    name: Windows build
+    needs: pin
+    if: needs.pin.outputs.build == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.pin.outputs.slug }}
+          ref: ${{ needs.pin.outputs.commit }}
+      - name: MinGW
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mingw-w64
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-gnu
+      - name: Build
+        run: |
+          # unrar_sys asks for -lpthread; a static winpthread under that name
+          # keeps the exe from needing libwinpthread-1.dll.
+          mkdir -p target/winstatic
+          cp "$(x86_64-w64-mingw32-gcc -print-file-name=libwinpthread.a)" target/winstatic/libpthread.a
+          export RUSTFLAGS="-C target-cpu=x86-64-v2 -C target-feature=+crt-static -C link-arg=-static -L native=$PWD/target/winstatic"
+          cargo build --locked --profile dist --target x86_64-pc-windows-gnu
+          exe=target/x86_64-pc-windows-gnu/dist/vana-client.exe
+          if x86_64-w64-mingw32-objdump -p "$exe" | grep -qi "DLL Name: libwinpthread"; then
+            echo "::error::The exe still needs libwinpthread-1.dll"; exit 1
+          fi
+          mkdir -p assets
+          cp "$exe" assets/vana-client-windows-x86_64.exe
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: vana-client-windows
+          path: assets/vana-client-windows-x86_64.exe
+          retention-days: 7
+
+  publish:
+    name: Publish
+    needs: [pin, linux, windows]
+    if: needs.pin.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO_URL: ${{ needs.pin.outputs.repo }}
+          COMMIT: ${{ needs.pin.outputs.commit }}
+          TAG: ${{ needs.pin.outputs.tag }}
+        run: |
+          set -eu
+          ls -l assets
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$TAG" assets/* --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" assets/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --latest=false --title "vana-client ${COMMIT:0:12}" \
+              --notes "vana-client built from [${COMMIT:0:12}]($REPO_URL/commit/$COMMIT) for the desktop app to download."
+          fi

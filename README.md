@@ -1,6 +1,6 @@
 # ffxi-wrapper
 
-Runs a private [LandSandBoat](https://github.com/LandSandBoat/server) (Final Fantasy XI) server and its database in Docker. The [desktop app](desktop/README.md), for Linux and Windows, sets it up and runs it for you. Client setup with [vana-client](https://github.com/lenonk/vana-client) is planned next.
+Runs a private [LandSandBoat](https://github.com/LandSandBoat/server) (Final Fantasy XI) server and its database in Docker. The [desktop app](desktop/README.md), for Linux and Windows, sets it up and runs it for you. It also sets up the game client, [vana-client](https://github.com/akreao/vana-client) (a fork of [lenonk/vana-client](https://github.com/lenonk/vana-client)), and installs the game data from Square Enix's installer.
 
 ## Running the server stack
 
@@ -41,6 +41,12 @@ The [`LSB server image`](.github/workflows/lsb-image.yml) workflow compiles Land
 To move the server to a newer LSB commit, change `LSB_COMMIT` in both `.env.example` and `compose.yaml` (its default) and merge; once the workflow has published the image, `docker compose up -d` pulls it and recreates the servers.
 
 To compile on this computer anyway, run `docker compose build db-init` (or `docker compose up -d --build`).
+
+### Game client
+
+The [`Game client`](.github/workflows/client.yml) workflow builds vana-client from `CLIENT_REPO` at the `CLIENT_COMMIT` pinned in `.env.example`, for Linux (in the Steam Runtime SDK, so it runs on any current distribution) and Windows, and publishes both as a release of this repository tagged `client-<first 12 characters of the commit>`. The desktop app downloads the build for its platform from there. Like the server image, it runs when the pin changes on `main` and by hand from the Actions tab; a published commit isn't built again unless asked to.
+
+To move to a newer client, push the change to the fork, put its full commit SHA in `CLIENT_COMMIT` in `.env.example` and merge. Once the release is published, the app offers the update.
 
 ### Changing LSB's settings
 

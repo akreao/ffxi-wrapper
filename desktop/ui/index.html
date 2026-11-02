@@ -73,6 +73,27 @@
         <button id="save-settings" type="button">Save</button>
         <p id="settings-error" class="error-text" hidden></p>
 
+        <h2>Game client</h2>
+        <p class="hint" id="client-state"></p>
+        <div id="client-download-box" hidden>
+          <button id="client-download" type="button">Download vana-client</button>
+          <p class="hint">A native Final Fantasy XI client for LandSandBoat servers, for Linux and Windows.</p>
+        </div>
+        <div id="client-install-box" hidden>
+          <label for="client-installer">Square Enix's installer (FFXIFullSetup_US.part1.exe)</label>
+          <div class="row">
+            <input id="client-installer" type="text" spellcheck="false">
+            <button id="client-browse" type="button">Browse…</button>
+          </div>
+          <p class="hint">Its other parts must sit beside it. Installing unpacks the game into the client folder, with a temporary copy beside it while it works, so that drive needs room for both. It takes a while.</p>
+          <button id="client-install" type="button">Install game data</button>
+        </div>
+        <div id="client-play-box" hidden>
+          <button id="client-play" class="primary" type="button">Play</button>
+          <button id="client-update" type="button" title="Bring the game data up to the current retail version">Update game data</button>
+          <p class="hint">Create your account on the client's login screen (Create account), then log in.</p>
+        </div>
+
         <h2>Files</h2>
         <p class="hint"><span id="stack-dir"></span></p>
         <p class="hint" id="db-where"></p>
