@@ -20,6 +20,7 @@ const DISPLAY: &str = "Display";
 const SOUND: &str = "Sound";
 const INTERFACE: &str = "Interface";
 const EXTRAS: &str = "Extras";
+const GAMEPAD: &str = "Gamepad";
 
 const fn cfg_bool(key: &'static str, group: &'static str, label: &'static str, hint: &'static str, default: bool) -> Setting {
     Setting { file: "cfg", key, group, label, hint, kind: Kind::Bool, default: if default { 1.0 } else { 0.0 } }
@@ -136,6 +137,17 @@ pub const SETTINGS: &[Setting] = &[
         kind: Kind::Number { min: 0.0, max: 60.0, whole: true },
         default: 0.0,
     },
+    cfg_bool("gamepad", GAMEPAD, "Gamepad", "Play with a game controller: the left stick moves, the right stick turns the camera, the buttons press keys.", true),
+    Setting {
+        file: "cfg",
+        key: "gamepad_deadzone",
+        group: GAMEPAD,
+        label: "Stick dead zone",
+        hint: "How far a stick moves before it counts, from 0 to 0.9.",
+        kind: Kind::Number { min: 0.0, max: 0.9, whole: false },
+        default: 0.2,
+    },
+    cfg_bool("gamepad_invert_y", GAMEPAD, "Invert camera up and down", "", false),
 ];
 
 pub type Values = BTreeMap<String, f64>;
