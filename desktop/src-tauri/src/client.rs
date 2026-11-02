@@ -10,6 +10,7 @@ use std::process::{Command, Stdio};
 use serde::Serialize;
 use serde_json::{json, Value};
 
+use crate::envfile::EnvFile;
 use crate::host;
 
 /// Where the client builds come from: this repository's releases, one per
@@ -128,8 +129,9 @@ fn read_config(stack: &Path) -> Value {
 /// Points the client at this server, keeping every other setting the client
 /// saved (its logins, graphics, key bindings). A new config gets the app's
 /// game folder; one the client already has stays, since its first start may
-/// have picked another.
+/// have picked another. The server's login certificate is pinned too.
 pub fn write_config(stack: &Path, server: &str) -> Result<(), String> {
+    pin_login_cert(stack, server)?;
     let mut config = read_config(stack);
     if !config.is_object() {
         config = json!({});
@@ -140,7 +142,7 @@ pub fn write_config(stack: &Path, server: &str) -> Result<(), String> {
     let game = game_dir(stack);
     set(&mut config, "game_dir", json!(game));
     set(&mut config, "server", json!(server));
-    set(&mut config, "auth_port", json!(54231));
+    set(&mut config, "auth_port", json!(AUTH_PORT));
     set(&mut config, "data_port", json!(54230));
     set(&mut config, "view_port", json!(54001));
     fs::create_dir_all(dir(stack)).map_err(|e| e.to_string())?;
@@ -148,12 +150,69 @@ pub fn write_config(stack: &Path, server: &str) -> Result<(), String> {
     fs::write(config_path(stack), text).map_err(|e| e.to_string())
 }
 
-/// `curl` downloading the latest release into `client/` under a temporary
+/// The login server's certificate: xi_connect makes it on its first start, and
+/// the stack keeps it in `DATA_DIR/tls/` (run.sh links it into the container).
+pub fn login_cert(stack: &Path) -> PathBuf {
+    let data = EnvFile::load(&stack.join(".env"))
+        .ok()
+        .and_then(|e| e.get("DATA_DIR"))
+        .filter(|d| !d.is_empty())
+        .unwrap_or_else(|| "./data".into());
+    stack.join(data).join("tls").join("login.cert")
+}
+
+/// The SHA-256 of a PEM file's first certificate (its DER), as lowercase hex:
+/// the fingerprint vana-client pins.
+fn cert_fingerprint(pem: &str) -> Option<String> {
+    use base64::Engine;
+    use sha2::{Digest, Sha256};
+    let body = pem.split("-----BEGIN CERTIFICATE-----").nth(1)?.split("-----END CERTIFICATE-----").next()?;
+    let b64: String = body.chars().filter(|c| !c.is_whitespace()).collect();
+    let der = base64::engine::general_purpose::STANDARD.decode(b64).ok()?;
+    Some(Sha256::digest(der).iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// vana-client's list of server certificates (`known_servers.json`, beside
+/// the config `FFXI_CONFIG` names).
+fn known_servers_path(stack: &Path) -> PathBuf {
+    dir(stack).join("known_servers.json")
+}
+
+/// Pins this server's login certificate in vana-client's `known_servers.json`,
+/// so the client accepts it from the first login and refuses any other. It's
+/// marked as set by hand (`fixed`), like `vana-client trust-server
+/// --fingerprint`. Other servers' entries stay. Without a certificate yet
+/// (the server hasn't started), nothing changes. Clients from before
+/// certificate pinning ignore the file.
+fn pin_login_cert(stack: &Path, server: &str) -> Result<(), String> {
+    let Some(sha256) = fs::read_to_string(login_cert(stack)).ok().as_deref().and_then(cert_fingerprint) else {
+        return Ok(());
+    };
+    let path = known_servers_path(stack);
+    let mut known = fs::read(&path)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}));
+    let key = format!("{}:{}", server.to_ascii_lowercase(), AUTH_PORT);
+    let pin = json!({ "sha256": sha256, "fixed": true });
+    if known[&key] == pin {
+        return Ok(());
+    }
+    known.as_object_mut().unwrap().insert(key, pin);
+    fs::create_dir_all(dir(stack)).map_err(|e| e.to_string())?;
+    let tmp = path.with_extension("json.tmp");
+    let text = serde_json::to_vec_pretty(&known).map_err(|e| e.to_string())?;
+    fs::write(&tmp, text).and_then(|_| fs::rename(&tmp, &path)).map_err(|e| format!("Couldn't save {}: {e}", path.display()))
+}
+
+/// The login server's port, where the client's TLS connection goes.
+const AUTH_PORT: u16 = 54231;
+
+/// `curl` downloading the pinned build into `client/` under a temporary
 /// name. curl comes with Linux distributions and with Windows 10 and later.
 pub fn download(stack: &Path, commit: &str) -> Result<Command, String> {
-    if commit.len() != 40 || !commit.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err(format!("CLIENT_COMMIT in .env isn't a full commit SHA: \"{commit}\"."));
-    }
+    check_commit(commit)?;
     fs::create_dir_all(dir(stack)).map_err(|e| e.to_string())?;
     let mut cmd = host::command("curl");
     cmd.args(["--fail", "--location", "--retry", "2", "--progress-bar", "--output"])
@@ -163,13 +222,68 @@ pub fn download(stack: &Path, commit: &str) -> Result<Command, String> {
     Ok(cmd)
 }
 
+/// `curl` downloading the build's SHA-256, which the Game client workflow
+/// publishes beside it as `<file>.sha256`.
+pub fn download_checksum(stack: &Path, commit: &str) -> Result<Command, String> {
+    check_commit(commit)?;
+    fs::create_dir_all(dir(stack)).map_err(|e| e.to_string())?;
+    let mut cmd = host::command("curl");
+    cmd.args(["--fail", "--location", "--retry", "2", "--silent", "--show-error", "--output"])
+        .arg(partial_checksum(stack))
+        .arg(format!("{}.sha256", download_url(commit)))
+        .stdin(Stdio::null());
+    Ok(cmd)
+}
+
+fn check_commit(commit: &str) -> Result<(), String> {
+    if commit.len() != 40 || !commit.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(format!("CLIENT_COMMIT in .env isn't a full commit SHA: \"{commit}\"."));
+    }
+    Ok(())
+}
+
 fn partial(stack: &Path) -> PathBuf {
     dir(stack).join("vana-client.download")
 }
 
-/// Puts a finished download of `commit` in place, executable.
+fn partial_checksum(stack: &Path) -> PathBuf {
+    dir(stack).join("vana-client.download.sha256")
+}
+
+/// The SHA-256 a `.sha256` file names: the first word, as `sha256sum` writes it.
+fn parse_checksum(text: &str) -> Option<String> {
+    let word = text.split_whitespace().next()?.to_ascii_lowercase();
+    (word.len() == 64 && word.bytes().all(|b| b.is_ascii_hexdigit())).then_some(word)
+}
+
+fn sha256_file(path: &Path) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    let mut file = fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher).map_err(|e| e.to_string())?;
+    Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// Checks a finished download of `commit` against its published SHA-256,
+/// then puts it in place, executable. A download that doesn't match is
+/// deleted.
 pub fn finish_download(stack: &Path, commit: &str) -> Result<(), String> {
     let from = partial(stack);
+    let sums = partial_checksum(stack);
+    let expected = fs::read_to_string(&sums).ok().as_deref().and_then(parse_checksum);
+    let _ = fs::remove_file(&sums);
+    let Some(expected) = expected else {
+        let _ = fs::remove_file(&from);
+        return Err("The build's published checksum couldn't be read, so it wasn't installed.".into());
+    };
+    let got = sha256_file(&from)?;
+    if got != expected {
+        let _ = fs::remove_file(&from);
+        return Err(format!(
+            "The downloaded vana-client doesn't match its published checksum (expected {expected}, got {got}), so it \
+             wasn't installed. Try the download again."
+        ));
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -274,10 +388,61 @@ mod tests {
         assert!(download(&stack, "8d7dd1f").is_err());
         assert!(download(&stack, commit).is_ok());
         fs::write(partial(&stack), "binary").unwrap();
+        // sha256sum's line for "binary".
+        let sum = "9a3a45d01531a20e89ac6ae10b0b0beb0492acd7216a368aa062d1a5fecaf9cd";
+        assert_eq!(sha256_file(&partial(&stack)).unwrap(), sum);
+        fs::write(partial_checksum(&stack), format!("{sum}  vana-client-linux-x86_64\n")).unwrap();
         finish_download(&stack, commit).unwrap();
+        assert!(!partial_checksum(&stack).exists());
         assert!(status(&stack, commit).program);
         assert!(!status(&stack, commit).outdated);
         assert!(status(&stack, "0123456789012345678901234567890123456789").outdated);
+        fs::remove_dir_all(stack).unwrap();
+    }
+
+    // A self-signed certificate; its fingerprint is from
+    // `openssl x509 -noout -fingerprint -sha256`.
+    const CERT: &str = include_str!("../testdata/login.cert");
+    const CERT_SHA256: &str = include_str!("../testdata/login.cert.sha256");
+
+    #[test]
+    fn pins_the_login_certificate() {
+        let stack = temp("pin");
+        // No certificate yet: nothing is written.
+        write_config(&stack, "127.0.0.1").unwrap();
+        assert!(!known_servers_path(&stack).exists());
+
+        assert_eq!(cert_fingerprint(CERT).unwrap(), CERT_SHA256.trim());
+        fs::write(stack.join(".env"), "DATA_DIR=./server-data\n").unwrap();
+        fs::create_dir_all(stack.join("server-data/tls")).unwrap();
+        fs::write(stack.join("server-data/tls/login.cert"), CERT).unwrap();
+        fs::write(known_servers_path(&stack), r#"{"127.0.0.1:54231":{"sha256":"00","fixed":false},"other:54231":{"sha256":"11"}}"#).unwrap();
+        write_config(&stack, "127.0.0.1").unwrap();
+        let known: Value = serde_json::from_slice(&fs::read(known_servers_path(&stack)).unwrap()).unwrap();
+        assert_eq!(known["127.0.0.1:54231"], json!({ "sha256": CERT_SHA256.trim(), "fixed": true }));
+        assert_eq!(known["other:54231"]["sha256"], "11");
+
+        assert!(cert_fingerprint("not a certificate").is_none());
+        fs::remove_dir_all(stack).unwrap();
+    }
+
+    #[test]
+    fn refuses_a_download_that_doesn_t_match_its_checksum() {
+        let stack = temp("checksum");
+        let commit = "8d7dd1ffb8d70924f5c40a82c376db4d6c0a9038";
+        assert!(download_checksum(&stack, commit).is_ok());
+        fs::write(partial(&stack), "tampered").unwrap();
+        fs::write(partial_checksum(&stack), format!("{}  vana-client\n", "0".repeat(64))).unwrap();
+        assert!(finish_download(&stack, commit).unwrap_err().contains("doesn't match"));
+        assert!(!partial(&stack).exists() && !program(&stack).exists());
+
+        // No checksum at all isn't installed either.
+        fs::write(partial(&stack), "binary").unwrap();
+        assert!(finish_download(&stack, commit).is_err());
+        assert!(!program(&stack).exists());
+
+        assert_eq!(parse_checksum("ABCDEF0123456789abcdef0123456789ABCDEF0123456789abcdef0123456789 *x").unwrap().len(), 64);
+        assert!(parse_checksum("abc  x").is_none());
         fs::remove_dir_all(stack).unwrap();
     }
 

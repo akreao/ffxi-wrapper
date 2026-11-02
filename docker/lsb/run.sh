@@ -17,4 +17,20 @@ if [ -n "${SERVER_NAME:-}" ]; then
 fi
 unset SERVER_NAME
 
+# xi_connect makes login.key and login.cert in /server on its first start,
+# and a new container would make new ones, which vana-client refuses once
+# it has pinned the old certificate. So they're links into /tls (DATA_DIR/tls),
+# which outlives the container; xi_connect writes them there the first time.
+# Half a pair is dropped so a whole new one is made.
+if [ "${1:-}" = /server/xi_connect ] && [ -d /tls ]; then
+    if { [ -e /tls/login.key ] && [ ! -e /tls/login.cert ]; } || { [ ! -e /tls/login.key ] && [ -e /tls/login.cert ]; }; then
+        rm -f /tls/login.key /tls/login.cert
+    fi
+    ln -sf /tls/login.key /server/login.key
+    ln -sf /tls/login.cert /server/login.cert
+    # The key is made readable by its owner only; db-init lets anyone read
+    # the certificate, which the desktop app pins.
+    umask 077
+fi
+
 exec /entrypoint.sh "$@"
