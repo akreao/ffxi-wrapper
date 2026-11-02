@@ -291,9 +291,9 @@ enum Step {
     Run(std::process::Command),
     /// Points the client at this server.
     ClientConfig,
-    /// Downloads the vana-client built from this commit.
+    /// Downloads the vana-client built from this commit, or its checksum.
     Download(std::process::Command, String),
-    /// Puts a downloaded vana-client, built from this commit, in place.
+    /// Checks a downloaded vana-client, built from this commit, and puts it in place.
     FinishDownload(String),
     /// Backs up the database.
     Backup,
@@ -344,7 +344,12 @@ fn start_task(handle: &AppHandle, app: &App, kind: String, file: Option<String>)
         }
         "client-download" => {
             let commit = client_commit(app);
-            vec![Step::Download(client::download(&dir, &commit)?, commit.clone()), Step::FinishDownload(commit), Step::ClientConfig]
+            vec![
+                Step::Download(client::download(&dir, &commit)?, commit.clone()),
+                Step::Download(client::download_checksum(&dir, &commit)?, commit.clone()),
+                Step::FinishDownload(commit),
+                Step::ClientConfig,
+            ]
         }
         "client-install" | "client-update" => {
             if !client::program(&dir).is_file() {
@@ -388,7 +393,7 @@ fn start_task(handle: &AppHandle, app: &App, kind: String, file: Option<String>)
                 Step::Download(cmd, commit) => ctx.run(cmd).map_err(|e| {
                     if e.contains("exit code 22") {
                         format!(
-                            "There's no vana-client build for CLIENT_COMMIT {} yet. The repository's Game client \
+                            "There's no vana-client build or checksum for CLIENT_COMMIT {} yet. The repository's Game client \
                              workflow publishes one once that commit is pinned on main; check that it ran.",
                             &commit[..12]
                         )
