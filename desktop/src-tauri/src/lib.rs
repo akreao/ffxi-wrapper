@@ -1,3 +1,4 @@
+mod client;
 mod config;
 mod envfile;
 mod host;
@@ -157,6 +158,9 @@ fn write_env(dir: &Path, path: &Path, public_ip: Option<String>, server_name: &s
     env.set("DB_ROOT_PASSWORD", &envfile::random_password(24)?);
     env.set("DB_DATA", stack::db_location(dir));
     env.set("SERVER_NAME", server_name);
+    // Empty follows the client this app version pins, so updating the app
+    // moves the client along.
+    env.set("CLIENT_COMMIT", "");
     apply_public_ip(&mut env, public_ip);
     env.save().map_err(|e| e.to_string())
 }
@@ -234,17 +238,26 @@ enum Step {
     Address,
     /// Checks that nothing else holds the ports the stack publishes.
     Ports,
-    Compose(std::process::Command),
+    /// Runs a command (`docker compose`, curl or vana-client), streaming its output.
+    Run(std::process::Command),
+    /// Points the client at this server.
+    ClientConfig,
+    /// Downloads the vana-client built from this commit.
+    Download(std::process::Command, String),
+    /// Puts a downloaded vana-client, built from this commit, in place.
+    FinishDownload(String),
 }
 
-/// Runs `start`, `restart` (the LSB servers, to apply settings), `stop` or
-/// `build`, streaming its output as `task-line` events.
+/// Runs `start`, `restart` (the LSB servers, to apply settings), `stop`,
+/// `build`, or for the game client `client-download`, `client-install`
+/// (from the installer `file`) or `client-update`, streaming its output as
+/// `task-line` events.
 #[tauri::command]
-async fn run_task(handle: AppHandle, kind: String) -> Result<(), String> {
-    off_main(handle, move |handle, app| start_task(handle, app, kind)).await?
+async fn run_task(handle: AppHandle, kind: String, file: Option<String>) -> Result<(), String> {
+    off_main(handle, move |handle, app| start_task(handle, app, kind, file)).await?
 }
 
-fn start_task(handle: &AppHandle, app: &App, kind: String) -> Result<(), String> {
+fn start_task(handle: &AppHandle, app: &App, kind: String, file: Option<String>) -> Result<(), String> {
     let dir = app.dir()?;
     let mut slot = app.task.lock().unwrap();
     if let Some(running) = slot.as_ref() {
@@ -256,21 +269,40 @@ fn start_task(handle: &AppHandle, app: &App, kind: String) -> Result<(), String>
         "start" => {
             // Builds the server image first if it isn't here yet.
             cmd.args(["up", "--detach"]);
-            vec![Step::Address, Step::Ports, Step::Compose(cmd)]
+            vec![Step::Address, Step::Ports, Step::Run(cmd)]
         }
         "restart" => {
             // db-init applies a new address; the servers read their settings
             // when they start. The database keeps running.
             cmd.args(["up", "--detach", "--force-recreate", "db-init"]).args(stack::GAME_SERVERS);
-            vec![Step::Address, Step::Compose(cmd)]
+            vec![Step::Address, Step::Run(cmd)]
         }
         "stop" => {
             cmd.arg("down");
-            vec![Step::Compose(cmd)]
+            vec![Step::Run(cmd)]
         }
         "build" => {
             cmd.args(["build", "db-init"]);
-            vec![Step::Compose(cmd)]
+            vec![Step::Run(cmd)]
+        }
+        "client-download" => {
+            let commit = client_commit(app);
+            vec![Step::Download(client::download(&dir, &commit)?, commit.clone()), Step::FinishDownload(commit), Step::ClientConfig]
+        }
+        "client-install" | "client-update" => {
+            if !client::program(&dir).is_file() {
+                return Err("Download vana-client first.".into());
+            }
+            let cmd = if kind == "client-install" {
+                let installer = PathBuf::from(file.ok_or("Pick the installer (FFXIFullSetup_US.part1.exe).")?);
+                if !installer.is_file() {
+                    return Err(format!("{} isn't there.", installer.display()));
+                }
+                client::install(&dir, &installer)
+            } else {
+                client::update(&dir)
+            };
+            vec![Step::ClientConfig, Step::Run(cmd)]
         }
         _ => return Err(format!("Unknown task {kind}")),
     };
@@ -293,7 +325,21 @@ fn start_task(handle: &AppHandle, app: &App, kind: String) -> Result<(), String>
                     Ok(())
                 }),
                 Step::Ports => stack::check_ports(&ctx.dir),
-                Step::Compose(cmd) => ctx.run(cmd),
+                Step::Run(cmd) => ctx.run(cmd),
+                Step::ClientConfig => client::write_config(&ctx.dir, CLIENT_SERVER),
+                // curl's exit code 22 is an HTTP error, such as 404.
+                Step::Download(cmd, commit) => ctx.run(cmd).map_err(|e| {
+                    if e.contains("exit code 22") {
+                        format!(
+                            "There's no vana-client build for CLIENT_COMMIT {} yet. The repository's Game client \
+                             workflow publishes one once that commit is pinned on main; check that it ran.",
+                            &commit[..12]
+                        )
+                    } else {
+                        e
+                    }
+                }),
+                Step::FinishDownload(commit) => client::finish_download(&ctx.dir, &commit),
             }
         });
         if let Err(e) = &result {
@@ -303,6 +349,40 @@ fn start_task(handle: &AppHandle, app: &App, kind: String) -> Result<(), String>
         let _ = handle.emit("task", TaskEvent { kind, running: false, ok: result.is_ok() });
     });
     Ok(())
+}
+
+/// The address the app's own client logs in to: the server on this
+/// computer. The map server's address (`PUBLIC_IP`) comes from the server
+/// after login, and is one of this computer's own addresses too.
+const CLIENT_SERVER: &str = "127.0.0.1";
+
+/// The fork commit the client is built from: `.env`'s, or this app
+/// version's when `.env` has none (a setup from before the client).
+fn client_commit(app: &App) -> String {
+    app.env()
+        .and_then(|e| e.get("CLIENT_COMMIT"))
+        .filter(|c| !c.is_empty())
+        .or_else(|| EnvFile::parse(stack::ENV_EXAMPLE).get("CLIENT_COMMIT"))
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+async fn client_status(handle: AppHandle) -> Result<client::Status, String> {
+    off_main(handle, |_, app| Ok(client::status(&app.dir()?, &client_commit(app)))).await?
+}
+
+/// Opens the game, pointed at this server.
+#[tauri::command]
+async fn play(handle: AppHandle) -> Result<(), String> {
+    off_main(handle, |_, app| {
+        let dir = app.dir()?;
+        if !client::status(&dir, &client_commit(app)).installed {
+            return Err("Install the game data first.".into());
+        }
+        client::write_config(&dir, CLIENT_SERVER)?;
+        client::play(&dir)
+    })
+    .await?
 }
 
 #[tauri::command]
@@ -396,6 +476,8 @@ pub fn run() {
             set_server_name,
             services,
             run_task,
+            client_status,
+            play,
             cancel_task,
             follow_logs,
             open_stack_dir
@@ -435,6 +517,7 @@ mod tests {
         // Everything else comes from .env.example.
         assert_eq!(env.get("DATA_DIR").as_deref(), Some("./data"));
         assert!(env.get("LSB_COMMIT").is_some_and(|c| c.len() == 40));
+        assert_eq!(env.get("CLIENT_COMMIT").as_deref(), Some(""));
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

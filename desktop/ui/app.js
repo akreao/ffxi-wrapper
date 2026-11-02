@@ -114,6 +114,7 @@ function showMain() {
     task = overview.task;
     updateButtons();
     refreshServices();
+    refreshClient();
   }
 }
 
@@ -196,7 +197,16 @@ function drawServices() {
   const up = game.filter((s) => s.state === "running").length;
   const pill = $("state");
   if (task) {
-    pill.textContent = { start: "starting", stop: "stopping", restart: "restarting", build: "building" }[task] || task;
+    pill.textContent =
+      {
+        start: "starting",
+        stop: "stopping",
+        restart: "restarting",
+        build: "building",
+        "client-download": "downloading the client",
+        "client-install": "installing game data",
+        "client-update": "updating game data",
+      }[task] || task;
     pill.className = "pill warn";
   } else if (game.length && up === game.length) {
     pill.textContent = "running";
@@ -221,15 +231,16 @@ function updateButtons() {
   $("stop").disabled = busy || !running;
   $("build").disabled = busy || !!overview.docker_error;
   show($("cancel"), busy && task !== "stop");
+  for (const id of ["client-download", "client-install", "client-update"]) $(id).disabled = busy;
   show($("first-build"), !overview.image_ready && !overview.docker_error);
 }
 
 // ---------- tasks ----------
 
-async function runTask(kind) {
+async function runTask(kind, file) {
   selectTab("activity");
   try {
-    await invoke("run_task", { kind });
+    await invoke("run_task", { kind, file: file || null });
   } catch (e) {
     append($("activity"), message(e));
   }
@@ -256,6 +267,7 @@ listen("task", (event) => {
       show($("restart-bar"), true);
     }
     if (["start", "restart"].includes(kind) && ok) show($("restart-bar"), false);
+    refreshClient();
     invoke("overview").then((o) => {
       overview = o;
       updateButtons();
@@ -295,6 +307,45 @@ function selectTab(which) {
 
 $("tab-activity").onclick = () => selectTab("activity");
 $("tab-logs").onclick = () => selectTab("logs");
+
+// ---------- game client ----------
+
+let clientStatus = null;
+
+async function refreshClient() {
+  if ($("main").hidden) return;
+  try {
+    clientStatus = await invoke("client_status");
+  } catch (e) {
+    return;
+  }
+  const c = clientStatus;
+  $("client-state").textContent = !c.program
+    ? "vana-client isn't downloaded yet."
+    : !c.installed
+      ? "vana-client is ready. Install the game data next."
+      : `Installed in ${c.dir}.`;
+  if (c.program && c.outdated) $("client-state").textContent += " A newer build of vana-client is available.";
+  show($("client-download-box"), !c.program || c.outdated);
+  $("client-download").textContent = c.program ? "Update vana-client" : "Download vana-client";
+  show($("client-install-box"), c.program && !c.installed);
+  show($("client-play-box"), c.installed);
+  if (c.installer && !$("client-installer").value) $("client-installer").value = c.installer;
+  const busy = !!task;
+  for (const id of ["client-download", "client-install", "client-update"]) $(id).disabled = busy;
+}
+
+$("client-download").onclick = () => runTask("client-download");
+$("client-install").onclick = () => runTask("client-install", $("client-installer").value.trim());
+$("client-update").onclick = () => runTask("client-update");
+$("client-play").onclick = () => invoke("play").catch((e) => alert(message(e)));
+$("client-browse").onclick = async () => {
+  const picked = await window.__TAURI__.dialog.open({
+    filters: [{ name: "FFXI installer", extensions: ["exe"] }],
+    defaultPath: clientStatus ? clientStatus.dir : undefined,
+  });
+  if (picked) $("client-installer").value = picked;
+};
 
 // ---------- settings ----------
 

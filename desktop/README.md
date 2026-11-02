@@ -9,6 +9,7 @@ What it does so far:
 - **Stop** runs `docker compose down`. The database is kept.
 - **Rebuild** builds the server image from source (`docker compose build db-init`). A running server offers a restart onto it.
 - **Services** lists each container's state and published ports, refreshed every 3 seconds; clicking one streams its log.
+- **Game client** downloads vana-client into `client/` in the server folder (the build of the fork commit pinned in `.env` as `CLIENT_COMMIT`, which the Game client workflow publishes), then installs the game data into `client/game/` from Square Enix's installer, `FFXIFullSetup_US.part1.exe` with its other parts beside it. It finds the installer in the server folder or a folder right inside it, or it can be picked. **Play** opens the game pointed at this server (`127.0.0.1`); **Update game data** patches the game from Square Enix's servers. The client's own settings are in `client/config.json`. A new `CLIENT_COMMIT` shows an update button.
 - **Settings**: the address players connect to (detect automatically, any address this computer has, `127.0.0.1` or one typed in) and the server name. A running server offers a restart to apply them.
 
 The server keeps running when the app closes. Each app version copies its own `compose.yaml` and `docker/` into the server folder when it starts; `.env`, `overrides/` and `data/` are left alone.
