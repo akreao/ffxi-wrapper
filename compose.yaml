@@ -92,6 +92,8 @@ services:
       - ./docker/lsb:/wrapper:ro
       - ./overrides:/overrides:ro
       - ${DATA_DIR:-./data}/dbtool:/state
+      # Readied for connect's certificate (see connect below).
+      - ${DATA_DIR:-./data}/tls:/tls
     depends_on:
       db:
         condition: service_healthy
@@ -121,6 +123,13 @@ services:
   connect:
     <<: *lsb
     command: ["/server/xi_connect"]
+    # The login certificate xi_connect makes on its first start is kept
+    # here, so a new container keeps it. vana-client pins it and refuses a
+    # different one.
+    volumes:
+      - ./docker/lsb:/wrapper:ro
+      - ./overrides:/overrides:ro
+      - ${DATA_DIR:-./data}/tls:/tls
     ports:
       - "${BIND_IP:+${BIND_IP}:}54001:54001"
       - "${BIND_IP:+${BIND_IP}:}54230:54230"

@@ -27,6 +27,15 @@ if [ -z "$(sql "SHOW TABLES LIKE 'zone_settings'")" ]; then
 fi
 ln -sf /state/config.yaml /server/tools/config.yaml
 
+# connect keeps its login certificate in /tls (see run.sh). The folder
+# belongs to the user the servers run as, so xi_connect can write it.
+if [ -d /tls ]; then
+    chown "$(stat -c %u:%g /server)" /tls
+    chmod 755 /tls
+    [ ! -e /tls/login.cert ] || chmod 644 /tls/login.cert
+    [ ! -e /tls/login.key ] || chmod 600 /tls/login.key
+fi
+
 cd /server
 # The desktop app leaves this table in a database it restores from a
 # backup. dbtool's record describes the database from before the restore,

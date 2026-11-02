@@ -10,6 +10,7 @@ use std::process::{Command, Stdio};
 use serde::Serialize;
 use serde_json::{json, Value};
 
+use crate::envfile::EnvFile;
 use crate::host;
 
 /// Where the client builds come from: this repository's releases, one per
@@ -128,8 +129,9 @@ fn read_config(stack: &Path) -> Value {
 /// Points the client at this server, keeping every other setting the client
 /// saved (its logins, graphics, key bindings). A new config gets the app's
 /// game folder; one the client already has stays, since its first start may
-/// have picked another.
+/// have picked another. The server's login certificate is pinned too.
 pub fn write_config(stack: &Path, server: &str) -> Result<(), String> {
+    pin_login_cert(stack, server)?;
     let mut config = read_config(stack);
     if !config.is_object() {
         config = json!({});
@@ -140,13 +142,72 @@ pub fn write_config(stack: &Path, server: &str) -> Result<(), String> {
     let game = game_dir(stack);
     set(&mut config, "game_dir", json!(game));
     set(&mut config, "server", json!(server));
-    set(&mut config, "auth_port", json!(54231));
+    set(&mut config, "auth_port", json!(AUTH_PORT));
     set(&mut config, "data_port", json!(54230));
     set(&mut config, "view_port", json!(54001));
     fs::create_dir_all(dir(stack)).map_err(|e| e.to_string())?;
     let text = serde_json::to_vec_pretty(&config).map_err(|e| e.to_string())?;
     fs::write(config_path(stack), text).map_err(|e| e.to_string())
 }
+
+/// The login server's certificate: xi_connect makes it on its first start, and
+/// the stack keeps it in `DATA_DIR/tls/` (run.sh links it into the container).
+pub fn login_cert(stack: &Path) -> PathBuf {
+    let data = EnvFile::load(&stack.join(".env"))
+        .ok()
+        .and_then(|e| e.get("DATA_DIR"))
+        .filter(|d| !d.is_empty())
+        .unwrap_or_else(|| "./data".into());
+    stack.join(data).join("tls").join("login.cert")
+}
+
+/// The SHA-256 of a PEM file's first certificate (its DER), as lowercase hex:
+/// the fingerprint vana-client pins.
+fn cert_fingerprint(pem: &str) -> Option<String> {
+    use base64::Engine;
+    use sha2::{Digest, Sha256};
+    let body = pem.split("-----BEGIN CERTIFICATE-----").nth(1)?.split("-----END CERTIFICATE-----").next()?;
+    let b64: String = body.chars().filter(|c| !c.is_whitespace()).collect();
+    let der = base64::engine::general_purpose::STANDARD.decode(b64).ok()?;
+    Some(Sha256::digest(der).iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// vana-client's list of server certificates (`known_servers.json`, beside
+/// the config `FFXI_CONFIG` names).
+fn known_servers_path(stack: &Path) -> PathBuf {
+    dir(stack).join("known_servers.json")
+}
+
+/// Pins this server's login certificate in vana-client's `known_servers.json`,
+/// so the client accepts it from the first login and refuses any other. It's
+/// marked as set by hand (`fixed`), like `vana-client trust-server
+/// --fingerprint`. Other servers' entries stay. Without a certificate yet
+/// (the server hasn't started), nothing changes. Clients from before
+/// certificate pinning ignore the file.
+fn pin_login_cert(stack: &Path, server: &str) -> Result<(), String> {
+    let Some(sha256) = fs::read_to_string(login_cert(stack)).ok().as_deref().and_then(cert_fingerprint) else {
+        return Ok(());
+    };
+    let path = known_servers_path(stack);
+    let mut known = fs::read(&path)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}));
+    let key = format!("{}:{}", server.to_ascii_lowercase(), AUTH_PORT);
+    let pin = json!({ "sha256": sha256, "fixed": true });
+    if known[&key] == pin {
+        return Ok(());
+    }
+    known.as_object_mut().unwrap().insert(key, pin);
+    fs::create_dir_all(dir(stack)).map_err(|e| e.to_string())?;
+    let tmp = path.with_extension("json.tmp");
+    let text = serde_json::to_vec_pretty(&known).map_err(|e| e.to_string())?;
+    fs::write(&tmp, text).and_then(|_| fs::rename(&tmp, &path)).map_err(|e| format!("Couldn't save {}: {e}", path.display()))
+}
+
+/// The login server's port, where the client's TLS connection goes.
+const AUTH_PORT: u16 = 54231;
 
 /// `curl` downloading the pinned build into `client/` under a temporary
 /// name. curl comes with Linux distributions and with Windows 10 and later.
@@ -336,6 +397,32 @@ mod tests {
         assert!(status(&stack, commit).program);
         assert!(!status(&stack, commit).outdated);
         assert!(status(&stack, "0123456789012345678901234567890123456789").outdated);
+        fs::remove_dir_all(stack).unwrap();
+    }
+
+    // A self-signed certificate; its fingerprint is from
+    // `openssl x509 -noout -fingerprint -sha256`.
+    const CERT: &str = include_str!("../testdata/login.cert");
+    const CERT_SHA256: &str = include_str!("../testdata/login.cert.sha256");
+
+    #[test]
+    fn pins_the_login_certificate() {
+        let stack = temp("pin");
+        // No certificate yet: nothing is written.
+        write_config(&stack, "127.0.0.1").unwrap();
+        assert!(!known_servers_path(&stack).exists());
+
+        assert_eq!(cert_fingerprint(CERT).unwrap(), CERT_SHA256.trim());
+        fs::write(stack.join(".env"), "DATA_DIR=./server-data\n").unwrap();
+        fs::create_dir_all(stack.join("server-data/tls")).unwrap();
+        fs::write(stack.join("server-data/tls/login.cert"), CERT).unwrap();
+        fs::write(known_servers_path(&stack), r#"{"127.0.0.1:54231":{"sha256":"00","fixed":false},"other:54231":{"sha256":"11"}}"#).unwrap();
+        write_config(&stack, "127.0.0.1").unwrap();
+        let known: Value = serde_json::from_slice(&fs::read(known_servers_path(&stack)).unwrap()).unwrap();
+        assert_eq!(known["127.0.0.1:54231"], json!({ "sha256": CERT_SHA256.trim(), "fixed": true }));
+        assert_eq!(known["other:54231"]["sha256"], "11");
+
+        assert!(cert_fingerprint("not a certificate").is_none());
         fs::remove_dir_all(stack).unwrap();
     }
 
