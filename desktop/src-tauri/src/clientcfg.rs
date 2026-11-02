@@ -143,9 +143,9 @@ pub const SETTINGS: &[Setting] = &[
         key: "gamepad_deadzone",
         group: GAMEPAD,
         label: "Stick dead zone",
-        hint: "How far a stick moves before it counts, from 0 to 0.9.",
+        hint: "How far a stick moves before it counts, from 0 to 0.9. The original game uses 0.33.",
         kind: Kind::Number { min: 0.0, max: 0.9, whole: false },
-        default: 0.2,
+        default: 0.33,
     },
     cfg_bool("gamepad_invert_y", GAMEPAD, "Invert camera up and down", "", false),
 ];
