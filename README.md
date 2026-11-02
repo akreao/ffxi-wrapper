@@ -48,6 +48,8 @@ The [`Game client`](.github/workflows/client.yml) workflow builds vana-client fr
 
 To move to a newer client, push the change to the fork, put its full commit SHA in `CLIENT_COMMIT` in `.env.example` and merge. Once the release is published, the app offers the update.
 
+vana-client pins each server's login certificate and refuses a different one later. `connect` keeps the certificate it makes on its first start in `DATA_DIR/tls/` (`login.cert` and `login.key`), so recreating the container or moving to a new server image keeps it. The desktop app pins it in its own client before each start, so that client never has to trust it on first use. Players on other computers can pin it with `vana-client trust-server SERVER --port 54231 --fingerprint ...`, using the fingerprint from `openssl x509 -in DATA_DIR/tls/login.cert -noout -fingerprint -sha256`. Deleting `DATA_DIR/tls/` makes a new certificate on the next start, which every player's client then has to trust again.
+
 ### Changing LSB's settings
 
 Any LSB setting can be set as an environment variable, `XI_<FILE>_<SETTING>` (for example `XI_MAP_EXP_RATE`), in the `x-lsb` environment in `compose.yaml`. For bigger changes, put a copy of one of LSB's settings files (`settings/default/map.lua` and the rest in the LSB repo) in [`overrides/settings/`](overrides/settings/README.md), keep only the values you change, and restart: `docker compose up -d --force-recreate connect search world map`.
@@ -61,5 +63,5 @@ Any LSB setting can be set as an environment variable, `XI_<FILE>_<SETTING>` (fo
 - `db` is MariaDB 12.3.
 - `db-init` runs LSB's `tools/dbtool.py update` and then sets every zone's address to `PUBLIC_IP` ([`docker/lsb/db-init.sh`](docker/lsb/db-init.sh)). The other LSB services wait for it.
 - `meshes` copies the navmeshes from LSB's published meshes image into `DATA_DIR` on the first start.
-- `connect`, `search`, `world` and `map` are LSB's servers, all from the same image. One map server runs every zone. Each starts through [`docker/lsb/run.sh`](docker/lsb/run.sh), which links the settings in `overrides/settings/` into place.
+- `connect`, `search`, `world` and `map` are LSB's servers, all from the same image. One map server runs every zone. Each starts through [`docker/lsb/run.sh`](docker/lsb/run.sh), which links the settings in `overrides/settings/` into place, and for `connect` the login certificate in `DATA_DIR/tls/`.
 - The PlayOnline profile server (`xi_profile`) and LSB's HTTP API aren't run.
