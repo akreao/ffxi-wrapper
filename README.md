@@ -1,6 +1,6 @@
 # ffxi-wrapper
 
-Runs a private [LandSandBoat](https://github.com/LandSandBoat/server) (Final Fantasy XI) server and its database in Docker. A desktop app for Linux and Windows that drives it, and client setup with [vana-client](https://github.com/lenonk/vana-client), are planned next.
+Runs a private [LandSandBoat](https://github.com/LandSandBoat/server) (Final Fantasy XI) server and its database in Docker. The [desktop app](desktop/README.md), for Linux and Windows, sets it up and runs it for you. Client setup with [vana-client](https://github.com/lenonk/vana-client) is planned next.
 
 ## Running the server stack
 

@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ffxi-wrapper</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="docker-error" class="banner error" hidden></div>
+
+  <!-- First run -->
+  <main id="setup" hidden>
+    <h1>Set up your server</h1>
+    <p class="lead">This app runs a private Final Fantasy XI server (LandSandBoat) and its database in Docker.</p>
+
+    <label for="setup-dir">Where to keep the server's files</label>
+    <div class="row">
+      <input id="setup-dir" type="text" spellcheck="false">
+      <button id="setup-browse" type="button">Browse…</button>
+    </div>
+    <p class="hint">The database, settings and navmeshes go here. If this folder already has a server set up (a <code>.env</code> file), the app uses it as it is.</p>
+
+    <label for="setup-address">Address players connect to</label>
+    <select id="setup-address"></select>
+    <input id="setup-address-typed" type="text" placeholder="192.168.1.20" spellcheck="false" hidden>
+    <p class="hint">Players on other computers need this computer's LAN or VPN address. <em>Detect automatically</em> picks the LAN address again on every start.</p>
+
+    <label for="setup-name">Server name</label>
+    <input id="setup-name" type="text" maxlength="30" placeholder="Nameless">
+
+    <p id="setup-error" class="error-text" hidden></p>
+    <button id="setup-go" class="primary" type="button">Set up</button>
+  </main>
+
+  <!-- The running app -->
+  <main id="main" hidden>
+    <header>
+      <div>
+        <h1 id="title">Server</h1>
+        <span id="state" class="pill">…</span>
+      </div>
+      <div class="actions">
+        <button id="start" class="primary" type="button">Start</button>
+        <button id="restart" type="button">Restart</button>
+        <button id="stop" type="button">Stop</button>
+        <button id="build" type="button" title="Build the server again from the LandSandBoat commit in .env">Rebuild</button>
+        <button id="cancel" type="button" hidden>Cancel</button>
+      </div>
+    </header>
+    <div id="restart-bar" class="banner" hidden>
+      Restart the server to use the new settings.
+      <button id="restart-now" type="button">Restart now</button>
+    </div>
+    <p id="first-build" class="banner" hidden>
+      The server isn't on this computer yet, so the next start fetches it first: a download when a ready-made one is published for this LandSandBoat version, or otherwise a build from source, which takes 20 to 60 minutes. Its progress shows under Activity.
+    </p>
+
+    <div class="columns">
+      <section class="side">
+        <h2>Services</h2>
+        <ul id="services" class="services"></ul>
+        <p class="hint">Click a service to see its log.</p>
+
+        <h2>Settings</h2>
+        <label for="address">Address players connect to</label>
+        <select id="address"></select>
+        <div class="row">
+          <input id="address-typed" type="text" placeholder="192.168.1.20" spellcheck="false" hidden>
+        </div>
+        <label for="name">Server name</label>
+        <input id="name" type="text" maxlength="30" placeholder="Nameless">
+        <button id="save-settings" type="button">Save</button>
+        <p id="settings-error" class="error-text" hidden></p>
+
+        <h2>Files</h2>
+        <p class="hint"><span id="stack-dir"></span></p>
+        <p class="hint" id="db-where"></p>
+        <button id="open-dir" type="button">Open folder</button>
+        <p class="hint">The server keeps running when you close this app. Stop it here first to shut it down.</p>
+      </section>
+
+      <section class="pane">
+        <div class="tabs">
+          <button id="tab-activity" class="tab active" type="button">Activity</button>
+          <button id="tab-logs" class="tab" type="button">Log: <span id="log-service">none</span></button>
+        </div>
+        <pre id="activity" class="output"></pre>
+        <pre id="logs" class="output" hidden></pre>
+      </section>
+    </div>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
