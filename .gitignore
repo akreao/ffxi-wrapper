@@ -1,2 +1,4 @@
 data/
 .env
+/desktop/src-tauri/target/
+/desktop/src-tauri/gen/
