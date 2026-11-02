@@ -1,5 +1,6 @@
 mod backup;
 mod client;
+mod clientcfg;
 mod config;
 mod envfile;
 mod host;
@@ -238,6 +239,30 @@ async fn set_game_settings(handle: AppHandle, values: settings::Values) -> Resul
     .await?
 }
 
+#[derive(Serialize)]
+struct ClientSettings {
+    /// The config file they're in.
+    path: String,
+    settings: &'static [settings::Setting],
+    values: clientcfg::Values,
+}
+
+/// The game client's settings, from its `config.json`.
+#[tauri::command]
+async fn client_settings(handle: AppHandle) -> Result<ClientSettings, String> {
+    off_main(handle, |_, app| {
+        let path = client::config_path(&app.dir()?);
+        Ok(ClientSettings { path: path.display().to_string(), settings: clientcfg::SETTINGS, values: clientcfg::load(&path) })
+    })
+    .await?
+}
+
+/// Saves the game client's settings; the game uses them the next time it starts.
+#[tauri::command]
+async fn set_client_settings(handle: AppHandle, values: clientcfg::Values) -> Result<(), String> {
+    off_main(handle, move |_, app| clientcfg::save(&client::config_path(&app.dir()?), &values)).await?
+}
+
 fn running(app: &App) -> bool {
     app.dir()
         .and_then(|dir| stack::status(&dir))
@@ -417,8 +442,9 @@ async fn play(handle: AppHandle) -> Result<(), String> {
 
 fn play_now(app: &App) -> Result<(), String> {
     let dir = app.dir()?;
-    if !client::status(&dir, &client_commit(app)).installed {
-        return Err("Install the game data first.".into());
+    // Without game data, the client's own first start sets it up.
+    if !client::status(&dir, &client_commit(app)).program {
+        return Err("Download vana-client first, on the Game client screen.".into());
     }
     client::write_config(&dir, CLIENT_SERVER)?;
     client::play(&dir)
@@ -555,6 +581,8 @@ pub fn run() {
             set_server_name,
             game_settings,
             set_game_settings,
+            client_settings,
+            set_client_settings,
             services,
             run_task,
             client_status,

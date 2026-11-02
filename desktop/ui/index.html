@@ -4,126 +4,129 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ffxi-wrapper</title>
+  <script src="theme.js"></script>
   <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
 </head>
-<body>
-  <div id="docker-error" class="banner error" hidden></div>
+<body class="app">
+  <nav id="sidebar" aria-label="Screens" hidden>
+    <div class="brand">
+      <div class="logo"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg></div>
+      <div>
+        <div class="brand-name">ffxi-wrapper</div>
+        <div id="brand-sub" class="brand-sub"></div>
+      </div>
+    </div>
+    <div class="nav-group">
+      <div class="nav-heading">Server</div>
+      <button id="nav-overview" class="nav-item"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg><span>Overview</span></button>
+      <button id="nav-game" class="nav-item"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></svg><span>Game rules</span></button>
+    </div>
+    <div class="nav-group">
+      <div class="nav-heading">Play</div>
+      <button id="nav-client" class="nav-item"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="7" width="19" height="11" rx="4"/><path d="M7 11v3M5.5 12.5h3"/><circle cx="16" cy="11.5" r=".6"/><circle cx="18" cy="13.5" r=".6"/></svg><span>Game client</span></button>
+    </div>
+    <div class="nav-group">
+      <div class="nav-heading">System</div>
+      <button id="nav-backups" class="nav-item"><svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5.5" rx="8" ry="3"/><path d="M4 5.5v13c0 1.7 3.6 3 8 3s8-1.3 8-3v-13M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg><span>Backups</span></button>
+      <button id="nav-settings" class="nav-item"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg><span>Settings</span></button>
+    </div>
+    <div id="docker" class="sidebar-foot"></div>
+  </nav>
+
+  <div id="shell">
+  <header>
+    <h1 id="page-title">Overview</h1>
+    <span id="status" class="status off" hidden><span class="dot"></span><span id="status-text">Off</span></span>
+    <div id="header-actions" class="actions" hidden>
+      <button id="cancel" hidden>Cancel</button>
+      <button id="start" class="primary"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5v15l12-7.5z"/></svg>Start server</button>
+      <button id="stop" class="danger"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v8"/><path d="M6.3 7a8 8 0 1 0 11.4 0"/></svg>Stop server</button>
+      <details id="more" class="menu">
+        <summary class="icon-button" aria-label="More actions" title="More actions">
+          <svg viewBox="0 0 24 24" aria-hidden="true" class="fill"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+        </summary>
+        <div class="menu-list">
+          <button id="restart"><strong>Restart server</strong><span>Restart the game servers, which applies new settings; the database keeps running</span></button>
+          <button id="build"><strong>Rebuild</strong><span>Build the server again from the LandSandBoat commit in .env</span></button>
+        </div>
+      </details>
+    </div>
+  </header>
+
+  <div id="notices">
+    <div id="docker-error" class="banner" hidden></div>
+    <div id="restart-bar" class="update-bar" hidden>
+      <p><strong>Restart the server to use the new settings.</strong> Players in game are disconnected.</p>
+      <button id="restart-now" class="primary">Restart now</button>
+    </div>
+    <div id="first-build" class="update-bar" hidden>
+      <p>
+        <strong>The server isn't on this computer yet.</strong>
+        The next start fetches it first: a download when a ready-made one is published for this LandSandBoat version, or otherwise a build from source, which takes 20 to 60 minutes. Its progress shows in the Activity log on the Overview.
+      </p>
+    </div>
+  </div>
 
   <!-- First run -->
   <main id="setup" hidden>
-    <h1>Set up your server</h1>
-    <p class="lead">This app runs a private Final Fantasy XI server (LandSandBoat) and its database in Docker.</p>
-
-    <label for="setup-dir">Where to keep the server's files</label>
-    <div class="row">
-      <input id="setup-dir" type="text" spellcheck="false">
-      <button id="setup-browse" type="button">Browse…</button>
-    </div>
-    <p class="hint">The database, settings and navmeshes go here. If this folder already has a server set up (a <code>.env</code> file), the app uses it as it is.</p>
-
-    <label for="setup-address">Address players connect to</label>
-    <select id="setup-address"></select>
-    <input id="setup-address-typed" type="text" placeholder="192.168.1.20" spellcheck="false" hidden>
-    <p class="hint">Players on other computers need this computer's LAN or VPN address. <em>Detect automatically</em> picks the LAN address again on every start.</p>
-
-    <label for="setup-name">Server name</label>
-    <input id="setup-name" type="text" maxlength="30" placeholder="Nameless">
-
-    <p id="setup-error" class="error-text" hidden></p>
-    <button id="setup-go" class="primary" type="button">Set up</button>
+    <form id="setup-form" class="card narrow">
+      <h2>Set up your server</h2>
+      <p class="muted">This app runs a private Final Fantasy XI server (LandSandBoat) and its database in Docker.</p>
+      <label for="setup-dir">Where to keep the server's files</label>
+      <div class="row">
+        <input id="setup-dir" type="text" spellcheck="false">
+        <button id="setup-browse" type="button">Browse…</button>
+      </div>
+      <p class="hint">The database, settings and navmeshes go here. If this folder already has a server set up (a <code>.env</code> file), the app uses it as it is.</p>
+      <label for="setup-address">Address players connect to</label>
+      <select id="setup-address"></select>
+      <input id="setup-address-typed" type="text" placeholder="such as 192.168.1.20" spellcheck="false" hidden>
+      <p class="hint">Players on other computers need this computer's LAN or VPN address. <em>Detect automatically</em> picks the LAN address again on every start.</p>
+      <label for="setup-name">Server name</label>
+      <input id="setup-name" type="text" maxlength="30" placeholder="Nameless">
+      <p id="setup-error" class="error" hidden></p>
+      <button id="setup-go" class="primary" type="submit">Set up</button>
+    </form>
   </main>
 
-  <!-- The running app -->
-  <main id="main" hidden>
-    <header>
-      <div>
-        <h1 id="title">Server</h1>
-        <span id="state" class="pill">…</span>
-      </div>
-      <div class="actions">
-        <button id="start" class="primary" type="button">Start</button>
-        <button id="restart" type="button">Restart</button>
-        <button id="stop" type="button">Stop</button>
-        <button id="build" type="button" title="Build the server again from the LandSandBoat commit in .env">Rebuild</button>
-        <button id="cancel" type="button" hidden>Cancel</button>
-      </div>
-    </header>
-    <div id="restart-bar" class="banner" hidden>
-      Restart the server to use the new settings.
-      <button id="restart-now" type="button">Restart now</button>
-    </div>
-    <p id="first-build" class="banner" hidden>
-      The server isn't on this computer yet, so the next start fetches it first: a download when a ready-made one is published for this LandSandBoat version, or otherwise a build from source, which takes 20 to 60 minutes. Its progress shows under Activity.
-    </p>
-
-    <div class="columns">
-      <section class="side">
-        <h2>Services</h2>
-        <ul id="services" class="services"></ul>
-        <p class="hint">Click a service to see its log.</p>
-
-        <h2>Settings</h2>
-        <label for="address">Address players connect to</label>
-        <select id="address"></select>
-        <div class="row">
-          <input id="address-typed" type="text" placeholder="192.168.1.20" spellcheck="false" hidden>
-        </div>
-        <label for="name">Server name</label>
-        <input id="name" type="text" maxlength="30" placeholder="Nameless">
-        <button id="save-settings" type="button">Save</button>
-        <p id="settings-error" class="error-text" hidden></p>
-
-        <h2>Game settings</h2>
-        <details id="game-settings">
-          <summary>Rates, new characters and more</summary>
-          <form id="game-form"></form>
-          <button id="save-game" type="button">Save</button>
-          <button id="reset-game" type="button" title="Put every value back to LandSandBoat's default">Defaults</button>
-          <p id="game-error" class="error-text" hidden></p>
-          <p class="hint">Saved to <code>overrides/settings/zz_app.lua</code>, which wins over the same settings in your own files there. A running server needs a restart to use them.</p>
-        </details>
-
-        <h2>Game client</h2>
-        <p class="hint" id="client-state"></p>
-        <div id="client-download-box" hidden>
-          <button id="client-download" type="button">Download vana-client</button>
-          <p class="hint">A native Final Fantasy XI client for LandSandBoat servers, for Linux and Windows.</p>
-        </div>
-        <div id="client-install-box" hidden>
-          <label for="client-installer">Square Enix's installer (FFXIFullSetup_US.part1.exe)</label>
-          <div class="row">
-            <input id="client-installer" type="text" spellcheck="false">
-            <button id="client-browse" type="button">Browse…</button>
-          </div>
-          <p class="hint">Its other parts must sit beside it. Installing unpacks the game into the client folder, with a temporary copy beside it while it works, so that drive needs room for both. It takes a while.</p>
-          <button id="client-install" type="button">Install game data</button>
-        </div>
-        <div id="client-play-box" hidden>
-          <button id="client-play" class="primary" type="button">Play</button>
-          <button id="client-update" type="button" title="Bring the game data up to the current retail version">Update game data</button>
-          <p class="hint">Create your account on the client's login screen (Create account), then log in.</p>
-        </div>
-
-        <h2>Backups</h2>
-        <p class="hint" id="backups-state"></p>
-        <ul id="backups" class="backups" hidden></ul>
-        <div class="row-buttons">
-          <button id="backup-now" type="button">Back up now</button>
-          <button id="open-backups" type="button">Open backups folder</button>
-        </div>
-        <p class="hint">Stop backs up the database first when there's no backup from the last day. The newest 10 made by hand and 10 made automatically are kept.</p>
-
-        <h2>Files</h2>
-        <p class="hint"><span id="stack-dir"></span></p>
-        <p class="hint" id="db-where"></p>
-        <button id="open-dir" type="button">Open folder</button>
-        <p class="hint">Closing this window leaves the app in the tray; Quit is there. The server keeps running until you Stop it, even after quitting.</p>
+  <!-- Overview: status, services and the Activity and log panes -->
+  <main id="overview-page" hidden>
+    <div class="stats">
+      <section class="card stat">
+        <div class="stat-label">Status</div>
+        <div class="stat-value"><span id="ov-dot" class="dot"></span><span id="ov-status">Off</span></div>
+        <div id="ov-status-sub" class="stat-sub"></div>
       </section>
-
-      <section class="pane">
+      <section class="card stat">
+        <div class="stat-label">Players connect to</div>
+        <div class="stat-value">
+          <code id="connect-addr"></code>
+          <button id="copy-addr" class="icon-button small" aria-label="Copy the address" title="Copy the address">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+          </button>
+        </div>
+        <div class="stat-sub"><span id="connect-auto"></span><a href="#" id="connect-settings">Change</a></div>
+      </section>
+      <section class="card stat">
+        <div class="stat-label">Game client</div>
+        <div class="stat-value">
+          <span id="ov-client">…</span>
+          <button id="ov-play" class="primary small" hidden><svg viewBox="0 0 24 24" aria-hidden="true" class="fill"><path d="M7 4.5v15l12-7.5z"/></svg>Play</button>
+        </div>
+        <div class="stat-sub"><a href="#" id="ov-client-link">Game client</a></div>
+      </section>
+    </div>
+    <div class="overview">
+      <section class="card overview-side">
+        <div class="card-head"><h2>Services</h2><span id="ov-services" class="muted"></span></div>
+        <ul id="services"></ul>
+        <p class="hint">Click one to see its log.</p>
+      </section>
+      <section class="card logs">
         <div class="tabs">
-          <button id="tab-activity" class="tab active" type="button">Activity</button>
-          <button id="tab-logs" class="tab" type="button">Log: <span id="log-service">none</span></button>
+          <button id="tab-activity" class="tab active">Activity</button>
+          <button id="tab-logs" class="tab">Log: <span id="log-service">none</span></button>
         </div>
         <pre id="activity" class="output"></pre>
         <pre id="logs" class="output" hidden></pre>
@@ -131,6 +134,159 @@
     </div>
   </main>
 
-  <script src="app.js"></script>
+  <!-- Game rules: LandSandBoat settings the app writes to zz_app.lua -->
+  <main id="game-page" class="page" hidden>
+    <div class="toolbar">
+      <button id="game-save" class="primary">Save</button>
+      <button id="game-reset" title="Put every value back to LandSandBoat's default">Defaults</button>
+      <span id="game-saved" class="hint" hidden>Saved.</span>
+      <span id="game-error" class="error" hidden></span>
+    </div>
+    <p class="hint">Changed values are highlighted. They're saved to <code>overrides/settings/zz_app.lua</code>, which wins over the same settings in your own files there. A running server needs a restart to use them.</p>
+    <div id="game-form"></div>
+  </main>
+
+  <!-- Game client: vana-client and the game data -->
+  <main id="client-page" class="page" hidden>
+    <nav class="subtabs" aria-label="Game client sections">
+      <button type="button" class="subtab active" data-panel="panel-client-setup">Setup</button>
+      <button type="button" class="subtab" data-panel="panel-client-cfg">Settings</button>
+    </nav>
+
+    <div id="panel-client-setup" class="panel">
+      <div class="toolbar">
+        <button id="client-play" class="primary" hidden><svg viewBox="0 0 24 24" aria-hidden="true" class="fill"><path d="M7 4.5v15l12-7.5z"/></svg>Play</button>
+        <button id="client-update" hidden title="Bring the game data up to the current retail version">Update game data</button>
+      </div>
+      <section class="card group">
+        <h2>vana-client</h2>
+        <p id="client-state" class="hint"></p>
+        <div id="client-download-box" class="setting" hidden>
+          <div class="setting-text">
+            <span class="setting-title" id="client-download-title">Download vana-client</span>
+            <p class="hint">A native Final Fantasy XI client for LandSandBoat servers, for Linux and Windows.</p>
+          </div>
+          <button id="client-download" class="primary">Download</button>
+        </div>
+        <div id="client-play-box" class="setting" hidden>
+          <div class="setting-text">
+            <span class="setting-title" id="client-play-title">Play</span>
+            <p class="hint" id="client-play-hint"></p>
+          </div>
+        </div>
+        <details id="client-install-box" class="setting stacked help-row" hidden>
+          <summary>Install from Square Enix's installer you already have (optional)</summary>
+          <div class="setting-text">
+            <label for="client-installer">The installer's first part (FFXIFullSetup_US.part1.exe)</label>
+            <p class="hint">Only needed to skip the client's own download. Its other parts must sit beside it. Installing unpacks the game into the client folder, with a temporary copy beside it while it works, so that drive needs room for both. Progress shows in the Activity log on the Overview.</p>
+          </div>
+          <div class="setting-control inline wide">
+            <input id="client-installer" type="text" spellcheck="false">
+            <button id="client-browse">Browse…</button>
+            <button id="client-install">Install game data</button>
+          </div>
+        </details>
+      </section>
+    </div>
+
+    <div id="panel-client-cfg" class="panel" hidden>
+      <div class="toolbar sticky">
+        <button id="client-cfg-save" class="primary">Save</button>
+        <button id="client-cfg-reset" title="Put every value back to vana-client's default">Defaults</button>
+        <span id="client-cfg-saved" class="hint" hidden></span>
+        <span id="client-cfg-error" class="error" hidden></span>
+      </div>
+      <p class="hint">Changed values are highlighted. They're saved in the client's settings, <code id="client-cfg-path"></code>, and the game uses them the next time it starts. Close the game before saving: it saves its own settings while it runs. Everything else the game keeps there, such as logins, window places and key bindings, is left alone.</p>
+      <div id="client-cfg-form"></div>
+    </div>
+  </main>
+
+  <!-- Backups -->
+  <main id="backups-page" class="page" hidden>
+    <div class="toolbar">
+      <button id="backup-now" class="primary"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Back up now</button>
+      <button id="open-backups"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Open folder</button>
+    </div>
+    <section class="card">
+      <h2>Backups</h2>
+      <p class="hint">Stop backs up the database first when there's no backup from the last day. The newest 10 made by hand and the newest 10 made automatically are kept. Restore backs up the current database first, so it can be undone.</p>
+      <p id="backups-state" class="hint"></p>
+      <ul id="backups"></ul>
+    </section>
+  </main>
+
+  <!-- Settings -->
+  <main id="settings-page" class="page" hidden>
+    <nav class="subtabs" aria-label="Settings sections">
+      <button type="button" class="subtab active" data-panel="panel-server">Server</button>
+      <button type="button" class="subtab" data-panel="panel-app">App</button>
+    </nav>
+
+    <div id="panel-server" class="panel">
+      <form id="server-form" class="card group">
+        <h2>Server</h2>
+        <div class="setting">
+          <div class="setting-text">
+            <label for="name">Server name</label>
+            <p class="hint">Shown to players in game.</p>
+          </div>
+          <input id="name" class="setting-control" type="text" maxlength="30" placeholder="Nameless">
+        </div>
+        <div class="setting">
+          <div class="setting-text">
+            <label for="address">Address players connect to</label>
+            <p class="hint">Players on other computers need this computer's LAN or VPN address. <em>Detect automatically</em> picks the LAN address again on every start.</p>
+          </div>
+          <select id="address" class="setting-control"></select>
+        </div>
+        <div id="address-typed-row" class="setting" hidden>
+          <div class="setting-text"><label for="address-typed">Address</label></div>
+          <input id="address-typed" class="setting-control" type="text" placeholder="such as 192.168.1.20" spellcheck="false">
+        </div>
+        <div class="save-row">
+          <p id="settings-error" class="error" hidden></p>
+          <p id="settings-saved" class="notice" hidden>Saved.</p>
+          <button id="save-settings" class="primary" type="submit">Save</button>
+        </div>
+      </form>
+      <section class="card group">
+        <h2>Files</h2>
+        <div class="setting">
+          <div class="setting-text">
+            <span class="setting-title">Server folder</span>
+            <p class="hint"><span id="stack-dir"></span><br><span id="db-where"></span></p>
+          </div>
+          <button id="open-dir">Open folder</button>
+        </div>
+      </section>
+    </div>
+
+    <div id="panel-app" class="panel" hidden>
+      <section class="card group">
+        <h2>Appearance</h2>
+        <div class="setting">
+          <div class="setting-text">
+            <label for="theme">Theme</label>
+            <p class="hint">Match the desktop follows your desktop's light or dark setting, where it tells the app. Pick Light or Dark if it doesn't.</p>
+          </div>
+          <select id="theme" class="setting-control">
+            <option value="">Match the desktop</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </div>
+      </section>
+      <section class="card group">
+        <h2>Running in the background</h2>
+        <div class="setting">
+          <div class="setting-text">
+            <span class="setting-title">The tray</span>
+            <p class="hint">Closing this window leaves the app in the tray, with Open, Start, Stop, Play and Quit. The server keeps running until you stop it, even after quitting.</p>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+  </div>
 </body>
 </html>

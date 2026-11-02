@@ -39,12 +39,24 @@ pub fn program(stack: &Path) -> PathBuf {
     dir(stack).join(if cfg!(windows) { "vana-client.exe" } else { "vana-client" })
 }
 
-fn config_path(stack: &Path) -> PathBuf {
+pub fn config_path(stack: &Path) -> PathBuf {
     dir(stack).join("config.json")
 }
 
-fn game_dir(stack: &Path) -> PathBuf {
+/// Where the app puts the game data: `client/game/`.
+fn default_game_dir(stack: &Path) -> PathBuf {
     dir(stack).join("game")
+}
+
+/// Where the game data is: the folder the client's config names (its first
+/// start can put it in another folder, or use one already on disk), else
+/// the app's default.
+fn game_dir(stack: &Path) -> PathBuf {
+    read_config(stack)["game_dir"]
+        .as_str()
+        .filter(|d| !d.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| default_game_dir(stack))
 }
 
 /// Records which fork commit the downloaded vana-client was built from.
@@ -69,7 +81,7 @@ pub fn status(stack: &Path, pinned: &str) -> Status {
     let config = read_config(stack);
     let built = fs::read_to_string(version_path(stack)).unwrap_or_default();
     let installed = config["installed"].as_bool() == Some(true)
-        && game_dir(stack).join("FINAL FANTASY XI").is_dir();
+        && game_dir(stack).join("FINAL FANTASY XI").join("VTABLE.DAT").is_file();
     Status {
         dir: dir(stack).display().to_string(),
         program: program(stack).is_file(),
@@ -113,8 +125,10 @@ fn read_config(stack: &Path) -> Value {
         .unwrap_or_else(|| json!({}))
 }
 
-/// Points the client at this server and at its game folder, keeping every
-/// other setting the client saved (its logins, graphics, key bindings).
+/// Points the client at this server, keeping every other setting the client
+/// saved (its logins, graphics, key bindings). A new config gets the app's
+/// game folder; one the client already has stays, since its first start may
+/// have picked another.
 pub fn write_config(stack: &Path, server: &str) -> Result<(), String> {
     let mut config = read_config(stack);
     if !config.is_object() {
@@ -123,7 +137,8 @@ pub fn write_config(stack: &Path, server: &str) -> Result<(), String> {
     let set = |config: &mut Value, key: &str, value: Value| {
         config.as_object_mut().unwrap().insert(key.to_owned(), value);
     };
-    set(&mut config, "game_dir", json!(game_dir(stack)));
+    let game = game_dir(stack);
+    set(&mut config, "game_dir", json!(game));
     set(&mut config, "server", json!(server));
     set(&mut config, "auth_port", json!(54231));
     set(&mut config, "data_port", json!(54230));
@@ -195,6 +210,8 @@ pub fn update(stack: &Path) -> Command {
 }
 
 /// Opens the game. It runs on its own: closing the app leaves it open.
+/// Without game data, the client's first start offers to download and
+/// install it from Square Enix, or to use game files already on disk.
 pub fn play(stack: &Path) -> Result<(), String> {
     let mut cmd = client(stack);
     cmd.stdout(Stdio::null()).stderr(Stdio::null());
@@ -237,13 +254,14 @@ mod tests {
         let c = read_config(&stack);
         assert_eq!(c["server"], "127.0.0.1");
         assert_eq!(c["auth_port"], 54231);
-        assert_eq!(c["game_dir"], json!(game_dir(&stack)));
+        assert_eq!(c["game_dir"], json!(default_game_dir(&stack)));
         assert_eq!(c["frame_limit"], 144);
         assert_eq!(c["logins"][0]["username"], "me");
 
-        // Not installed until the game folder is there too.
+        // Not installed until the game files are there too.
         assert!(!status(&stack, "a").installed);
         fs::create_dir_all(game_dir(&stack).join("FINAL FANTASY XI")).unwrap();
+        fs::write(game_dir(&stack).join("FINAL FANTASY XI/VTABLE.DAT"), "").unwrap();
         assert!(status(&stack, "a").installed);
         fs::remove_dir_all(stack).unwrap();
     }
@@ -260,6 +278,17 @@ mod tests {
         assert!(status(&stack, commit).program);
         assert!(!status(&stack, commit).outdated);
         assert!(status(&stack, "0123456789012345678901234567890123456789").outdated);
+        fs::remove_dir_all(stack).unwrap();
+    }
+
+    #[test]
+    fn keeps_the_game_folder_the_client_picked() {
+        let stack = temp("picked");
+        fs::create_dir_all(dir(&stack)).unwrap();
+        fs::write(config_path(&stack), r#"{"game_dir":"/games/ffxi","installed":true}"#).unwrap();
+        write_config(&stack, "127.0.0.1").unwrap();
+        assert_eq!(read_config(&stack)["game_dir"], "/games/ffxi");
+        assert_eq!(game_dir(&stack), PathBuf::from("/games/ffxi"));
         fs::remove_dir_all(stack).unwrap();
     }
 
