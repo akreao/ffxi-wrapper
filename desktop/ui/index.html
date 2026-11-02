@@ -162,23 +162,24 @@
         </div>
         <button id="client-download" class="primary">Download</button>
       </div>
-      <div id="client-install-box" class="setting stacked" hidden>
+      <div id="client-play-box" class="setting" hidden>
         <div class="setting-text">
-          <label for="client-installer">Square Enix's installer (FFXIFullSetup_US.part1.exe)</label>
-          <p class="hint">Its other parts must sit beside it. Installing unpacks the game into the client folder, with a temporary copy beside it while it works, so that drive needs room for both. It takes a while; progress shows in the Activity log on the Overview.</p>
+          <span class="setting-title" id="client-play-title">Play</span>
+          <p class="hint" id="client-play-hint"></p>
+        </div>
+      </div>
+      <details id="client-install-box" class="setting stacked help-row" hidden>
+        <summary>Install from Square Enix's installer you already have (optional)</summary>
+        <div class="setting-text">
+          <label for="client-installer">The installer's first part (FFXIFullSetup_US.part1.exe)</label>
+          <p class="hint">Only needed to skip the client's own download. Its other parts must sit beside it. Installing unpacks the game into the client folder, with a temporary copy beside it while it works, so that drive needs room for both. Progress shows in the Activity log on the Overview.</p>
         </div>
         <div class="setting-control inline wide">
           <input id="client-installer" type="text" spellcheck="false">
           <button id="client-browse">Browse…</button>
-          <button id="client-install" class="primary">Install game data</button>
+          <button id="client-install">Install game data</button>
         </div>
-      </div>
-      <div id="client-play-box" class="setting" hidden>
-        <div class="setting-text">
-          <span class="setting-title">First time playing?</span>
-          <p class="hint">Create your account on the client's login screen (Create account), then log in. Play points the game at this server.</p>
-        </div>
-      </div>
+      </details>
     </section>
   </main>
 

@@ -483,22 +483,26 @@ async function refreshClient() {
   const c = clientStatus;
   $("client-state").textContent = !c.program
     ? "vana-client isn't downloaded yet."
-    : !c.installed
-      ? "vana-client is ready. Install the game data next."
-      : `Installed in ${c.dir}.`;
+    : `vana-client is in ${c.dir}.`;
   if (c.program && c.outdated) $("client-state").textContent += " A newer build of vana-client is available.";
   show($("client-download-box"), !c.program || c.outdated);
   $("client-download-title").textContent = c.program ? "Update vana-client" : "Download vana-client";
   $("client-download").textContent = c.program ? "Update" : "Download";
+  // Play works as soon as the client is here: without game data, its first
+  // start offers to download it from Square Enix or use files on disk.
+  show($("client-play-box"), c.program);
+  $("client-play-title").textContent = c.installed ? "First time playing?" : "No game data yet";
+  $("client-play-hint").textContent = c.installed
+    ? "Create your account on the client's login screen (Create account), then log in. Play points the game at this server."
+    : "Press Play: the client's first start downloads the game from Square Enix and installs it, or uses game files already on this computer. Then create your account on its login screen (Create account) and log in.";
   show($("client-install-box"), c.program && !c.installed);
-  show($("client-play-box"), c.installed);
-  show($("client-play"), c.installed);
+  show($("client-play"), c.program);
   show($("client-update"), c.installed);
   if (c.installer && !$("client-installer").value) $("client-installer").value = c.installer;
 
-  $("ov-client").textContent = !c.program ? "Not downloaded" : !c.installed ? "Needs game data" : "Ready";
-  $("ov-client-link").textContent = c.installed ? "Game client" : "Set it up";
-  show($("ov-play"), c.installed);
+  $("ov-client").textContent = !c.program ? "Not downloaded" : c.installed ? "Ready" : "Sets up on Play";
+  $("ov-client-link").textContent = c.program ? "Game client" : "Set it up";
+  show($("ov-play"), c.program);
   updateButtons();
 }
 

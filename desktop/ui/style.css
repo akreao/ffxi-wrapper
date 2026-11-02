@@ -606,3 +606,7 @@ label[hidden] { display: none; }
 /* Game rules: Save stays in reach while the page scrolls. */
 #game-page { padding-top: 0; }
 #game-page .toolbar { position: sticky; top: 0; z-index: 2; padding: 16px 0 10px; background: var(--bg); }
+
+/* The optional installer step folds away. */
+details.help-row > summary { cursor: pointer; color: var(--muted); font-weight: 500; }
+details.help-row:not([open]) { gap: 0; }

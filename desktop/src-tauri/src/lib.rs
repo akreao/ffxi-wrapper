@@ -417,8 +417,9 @@ async fn play(handle: AppHandle) -> Result<(), String> {
 
 fn play_now(app: &App) -> Result<(), String> {
     let dir = app.dir()?;
-    if !client::status(&dir, &client_commit(app)).installed {
-        return Err("Install the game data first.".into());
+    // Without game data, the client's own first start sets it up.
+    if !client::status(&dir, &client_commit(app)).program {
+        return Err("Download vana-client first, on the Game client screen.".into());
     }
     client::write_config(&dir, CLIENT_SERVER)?;
     client::play(&dir)
