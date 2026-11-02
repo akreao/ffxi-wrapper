@@ -159,3 +159,27 @@ header {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+.row-buttons { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.backups { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); max-height: 260px; overflow: auto; }
+.backups li {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+}
+.backups li:first-child { border-top: none; }
+.backups .when { font-weight: 600; }
+.backups .what { color: var(--muted); font-size: 12px; }
+.backups button { padding: 3px 10px; font-size: 13px; }
+
+details summary { cursor: pointer; color: var(--muted); margin-bottom: 6px; }
+#game-form h3 { font-size: 12px; margin: 14px 0 2px; color: var(--muted); font-weight: 600; }
+#game-form .setting { display: grid; grid-template-columns: 1fr 150px; align-items: center; gap: 8px; margin: 6px 0; }
+#game-form .setting label { margin: 0; font-weight: 500; }
+#game-form .setting .hint { grid-column: 1 / -1; margin: -4px 0 0; font-size: 12px; }
+#game-form .setting input[type=checkbox] { width: auto; justify-self: end; }
+#game-form .setting.changed label { color: var(--accent); }
+#save-game, #reset-game { margin-top: 10px; }

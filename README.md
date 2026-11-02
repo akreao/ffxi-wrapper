@@ -54,7 +54,7 @@ Any LSB setting can be set as an environment variable, `XI_<FILE>_<SETTING>` (fo
 
 ### Stopping and wiping
 
-`docker compose down` stops everything; the database stays in `DB_DATA`. To start over with an empty database, run `docker compose down -v` (with the default `DB_DATA`) or delete the `DB_DATA` folder.
+`docker compose down` stops everything; the database stays in `DB_DATA`. To start over with an empty database, run `docker compose down -v` (with the default `DB_DATA`) or delete the `DB_DATA` folder. The [desktop app](desktop/README.md) can back the database up into `backups/` and restore it.
 
 ## How it fits together
 

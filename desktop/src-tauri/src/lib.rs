@@ -1,10 +1,13 @@
+mod backup;
 mod client;
 mod config;
 mod envfile;
 mod host;
 mod net;
+mod settings;
 mod stack;
 mod task;
+mod tray;
 
 use std::path::{Path, PathBuf};
 use std::process::Child;
@@ -214,6 +217,27 @@ async fn set_server_name(handle: AppHandle, name: String) -> Result<bool, String
     .await?
 }
 
+#[derive(Serialize)]
+struct GameSettings {
+    settings: &'static [settings::Setting],
+    values: settings::Values,
+}
+
+#[tauri::command]
+async fn game_settings(handle: AppHandle) -> Result<GameSettings, String> {
+    off_main(handle, |_, app| Ok(GameSettings { settings: settings::SETTINGS, values: settings::load(&app.dir()?) })).await?
+}
+
+/// Saves the game settings. Returns whether the running server needs a restart.
+#[tauri::command]
+async fn set_game_settings(handle: AppHandle, values: settings::Values) -> Result<bool, String> {
+    off_main(handle, move |_, app| {
+        let changed = settings::save(&app.dir()?, &values)?;
+        Ok(changed && running(app))
+    })
+    .await?
+}
+
 fn running(app: &App) -> bool {
     app.dir()
         .and_then(|dir| stack::status(&dir))
@@ -246,6 +270,12 @@ enum Step {
     Download(std::process::Command, String),
     /// Puts a downloaded vana-client, built from this commit, in place.
     FinishDownload(String),
+    /// Backs up the database.
+    Backup,
+    /// Backs up a running database when there's no backup from the last day.
+    DailyBackup,
+    /// Replaces the database with this backup.
+    Restore(String),
 }
 
 /// Runs `start`, `restart` (the LSB servers, to apply settings), `stop`,
@@ -279,8 +309,10 @@ fn start_task(handle: &AppHandle, app: &App, kind: String, file: Option<String>)
         }
         "stop" => {
             cmd.arg("down");
-            vec![Step::Run(cmd)]
+            vec![Step::DailyBackup, Step::Run(cmd)]
         }
+        "backup" => vec![Step::Backup],
+        "restore" => vec![Step::Restore(file.ok_or("Pick a backup to restore.")?)],
         "build" => {
             cmd.args(["build", "db-init"]);
             vec![Step::Run(cmd)]
@@ -340,6 +372,12 @@ fn start_task(handle: &AppHandle, app: &App, kind: String, file: Option<String>)
                     }
                 }),
                 Step::FinishDownload(commit) => client::finish_download(&ctx.dir, &commit),
+                Step::Backup => backup::create(&ctx, backup::Reason::Manual, None),
+                Step::DailyBackup => {
+                    backup::daily(&ctx);
+                    Ok(())
+                }
+                Step::Restore(file) => backup::restore(&ctx, &file),
             }
         });
         if let Err(e) = &result {
@@ -374,15 +412,27 @@ async fn client_status(handle: AppHandle) -> Result<client::Status, String> {
 /// Opens the game, pointed at this server.
 #[tauri::command]
 async fn play(handle: AppHandle) -> Result<(), String> {
-    off_main(handle, |_, app| {
-        let dir = app.dir()?;
-        if !client::status(&dir, &client_commit(app)).installed {
-            return Err("Install the game data first.".into());
+    off_main(handle, |_, app| play_now(app)).await?
+}
+
+fn play_now(app: &App) -> Result<(), String> {
+    let dir = app.dir()?;
+    if !client::status(&dir, &client_commit(app)).installed {
+        return Err("Install the game data first.".into());
+    }
+    client::write_config(&dir, CLIENT_SERVER)?;
+    client::play(&dir)
+}
+
+/// Play from the tray: a problem brings the window up to say so.
+fn play_from_tray(handle: &AppHandle) {
+    let handle = handle.clone();
+    std::thread::spawn(move || {
+        if let Err(e) = play_now(&handle.state::<App>()) {
+            tray::show_main(&handle);
+            let _ = handle.emit("task-line", format!("Couldn't start the game: {e}"));
         }
-        client::write_config(&dir, CLIENT_SERVER)?;
-        client::play(&dir)
-    })
-    .await?
+    });
 }
 
 #[tauri::command]
@@ -421,6 +471,28 @@ fn follow_logs(handle: AppHandle, app: State<App>, service: Option<String>) -> R
     Ok(generation)
 }
 
+#[derive(Serialize)]
+struct Backups {
+    folder: String,
+    backups: Vec<backup::Backup>,
+}
+
+#[tauri::command]
+async fn backups(handle: AppHandle) -> Result<Backups, String> {
+    off_main(handle, |_, app| {
+        let folder = backup::folder(&app.dir()?);
+        Ok(Backups { backups: backup::list(&folder), folder: folder.display().to_string() })
+    })
+    .await?
+}
+
+#[tauri::command]
+fn open_backups(app: State<App>) -> Result<(), String> {
+    let folder = backup::folder(&app.dir()?);
+    std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
+    host::open(folder.as_os_str())
+}
+
 #[tauri::command]
 fn open_stack_dir(app: State<App>) -> Result<(), String> {
     host::open(app.dir()?.as_os_str())
@@ -431,13 +503,7 @@ pub fn run() {
     tauri::Builder::default()
         // A second copy would fight the first over the stack; opening the
         // app again brings this window forward instead.
-        .plugin(tauri_plugin_single_instance::init(|handle, _, _| {
-            if let Some(window) = handle.get_webview_window("main") {
-                let _ = window.unminimize();
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
-        }))
+        .plugin(tauri_plugin_single_instance::init(|handle, _, _| tray::show_main(handle)))
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
@@ -458,6 +524,10 @@ pub fn run() {
                     dir
                 }
             };
+            // Without a tray (a desktop that shows none), closing the window quits.
+            if let Err(e) = tray::add(app) {
+                eprintln!("Couldn't add the tray icon: {e}");
+            }
             app.manage(App {
                 config_dir,
                 data_dir,
@@ -469,17 +539,30 @@ pub fn run() {
             });
             Ok(())
         })
+        // Closing the window leaves the app in the tray, when there is one.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.app_handle().tray_by_id(tray::ID).is_some() {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             overview,
             setup,
             set_public_ip,
             set_server_name,
+            game_settings,
+            set_game_settings,
             services,
             run_task,
             client_status,
             play,
             cancel_task,
             follow_logs,
+            backups,
+            open_backups,
             open_stack_dir
         ])
         .build(tauri::generate_context!())

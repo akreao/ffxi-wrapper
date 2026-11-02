@@ -2,7 +2,7 @@
 # Brings LSB's database up to date, then sets the address players are sent to.
 #
 # dbtool remembers which commit the database was last updated to in
-# tools/config.yaml. That file lives in the dbtool-state volume, so a later
+# tools/config.yaml. That file lives in DATA_DIR/dbtool, so a later
 # start only applies what changed since (or nothing at all).
 set -eu
 
@@ -28,7 +28,17 @@ fi
 ln -sf /state/config.yaml /server/tools/config.yaml
 
 cd /server
-python tools/dbtool.py update
+# The desktop app leaves this table in a database it restores from a
+# backup. dbtool's record describes the database from before the restore,
+# so this one gets a full update: LSB's game data is imported again and
+# every migration checked, while accounts and characters are kept.
+if [ -n "$(sql "SHOW TABLES LIKE 'ffxi_wrapper_restored'")" ]; then
+    echo "Restored from a backup: bringing the whole database up to date. This takes a few minutes."
+    python tools/dbtool.py update full
+    sql "DROP TABLE ffxi_wrapper_restored"
+else
+    python tools/dbtool.py update
+fi
 
 # Clients are sent this address for the map server.
 sql "UPDATE zone_settings SET zoneip = '$PUBLIC_IP'"
