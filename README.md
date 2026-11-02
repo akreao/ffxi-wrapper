@@ -26,10 +26,11 @@ The client creates its account on the login screen (LSB's `ACCOUNT_CREATION` is 
 
 ### Settings in `.env`
 
-- `DATA_DIR` is where the server keeps everything it writes: the database (`db/`), dbtool's record of the database version (`dbtool/`) and the navmeshes (`navmeshes/`, `ximeshes/`). It's `./data` by default; point it at another drive to keep the server's files there. On Linux, the database needs a Linux filesystem (ext4, btrfs, xfs), not exFAT or NTFS.
+- `DATA_DIR` is where the server keeps its files: dbtool's record of the database version (`dbtool/`) and the navmeshes (`navmeshes/`, `ximeshes/`). It's `./data` by default; point it at another drive to keep them there.
+- `DB_DATA` is where the database lives. The default, `db-data`, is a Docker volume, which works everywhere and is the reliable choice on Windows (Docker Desktop's Settings, Resources, Disk image location moves it to another drive). On Linux it can be a folder instead, such as `./data/db`, but only on a Linux filesystem (ext4, btrfs, xfs): MariaDB needs Linux file ownership and locking, which exFAT and NTFS don't give it.
 - `PUBLIC_IP` is the address clients are sent for the map server. Keep `127.0.0.1` when the client runs on this computer; use the computer's LAN or VPN address for players on other computers. It's applied by `db-init` on each start (`docker compose up -d`).
 - `BIND_IP`, when set to one of this computer's IPv4 addresses, makes the ports listen on that address only. Docker's port rules go around ufw and firewalld, so this, not the host firewall, keeps the server off other networks.
-- `SERVER_NAME` is the server name shown in the client.
+- `SERVER_NAME` is the server name shown in the client. Left empty, `overrides/settings/main.lua` (or LSB's default, Nameless) decides.
 - `LSB_REPO` and `LSB_COMMIT` choose the LandSandBoat source to build. Change them, then `docker compose build`.
 - `LSB_IMAGE`, when set, uses a ready-made image (such as `ghcr.io/landsandboat/server:latest`, upstream LSB) instead of building.
 
@@ -39,7 +40,7 @@ Any LSB setting can be set as an environment variable, `XI_<FILE>_<SETTING>` (fo
 
 ### Stopping and wiping
 
-`docker compose down` stops everything; the database stays in `DATA_DIR`. To start over with an empty database, stop the stack and delete `DATA_DIR/db` and `DATA_DIR/dbtool`.
+`docker compose down` stops everything; the database stays in `DB_DATA`. To start over with an empty database, run `docker compose down -v` (with the default `DB_DATA`) or delete the `DB_DATA` folder.
 
 ## How it fits together
 

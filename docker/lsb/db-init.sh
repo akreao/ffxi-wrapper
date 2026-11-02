@@ -15,7 +15,7 @@ esac
 
 export MYSQL_PWD="$XI_NETWORK_SQL_PASSWORD"
 sql() {
-    mariadb -h"$XI_NETWORK_SQL_HOST" -P"$XI_NETWORK_SQL_PORT" \
+    mariadb --skip-ssl-verify-server-cert -h"$XI_NETWORK_SQL_HOST" -P"$XI_NETWORK_SQL_PORT" \
         -u"$XI_NETWORK_SQL_LOGIN" "$XI_NETWORK_SQL_DATABASE" -N -e "$1"
 }
 

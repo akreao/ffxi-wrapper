@@ -10,4 +10,11 @@ for f in /overrides/settings/*.lua; do
     ln -sf "$f" "/server/settings/$(basename "$f")"
 done
 
+# SERVER_NAME from .env wins over main.lua; left empty, main.lua (or LSB's
+# default) decides.
+if [ -n "${SERVER_NAME:-}" ]; then
+    export XI_MAIN_SERVER_NAME="$SERVER_NAME"
+fi
+unset SERVER_NAME
+
 exec /entrypoint.sh "$@"

@@ -1,7 +1,8 @@
 # MariaDB and LandSandBoat's servers (connect, search, world, map).
 # Settings come from .env (copy .env.example to start).
-# Everything the server keeps (database, dbtool's state, navmeshes) goes in
-# DATA_DIR, ./data unless .env says otherwise.
+# Everything the server keeps (dbtool's state, navmeshes) goes in DATA_DIR,
+# ./data unless .env says otherwise. The database goes in DB_DATA: a folder
+# on a Linux filesystem, or the db-data Docker volume (see .env.example).
 
 # Docker keeps each container's output for as long as the container
 # exists; this caps it at 30 MB per service.
@@ -38,7 +39,8 @@ x-lsb: &lsb
     XI_NETWORK_SQL_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
     # The servers talk to each other through the world server.
     XI_NETWORK_ZMQ_IP: world
-    XI_MAIN_SERVER_NAME: ${SERVER_NAME:-Nameless}
+    # run.sh passes it on as XI_MAIN_SERVER_NAME when it isn't empty.
+    SERVER_NAME: ${SERVER_NAME:-}
     # Any other LSB setting can be set the same way: XI_<FILE>_<SETTING>.
 
 services:
@@ -53,7 +55,7 @@ services:
       MARIADB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
       MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?set DB_ROOT_PASSWORD in .env}
     volumes:
-      - ${DATA_DIR:-./data}/db:/var/lib/mysql
+      - ${DB_DATA:-db-data}:/var/lib/mysql
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 5s
@@ -66,7 +68,8 @@ services:
     <<: *lsb
     build:
       # LSB's own Dockerfile, at the pinned commit of the fork.
-      context: ${LSB_REPO:-https://github.com/akreao/lsb.git}#${LSB_COMMIT:-6cc5715c79331addb38e2bd20445d1b3d3e48504}
+      # Submodules (LSB's navmeshes) aren't needed to build; meshes fills them.
+      context: ${LSB_REPO:-https://github.com/akreao/lsb.git}?ref=${LSB_COMMIT:-6cc5715c79331addb38e2bd20445d1b3d3e48504}&submodules=false
       dockerfile: docker/ubuntu.Dockerfile
       target: service
       args:
@@ -95,7 +98,18 @@ services:
   # DATA_DIR, skipping files already there, then exits.
   meshes:
     image: ${LSB_MESHES_IMAGE:-ghcr.io/landsandboat/ximeshes:latest}
-    command: ["sh", "-c", "mkdir -p /data/navmeshes /data/ximeshes && cp -n /navmeshes/* /data/navmeshes/ 2>/dev/null; cp -n /ximeshes/* /data/ximeshes/ 2>/dev/null; true"]
+    command:
+      - sh
+      - -c
+      - |
+        mkdir -p /data/navmeshes /data/ximeshes
+        cp -n /navmeshes/* /data/navmeshes/ 2>/dev/null
+        cp -n /ximeshes/* /data/ximeshes/ 2>/dev/null
+        if [ -z "$$(ls /data/ximeshes)" ]; then
+          echo "No ximeshes in /data/ximeshes; the map server won't start without them." >&2
+          exit 1
+        fi
+        echo "Meshes ready: $$(ls /data/navmeshes | wc -l) navmeshes, $$(ls /data/ximeshes | wc -l) ximeshes."
     restart: "no"
     logging: *logging
     volumes:
@@ -147,3 +161,7 @@ services:
         condition: service_completed_successfully
       world:
         condition: service_started
+
+volumes:
+  # Used when DB_DATA is db-data (the default).
+  db-data:
