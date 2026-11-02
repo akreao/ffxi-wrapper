@@ -1,8 +1,10 @@
 # Builds the game client, vana-client, from the fork at the commit pinned in
 # .env.example (CLIENT_REPO, CLIENT_COMMIT), for Linux and Windows, and
 # publishes both as a GitHub release of this repository tagged
-# client-<first 12 characters of the commit>. The desktop app downloads it
-# from there. A commit that's already published is skipped.
+# client-<first 12 characters of the commit>, each with its SHA-256 beside
+# it (<file>.sha256). The desktop app downloads it from there and checks it
+# against that. A commit that's already published is skipped; if its
+# release has no checksums yet, they're added.
 #
 # The builds follow vana-client's own release/build-*.sh: Linux in the Steam
 # Runtime "sniper" SDK so one binary runs on every current distribution, and
@@ -47,6 +49,7 @@ jobs:
       tag: ${{ steps.pin.outputs.tag }}
       build: ${{ steps.pin.outputs.build }}
       publish: ${{ steps.pin.outputs.publish }}
+      checksums: ${{ steps.pin.outputs.checksums }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: The pinned commit, and whether it's published
@@ -73,13 +76,24 @@ jobs:
           esac
           tag="client-${commit:0:12}"
           published=false
-          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then published=true; fi
+          assets=""
+          if assets="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2> /dev/null)"; then
+            published=true
+          fi
           build=true
           publish=false
+          checksums=false
           if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
             if [ "$published" = true ] && [ "$REBUILD" != true ]; then
               build=false
               echo "$tag is already published."
+              for f in $assets; do
+                case "$f" in *.sha256) continue ;; esac
+                if ! printf '%s\n' $assets | grep -qxF "$f.sha256"; then
+                  checksums=true
+                  echo "$f has no checksum yet; adding them."
+                fi
+              done
             else
               publish=true
             fi
@@ -91,6 +105,7 @@ jobs:
             echo "tag=$tag"
             echo "build=$build"
             echo "publish=$publish"
+            echo "checksums=$checksums"
           } >> "$GITHUB_OUTPUT"
           echo "vana-client from $repo at $commit as $tag (build: $build, publish: $publish)"
 
@@ -184,7 +199,9 @@ jobs:
           TAG: ${{ needs.pin.outputs.tag }}
         run: |
           set -eu
+          (cd assets && for f in *; do sha256sum "$f" > "$f.sha256"; done)
           ls -l assets
+          cat assets/*.sha256
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
             gh release upload "$TAG" assets/* --clobber --repo "$GITHUB_REPOSITORY"
           else
@@ -192,3 +209,27 @@ jobs:
               --latest=false --title "vana-client ${COMMIT:0:12}" \
               --notes "vana-client built from [${COMMIT:0:12}]($REPO_URL/commit/$COMMIT) for the desktop app to download."
           fi
+
+  # A release published before the checksums: hashes the files it holds
+  # and adds <file>.sha256 for each.
+  checksums:
+    name: Add checksums
+    needs: pin
+    if: needs.pin.outputs.checksums == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.pin.outputs.tag }}
+        run: |
+          set -eu
+          mkdir assets
+          cd assets
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern 'vana-client-*' --skip-existing
+          rm -f ./*.sha256
+          for f in *; do sha256sum "$f" > "$f.sha256"; done
+          cat ./*.sha256
+          gh release upload "$TAG" ./*.sha256 --clobber --repo "$GITHUB_REPOSITORY"
