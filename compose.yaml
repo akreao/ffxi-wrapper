@@ -1,0 +1,167 @@
+# MariaDB and LandSandBoat's servers (connect, search, world, map).
+# Settings come from .env (copy .env.example to start).
+# Everything the server keeps (dbtool's state, navmeshes) goes in DATA_DIR,
+# ./data unless .env says otherwise. The database goes in DB_DATA: a folder
+# on a Linux filesystem, or the db-data Docker volume (see .env.example).
+
+# Docker keeps each container's output for as long as the container
+# exists; this caps it at 30 MB per service.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+# Ports are published on every address of this computer unless BIND_IP
+# names one (an IPv4 address of this computer, such as its LAN or VPN
+# address), which keeps them off other networks the computer is on.
+
+# Every LSB service runs the same image. Only db-init has `build:`, so the
+# image is built once (when missing, or with --build) and the others use it.
+# LSB_IMAGE lets the desktop app build under another name, or point at a
+# prebuilt image such as ghcr.io/landsandboat/server:latest.
+x-lsb: &lsb
+  image: ${LSB_IMAGE:-ffxi-wrapper/lsb:local}
+  pull_policy: missing
+  restart: on-failure
+  logging: *logging
+  # run.sh links the .lua files in overrides/settings/ over LSB's defaults,
+  # then hands over to the image's own entrypoint.
+  entrypoint: ["/bin/sh", "/wrapper/run.sh"]
+  volumes:
+    - ./docker/lsb:/wrapper:ro
+    - ./overrides:/overrides:ro
+  environment: &lsb-env
+    XI_NETWORK_SQL_HOST: db
+    XI_NETWORK_SQL_PORT: "3306"
+    XI_NETWORK_SQL_DATABASE: xidb
+    XI_NETWORK_SQL_LOGIN: xiadmin
+    XI_NETWORK_SQL_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+    # The servers talk to each other through the world server.
+    XI_NETWORK_ZMQ_IP: world
+    # run.sh passes it on as XI_MAIN_SERVER_NAME when it isn't empty.
+    SERVER_NAME: ${SERVER_NAME:-}
+    # Any other LSB setting can be set the same way: XI_<FILE>_<SETTING>.
+
+services:
+  db:
+    image: mariadb:12.3
+    restart: on-failure
+    logging: *logging
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_general_ci"]
+    environment:
+      MARIADB_DATABASE: xidb
+      MARIADB_USER: xiadmin
+      MARIADB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?set DB_ROOT_PASSWORD in .env}
+    volumes:
+      - ${DB_DATA:-db-data}:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  # Imports LSB's database on the first start and applies its updates and
+  # migrations after that, then sets the address players are sent to.
+  db-init:
+    <<: *lsb
+    build:
+      # LSB's own Dockerfile, at the pinned commit of the fork.
+      # Submodules (LSB's navmeshes) aren't needed to build; meshes fills them.
+      context: ${LSB_REPO:-https://github.com/akreao/lsb.git}?ref=${LSB_COMMIT:-6cc5715c79331addb38e2bd20445d1b3d3e48504}&submodules=false
+      dockerfile: docker/ubuntu.Dockerfile
+      target: service
+      args:
+        # LSB's Dockerfile mounts .git while building, and dbtool needs the
+        # repository and commit to track database versions.
+        BUILDKIT_CONTEXT_KEEP_GIT_DIR: "1"
+        REPO_URL: ${LSB_REPO:-https://github.com/akreao/lsb.git}
+        COMMIT_SHA: ${LSB_COMMIT:-6cc5715c79331addb38e2bd20445d1b3d3e48504}
+    pull_policy: !reset null
+    command: ["/bin/sh", "/wrapper/db-init.sh"]
+    # Root so it can write dbtool's state into DATA_DIR.
+    user: root
+    restart: "no"
+    environment:
+      <<: *lsb-env
+      PUBLIC_IP: ${PUBLIC_IP:-127.0.0.1}
+    volumes:
+      - ./docker/lsb:/wrapper:ro
+      - ./overrides:/overrides:ro
+      - ${DATA_DIR:-./data}/dbtool:/state
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # Copies the navmeshes and ximeshes from LSB's meshes image into
+  # DATA_DIR, skipping files already there, then exits.
+  meshes:
+    image: ${LSB_MESHES_IMAGE:-ghcr.io/landsandboat/ximeshes:latest}
+    command:
+      - sh
+      - -c
+      - |
+        mkdir -p /data/navmeshes /data/ximeshes
+        cp -n /navmeshes/* /data/navmeshes/ 2>/dev/null
+        cp -n /ximeshes/* /data/ximeshes/ 2>/dev/null
+        if [ -z "$$(ls /data/ximeshes)" ]; then
+          echo "No ximeshes in /data/ximeshes; the map server won't start without them." >&2
+          exit 1
+        fi
+        echo "Meshes ready: $$(ls /data/navmeshes | wc -l) navmeshes, $$(ls /data/ximeshes | wc -l) ximeshes."
+    restart: "no"
+    logging: *logging
+    volumes:
+      - ${DATA_DIR:-./data}:/data
+
+  # Login: the client's auth (54231), data (54230) and view (54001) ports.
+  connect:
+    <<: *lsb
+    command: ["/server/xi_connect"]
+    ports:
+      - "${BIND_IP:+${BIND_IP}:}54001:54001"
+      - "${BIND_IP:+${BIND_IP}:}54230:54230"
+      - "${BIND_IP:+${BIND_IP}:}54231:54231"
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+
+  search:
+    <<: *lsb
+    command: ["/server/xi_search"]
+    ports:
+      - "${BIND_IP:+${BIND_IP}:}54002:54002"
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+
+  world:
+    <<: *lsb
+    command: ["/server/xi_world"]
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+
+  # One map server for every zone; the game itself runs over UDP 54230.
+  map:
+    <<: *lsb
+    command: ["/server/xi_map"]
+    ports:
+      - "${BIND_IP:+${BIND_IP}:}54230:54230/udp"
+    volumes:
+      - ./docker/lsb:/wrapper:ro
+      - ./overrides:/overrides:ro
+      - ${DATA_DIR:-./data}/navmeshes:/server/navmeshes:ro
+      - ${DATA_DIR:-./data}/ximeshes:/server/ximeshes:ro
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+      meshes:
+        condition: service_completed_successfully
+      world:
+        condition: service_started
+
+volumes:
+  # Used when DB_DATA is db-data (the default).
+  db-data:
