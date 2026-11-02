@@ -39,7 +39,7 @@ pub fn program(stack: &Path) -> PathBuf {
     dir(stack).join(if cfg!(windows) { "vana-client.exe" } else { "vana-client" })
 }
 
-fn config_path(stack: &Path) -> PathBuf {
+pub fn config_path(stack: &Path) -> PathBuf {
     dir(stack).join("config.json")
 }
 

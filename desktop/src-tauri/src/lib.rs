@@ -1,5 +1,6 @@
 mod backup;
 mod client;
+mod clientcfg;
 mod config;
 mod envfile;
 mod host;
@@ -236,6 +237,30 @@ async fn set_game_settings(handle: AppHandle, values: settings::Values) -> Resul
         Ok(changed && running(app))
     })
     .await?
+}
+
+#[derive(Serialize)]
+struct ClientSettings {
+    /// The config file they're in.
+    path: String,
+    settings: &'static [settings::Setting],
+    values: clientcfg::Values,
+}
+
+/// The game client's settings, from its `config.json`.
+#[tauri::command]
+async fn client_settings(handle: AppHandle) -> Result<ClientSettings, String> {
+    off_main(handle, |_, app| {
+        let path = client::config_path(&app.dir()?);
+        Ok(ClientSettings { path: path.display().to_string(), settings: clientcfg::SETTINGS, values: clientcfg::load(&path) })
+    })
+    .await?
+}
+
+/// Saves the game client's settings; the game uses them the next time it starts.
+#[tauri::command]
+async fn set_client_settings(handle: AppHandle, values: clientcfg::Values) -> Result<(), String> {
+    off_main(handle, move |_, app| clientcfg::save(&client::config_path(&app.dir()?), &values)).await?
 }
 
 fn running(app: &App) -> bool {
@@ -556,6 +581,8 @@ pub fn run() {
             set_server_name,
             game_settings,
             set_game_settings,
+            client_settings,
+            set_client_settings,
             services,
             run_task,
             client_status,

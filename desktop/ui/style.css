@@ -578,10 +578,10 @@ label[hidden] { display: none; }
 }
 
 /* Game rules: one card per group, each value on its own row. */
-#game-form { display: flex; flex-direction: column; gap: 16px; }
-#game-form .setting .setting-control { width: 160px; }
-#game-form .setting.changed { background: color-mix(in srgb, var(--accent) 8%, var(--card)); }
-#game-form .setting.changed label { color: var(--accent); }
+#game-form, #client-cfg-form { display: flex; flex-direction: column; gap: 16px; }
+#game-form .setting .setting-control, #client-cfg-form .setting .setting-control { width: 200px; }
+#game-form .setting.changed, #client-cfg-form .setting.changed { background: color-mix(in srgb, var(--accent) 8%, var(--card)); }
+#game-form .setting.changed label, #client-cfg-form .setting.changed label { color: var(--accent); }
 
 /* Game client */
 .setting-control.wide { width: 100%; }
@@ -605,8 +605,12 @@ label[hidden] { display: none; }
 
 /* Game rules: Save stays in reach while the page scrolls. */
 #game-page { padding-top: 0; }
+#client-page { padding-top: 0; }
+#client-page > .subtabs { padding-top: 8px; }
+.toolbar.sticky { position: sticky; top: 0; z-index: 2; padding: 10px 0; background: var(--bg); }
 #game-page .toolbar { position: sticky; top: 0; z-index: 2; padding: 16px 0 10px; background: var(--bg); }
 
 /* The optional installer step folds away. */
 details.help-row > summary { cursor: pointer; color: var(--muted); font-weight: 500; }
 details.help-row:not([open]) { gap: 0; }
+#settings-page .setting .setting-control { width: 300px; }

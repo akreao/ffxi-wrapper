@@ -186,7 +186,10 @@ function showPage(next) {
   }
   $("page-title").textContent = NAV[next][2];
   if (!moved) return;
-  if (next === "client") refreshClient();
+  if (next === "client") {
+    refreshClient();
+    if (!$("panel-client-cfg").hidden) loadClientSettings();
+  }
   if (next === "backups") refreshBackups();
   if (next === "settings") {
     show($("settings-saved"), false);
@@ -198,17 +201,20 @@ function showPage(next) {
 
 for (const [name, [nav]] of Object.entries(NAV)) $(nav).onclick = () => showPage(name);
 
-// Settings: one section at a time.
-function showSettingsPanel(id) {
-  for (const tab of document.querySelectorAll(".subtab")) {
-    const on = tab.dataset.panel === id;
-    tab.classList.toggle("active", on);
-    if (on) tab.setAttribute("aria-current", "true");
-    else tab.removeAttribute("aria-current");
-    show($(tab.dataset.panel), on);
+// Settings and Game client: one section at a time, per page.
+function showPanel(id) {
+  const tab = document.querySelector(`.subtab[data-panel="${id}"]`);
+  for (const other of tab.parentElement.querySelectorAll(".subtab")) {
+    const on = other === tab;
+    other.classList.toggle("active", on);
+    if (on) other.setAttribute("aria-current", "true");
+    else other.removeAttribute("aria-current");
+    show($(other.dataset.panel), on);
   }
+  if (id === "panel-client-cfg") loadClientSettings();
 }
-for (const tab of document.querySelectorAll(".subtab")) tab.onclick = () => showSettingsPanel(tab.dataset.panel);
+const showSettingsPanel = showPanel;
+for (const tab of document.querySelectorAll(".subtab")) tab.onclick = () => showPanel(tab.dataset.panel);
 
 // The sidebar shows only icons below 1000 px (style.css), so each item gets
 // its name as a tooltip and accessible name then.
@@ -608,132 +614,148 @@ async function restoreBackup(backup) {
 $("backup-now").onclick = () => runTask("backup");
 $("open-backups").onclick = () => invoke("open_backups").catch((e) => alert(message(e)));
 
-// ---------- game rules ----------
+// ---------- settings forms: Game rules and the client's settings ----------
 
-let gameSettings = null;
+// One form: `get` and `set` are its load and save commands. Each setting is
+// `file.key`, with one card per group and one row per setting.
+function settingsForm(prefix, get, set, onSaved) {
+  const form = $(`${prefix}-form`);
+  const errorEl = $(`${prefix}-error`);
+  const savedEl = $(`${prefix}-saved`);
+  let data = null;
 
-async function loadGameSettings() {
-  try {
-    gameSettings = await invoke("game_settings");
-  } catch (e) {
-    $("game-error").textContent = message(e);
-    show($("game-error"), true);
-    return;
-  }
-  drawGameSettings(gameSettings.values);
-}
+  const id = (s) => `${s.file}.${s.key}`;
+  const value = (input) => (input.type === "checkbox" ? (input.checked ? 1 : 0) : Number(input.value));
+  const fail = (text) => {
+    errorEl.textContent = text;
+    show(errorEl, true);
+  };
 
-function settingId(s) {
-  return `${s.file}.${s.key}`;
-}
-
-// One card per group, one row per setting.
-function drawGameSettings(values) {
-  const form = $("game-form");
-  form.replaceChildren();
-  let group = null;
-  let card = null;
-  for (const s of gameSettings.settings) {
-    if (s.group !== group) {
-      group = s.group;
-      card = document.createElement("section");
-      card.className = "card group";
-      const h = document.createElement("h2");
-      h.textContent = group;
-      card.append(h);
-      form.append(card);
-    }
-    const id = "gs-" + settingId(s).replace(".", "-");
-    const row = document.createElement("div");
-    row.className = "setting";
-    const text = document.createElement("div");
-    text.className = "setting-text";
-    const label = document.createElement("label");
-    label.htmlFor = id;
-    label.textContent = s.label;
-    text.append(label);
-    if (s.hint) {
-      const hint = document.createElement("p");
-      hint.className = "hint";
-      hint.textContent = s.hint;
-      text.append(hint);
-    }
-    let input;
-    if (s.type === "bool" || s.type === "switch") {
-      input = document.createElement("input");
-      input.type = "checkbox";
-      input.className = "switch";
-      input.checked = values[settingId(s)] === 1;
-    } else if (s.type === "choice") {
-      input = document.createElement("select");
-      input.className = "setting-control";
-      for (const [value, label] of s.options) {
-        const o = document.createElement("option");
-        o.value = value;
-        o.textContent = label;
-        input.append(o);
+  function draw(values) {
+    form.replaceChildren();
+    let group = null;
+    let card = null;
+    for (const s of data.settings) {
+      if (s.group !== group) {
+        group = s.group;
+        card = document.createElement("section");
+        card.className = "card group";
+        const h = document.createElement("h2");
+        h.textContent = group;
+        card.append(h);
+        form.append(card);
       }
-      input.value = values[settingId(s)];
-    } else {
-      input = document.createElement("input");
-      input.type = "number";
-      input.className = "setting-control";
-      input.min = s.min;
-      input.max = s.max;
-      input.step = s.whole ? 1 : 0.1;
-      input.value = values[settingId(s)];
+      const row = document.createElement("div");
+      row.className = "setting";
+      const text = document.createElement("div");
+      text.className = "setting-text";
+      const label = document.createElement("label");
+      label.htmlFor = `${prefix}-${id(s)}`.replace(".", "-");
+      label.textContent = s.label;
+      text.append(label);
+      if (s.hint) {
+        const hint = document.createElement("p");
+        hint.className = "hint";
+        hint.textContent = s.hint;
+        text.append(hint);
+      }
+      let input;
+      if (s.type === "bool" || s.type === "switch") {
+        input = document.createElement("input");
+        input.type = "checkbox";
+        input.className = "switch";
+        input.checked = values[id(s)] === 1;
+      } else if (s.type === "choice") {
+        input = document.createElement("select");
+        input.className = "setting-control";
+        for (const [v, t] of s.options) {
+          const o = document.createElement("option");
+          o.value = v;
+          o.textContent = t;
+          input.append(o);
+        }
+        input.value = values[id(s)];
+      } else {
+        input = document.createElement("input");
+        input.type = "number";
+        input.className = "setting-control";
+        input.min = s.min;
+        input.max = s.max;
+        input.step = s.whole ? 1 : 0.1;
+        input.value = values[id(s)];
+      }
+      input.id = label.htmlFor;
+      input.dataset.setting = id(s);
+      const mark = () => {
+        row.classList.toggle("changed", value(input) !== s.default);
+        show(savedEl, false);
+      };
+      input.addEventListener("input", mark);
+      input.addEventListener("change", mark);
+      row.classList.toggle("changed", value(input) !== s.default);
+      row.append(text, input);
+      card.append(row);
     }
-    input.id = id;
-    input.dataset.setting = settingId(s);
-    const mark = () => {
-      row.classList.toggle("changed", gameValue(s, input) !== s.default);
-      show($("game-saved"), false);
-    };
-    input.addEventListener("input", mark);
-    input.addEventListener("change", mark);
-    row.classList.toggle("changed", gameValue(s, input) !== s.default);
-    row.append(text, input);
-    card.append(row);
   }
+
+  async function load() {
+    try {
+      data = await invoke(get);
+    } catch (e) {
+      fail(message(e));
+      return null;
+    }
+    show(errorEl, false);
+    draw(data.values);
+    return data;
+  }
+
+  $(`${prefix}-save`).onclick = async () => {
+    if (!data) return;
+    show(savedEl, false);
+    const values = {};
+    for (const s of data.settings) {
+      const input = form.querySelector(`[data-setting="${id(s)}"]`);
+      if (input.type === "number" && input.value.trim() === "") {
+        fail(`${s.label} needs a value.`);
+        input.focus();
+        return;
+      }
+      values[id(s)] = value(input);
+    }
+    try {
+      const result = await invoke(set, { values });
+      show(errorEl, false);
+      await load();
+      savedEl.textContent = onSaved(result);
+      show(savedEl, true);
+    } catch (e) {
+      fail(message(e));
+    }
+  };
+
+  $(`${prefix}-reset`).onclick = () => {
+    if (!data) return;
+    const defaults = {};
+    for (const s of data.settings) defaults[id(s)] = s.default;
+    draw(defaults);
+    show(savedEl, false);
+  };
+
+  return { load };
 }
 
-function gameValue(s, input) {
-  if (input.type === "checkbox") return input.checked ? 1 : 0;
-  return Number(input.value);
+const gameRules = settingsForm("game", "game_settings", "set_game_settings", (restart) => {
+  if (restart) show($("restart-bar"), true);
+  return restart ? "Saved. Restart the server to use them." : "Saved.";
+});
+const loadGameSettings = gameRules.load;
+
+const clientSettings = settingsForm("client-cfg", "client_settings", "set_client_settings", () => "Saved. The game uses them the next time it starts.");
+async function loadClientSettings() {
+  const data = await clientSettings.load();
+  if (data) $("client-cfg-path").textContent = data.path;
 }
-
-$("save-game").onclick = async () => {
-  show($("game-saved"), false);
-  const values = {};
-  for (const s of gameSettings.settings) {
-    const input = document.querySelector(`[data-setting="${settingId(s)}"]`);
-    if (input.type === "number" && input.value.trim() === "") {
-      $("game-error").textContent = `${s.label} needs a value.`;
-      show($("game-error"), true);
-      input.focus();
-      return;
-    }
-    values[settingId(s)] = gameValue(s, input);
-  }
-  try {
-    const restart = await invoke("set_game_settings", { values });
-    show($("game-error"), false);
-    if (restart) show($("restart-bar"), true);
-    await loadGameSettings();
-    $("game-saved").textContent = restart ? "Saved. Restart the server to use them." : "Saved.";
-    show($("game-saved"), true);
-  } catch (e) {
-    $("game-error").textContent = message(e);
-    show($("game-error"), true);
-  }
-};
-
-$("reset-game").onclick = () => {
-  const defaults = {};
-  for (const s of gameSettings.settings) defaults[settingId(s)] = s.default;
-  drawGameSettings(defaults);
-  show($("game-saved"), false);
-};
 
 // ---------- tray ----------
 
