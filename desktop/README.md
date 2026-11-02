@@ -2,6 +2,8 @@
 
 A Tauri app for Linux and Windows that runs the server: it drives `docker compose` on the stack in this repository.
 
+The window follows rag-wrapper's layout: a sidebar of screens (Overview, Game rules, Game client, Backups, Settings), with Start, Stop and a More menu (Restart, Rebuild) in the header on every screen. Overview shows the server's status, the address players connect to, the client, the services and the Activity and log panes. Settings has the server's name and address, the server folder, and a Light/Dark theme choice.
+
 What it does so far:
 - **First run** asks where to keep the server's files (any folder, such as a drive of its own), the address players connect to and the server name. It copies the stack files there and writes `.env` with random database passwords. The database goes in that folder (`DB_DATA=./data/db`) when it's on a Linux filesystem (ext4, btrfs, xfs and the like), and in the `db-data` Docker volume otherwise, which is always the case on Windows. A folder that already has a `.env` keeps it, so an existing setup can be picked. Setup refuses to write new passwords when Docker already has an older `db-data` volume they couldn't open.
 - **Start** runs `docker compose up --detach`, which downloads the server image (or builds it when no image is published for the pinned LandSandBoat commit). Before that it re-detects the address players are sent to, unless one is pinned, and checks that no other program holds the server's TCP ports. The output streams into the Activity pane.

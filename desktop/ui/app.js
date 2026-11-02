@@ -1,5 +1,7 @@
-// The app's one window: first-run setup, then the server's controls,
-// services, settings, and the Activity and log panes.
+// The app's one window: first-run setup, then a sidebar of screens:
+// Overview (status, services, the Activity and log panes), Game rules,
+// Game client, Backups and Settings. The header's Start, Stop and the
+// More menu work from every screen.
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
@@ -8,11 +10,13 @@ const $ = (id) => document.getElementById(id);
 const TYPE = "__type__";
 const AUTO = "__auto__";
 const MAX_LINES = 5000;
+const GAME_SERVERS = ["connect", "search", "world", "map"];
 
 let overview = null;
 let task = null;
 let logGeneration = 0;
 let selectedService = null;
+let page = null;
 
 // ---------- helpers ----------
 
@@ -32,9 +36,29 @@ function message(err) {
   return typeof err === "string" ? err : (err && err.message) || String(err);
 }
 
+function configured() {
+  return !!(overview && overview.configured);
+}
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return;
+  } catch {
+    // Not allowed here; copy through a selected field instead.
+  }
+  const field = document.createElement("textarea");
+  field.value = text;
+  document.body.append(field);
+  field.select();
+  const copied = document.execCommand("copy");
+  field.remove();
+  if (!copied) throw new Error(`Couldn't copy. The address is ${text}`);
+}
+
 // The address picker: detect, each address this computer has, 127.0.0.1,
-// or one typed in.
-function fillAddresses(select, typed, current, auto) {
+// or one typed in. `typedRow` is what shows for a typed one.
+function fillAddresses(select, typed, typedRow, current, auto) {
   select.replaceChildren();
   const add = (value, text) => {
     const o = document.createElement("option");
@@ -42,7 +66,7 @@ function fillAddresses(select, typed, current, auto) {
     o.textContent = text;
     select.append(o);
   };
-  add(AUTO, "Detect automatically (this computer's LAN address)");
+  add(AUTO, "Detect automatically (LAN address)");
   const known = new Set();
   for (const a of overview.addresses) {
     known.add(a.ip);
@@ -59,8 +83,8 @@ function fillAddresses(select, typed, current, auto) {
     select.value = TYPE;
     typed.value = current || "";
   }
-  show(typed, select.value === TYPE);
-  select.onchange = () => show(typed, select.value === TYPE);
+  show(typedRow, select.value === TYPE);
+  select.onchange = () => show(typedRow, select.value === TYPE);
 }
 
 // The picker's choice: null to detect, or an address.
@@ -82,6 +106,7 @@ async function refresh() {
   }
   $("docker-error").textContent = overview.docker_error || "";
   show($("docker-error"), !!overview.docker_error);
+  $("docker").textContent = overview.docker_version ? `Docker Compose ${overview.docker_version}` : "";
 
   if (!overview.configured) {
     showSetup();
@@ -92,33 +117,135 @@ async function refresh() {
 
 function showSetup() {
   if (!$("setup").hidden) return;
-  show($("main"), false);
+  show($("sidebar"), false);
+  show($("status"), false);
+  show($("header-actions"), false);
+  for (const id of ["overview-page", "game-page", "client-page", "backups-page", "settings-page"]) show($(id), false);
+  $("page-title").textContent = "Welcome";
   show($("setup"), true);
   $("setup-dir").value = overview.stack_dir || overview.default_stack_dir;
-  fillAddresses($("setup-address"), $("setup-address-typed"), "", true);
+  fillAddresses($("setup-address"), $("setup-address-typed"), $("setup-address-typed"), "", true);
 }
 
 function showMain() {
-  const first = $("main").hidden;
+  const first = page === null;
   show($("setup"), false);
-  show($("main"), true);
-  $("title").textContent = overview.server_name || "Server";
-  $("stack-dir").textContent = `Server folder: ${overview.stack_dir}`;
-  $("db-where").textContent =
-    overview.db_data === "db-data"
-      ? "Database: in a Docker volume (db-data)."
-      : `Database: ${overview.db_data} in the server folder.`;
+  show($("sidebar"), true);
+  show($("status"), true);
+  show($("header-actions"), true);
+  drawServerInfo();
   if (first) {
-    fillAddresses($("address"), $("address-typed"), overview.public_ip, overview.public_ip_auto);
-    $("name").value = overview.server_name;
     task = overview.task;
-    updateButtons();
+    fillServerForm();
+    showPage("overview");
     refreshServices();
     refreshClient();
-    refreshBackups();
     loadGameSettings();
   }
+  updateButtons();
 }
+
+// The bits of the overview that come from .env.
+function drawServerInfo() {
+  $("brand-sub").textContent = overview.server_name || "Nameless";
+  const auto = overview.public_ip_auto;
+  $("connect-addr").textContent = overview.public_ip || "not detected yet";
+  $("connect-addr").title = overview.public_ip || "";
+  $("connect-auto").textContent = auto ? "Detected on each start" : "";
+  $("stack-dir").textContent = overview.stack_dir || "";
+  $("db-where").textContent =
+    overview.db_data === "db-data"
+      ? "The database is in a Docker volume (db-data)."
+      : `The database is in ${overview.db_data} in the server folder.`;
+}
+
+function fillServerForm() {
+  fillAddresses($("address"), $("address-typed"), $("address-typed-row"), overview.public_ip, overview.public_ip_auto);
+  $("name").value = overview.server_name;
+}
+
+// ---------- pages ----------
+
+const NAV = {
+  overview: ["nav-overview", "overview-page", "Overview"],
+  game: ["nav-game", "game-page", "Game rules"],
+  client: ["nav-client", "client-page", "Game client"],
+  backups: ["nav-backups", "backups-page", "Backups"],
+  settings: ["nav-settings", "settings-page", "Settings"],
+};
+
+function showPage(next) {
+  const moved = next !== page;
+  page = next;
+  for (const [name, [nav, main]] of Object.entries(NAV)) {
+    const on = name === next;
+    show($(main), on);
+    $(nav).classList.toggle("active", on);
+    if (on) $(nav).setAttribute("aria-current", "page");
+    else $(nav).removeAttribute("aria-current");
+  }
+  $("page-title").textContent = NAV[next][2];
+  if (!moved) return;
+  if (next === "client") refreshClient();
+  if (next === "backups") refreshBackups();
+  if (next === "settings") {
+    show($("settings-saved"), false);
+    show($("settings-error"), false);
+    fillServerForm();
+  }
+  if (next === "game") show($("game-saved"), false);
+}
+
+for (const [name, [nav]] of Object.entries(NAV)) $(nav).onclick = () => showPage(name);
+
+// Settings: one section at a time.
+function showSettingsPanel(id) {
+  for (const tab of document.querySelectorAll(".subtab")) {
+    const on = tab.dataset.panel === id;
+    tab.classList.toggle("active", on);
+    if (on) tab.setAttribute("aria-current", "true");
+    else tab.removeAttribute("aria-current");
+    show($(tab.dataset.panel), on);
+  }
+}
+for (const tab of document.querySelectorAll(".subtab")) tab.onclick = () => showSettingsPanel(tab.dataset.panel);
+
+// The sidebar shows only icons below 1000 px (style.css), so each item gets
+// its name as a tooltip and accessible name then.
+const narrow = window.matchMedia("(max-width: 1000px)");
+function labelNav() {
+  for (const item of document.querySelectorAll(".nav-item")) {
+    const name = item.querySelector("span").textContent;
+    if (narrow.matches) {
+      item.title = name;
+      item.setAttribute("aria-label", name);
+    } else {
+      item.removeAttribute("title");
+      item.removeAttribute("aria-label");
+    }
+  }
+}
+labelNav();
+narrow.addEventListener("change", labelNav);
+
+$("connect-settings").onclick = (e) => {
+  e.preventDefault();
+  showSettingsPanel("panel-server");
+  showPage("settings");
+};
+$("ov-client-link").onclick = (e) => {
+  e.preventDefault();
+  showPage("client");
+};
+$("copy-addr").onclick = async () => {
+  try {
+    await copyText($("connect-addr").textContent);
+    $("copy-addr").classList.add("done");
+    setTimeout(() => $("copy-addr").classList.remove("done"), 1500);
+  } catch (e) {
+    alert(message(e));
+  }
+};
 
 // ---------- setup ----------
 
@@ -127,7 +254,8 @@ $("setup-browse").onclick = async () => {
   if (picked) $("setup-dir").value = picked;
 };
 
-$("setup-go").onclick = async () => {
+$("setup-form").onsubmit = async (e) => {
+  e.preventDefault();
   const button = $("setup-go");
   button.disabled = true;
   show($("setup-error"), false);
@@ -151,7 +279,7 @@ $("setup-go").onclick = async () => {
 let services = [];
 
 async function refreshServices() {
-  if ($("main").hidden) return;
+  if (!configured()) return;
   try {
     services = await invoke("services");
   } catch (e) {
@@ -164,7 +292,7 @@ function serviceState(s) {
   // One-shot services are done when they exit cleanly.
   const oneShot = s.service === "db-init" || s.service === "meshes";
   if (s.state === "running") {
-    if (s.health === "starting") return ["warn", "starting"];
+    if (s.health === "starting") return ["busy", "starting"];
     if (s.health === "unhealthy") return ["bad", "unhealthy"];
     return ["ok", "running"];
   }
@@ -172,8 +300,20 @@ function serviceState(s) {
   if (s.state === "exited") return ["bad", `stopped (exit ${s.exit_code})`];
   if (s.state === "restarting") return ["bad", "restarting"];
   if (s.state === "absent") return ["", "not started"];
-  return ["warn", s.state];
+  return ["busy", s.state];
 }
+
+const TASK_NAMES = {
+  start: "Starting",
+  stop: "Stopping",
+  restart: "Restarting",
+  build: "Building",
+  backup: "Backing up",
+  restore: "Restoring a backup",
+  "client-download": "Downloading the client",
+  "client-install": "Installing game data",
+  "client-update": "Updating game data",
+};
 
 function drawServices() {
   const list = $("services");
@@ -187,46 +327,50 @@ function drawServices() {
     const name = document.createElement("span");
     name.className = "name";
     name.textContent = s.service;
-    const detail = document.createElement("span");
-    detail.className = "detail";
-    detail.textContent = s.ports.length ? `${text} · ${s.ports.join(", ")}` : text;
-    li.append(dot, name, detail);
+    const state = document.createElement("span");
+    state.className = "state";
+    state.textContent = s.ports.length ? `${text} · ${s.ports.join(", ")}` : text;
+    li.title = state.textContent;
+    li.append(dot, name, state);
     li.onclick = () => followLogs(s.service);
     list.append(li);
   }
 
-  const game = services.filter((s) => ["connect", "search", "world", "map"].includes(s.service));
+  const game = services.filter((s) => GAME_SERVERS.includes(s.service));
   const up = game.filter((s) => s.state === "running").length;
-  const pill = $("state");
+  let cls, text, sub;
   if (task) {
-    pill.textContent =
-      {
-        start: "starting",
-        stop: "stopping",
-        restart: "restarting",
-        build: "building",
-        "client-download": "downloading the client",
-        "client-install": "installing game data",
-        "client-update": "updating game data",
-      }[task] || task;
-    pill.className = "pill warn";
+    cls = "busy";
+    text = TASK_NAMES[task] || task;
+    sub = "Progress shows in the Activity log.";
   } else if (game.length && up === game.length) {
-    pill.textContent = "running";
-    pill.className = "pill ok";
+    cls = "ok";
+    text = "Running";
+    sub = "All four game servers are up.";
   } else if (up > 0 || services.some((s) => s.state === "restarting")) {
-    pill.textContent = "partly running";
-    pill.className = "pill bad";
+    cls = "bad";
+    text = "Partly running";
+    sub = `${up} of ${GAME_SERVERS.length} game servers are up.`;
   } else {
-    pill.textContent = "stopped";
-    pill.className = "pill";
+    cls = "off";
+    text = "Off";
+    sub = "Start the server from the top right.";
   }
+  $("status").className = `status ${cls}`;
+  $("status-text").textContent = text;
+  $("ov-dot").className = `dot ${cls}`;
+  $("ov-status").textContent = text;
+  $("ov-status-sub").textContent = sub;
+  const fine = services.filter((s) => serviceState(s)[0] === "ok").length;
+  $("ov-services").textContent = !services.length ? "" : fine === services.length ? "All up" : `${fine} of ${services.length} up`;
   updateButtons();
 }
 
 function updateButtons() {
+  if (!overview) return;
   const busy = !!task;
   const running = services.some((s) => s.state === "running");
-  const game = services.filter((s) => ["connect", "search", "world", "map"].includes(s.service));
+  const game = services.filter((s) => GAME_SERVERS.includes(s.service));
   const allUp = game.length > 0 && game.every((s) => s.state === "running");
   $("start").disabled = busy || allUp || !!overview.docker_error;
   $("restart").disabled = busy || !running;
@@ -234,8 +378,8 @@ function updateButtons() {
   $("build").disabled = busy || !!overview.docker_error;
   show($("cancel"), busy && task !== "stop");
   for (const id of ["client-download", "client-install", "client-update", "backup-now"]) $(id).disabled = busy;
-  for (const b of document.querySelectorAll(".backups button")) b.disabled = busy;
-  show($("first-build"), !overview.image_ready && !overview.docker_error);
+  for (const b of document.querySelectorAll("#backups button")) b.disabled = busy;
+  show($("first-build"), configured() && !overview.image_ready && !overview.docker_error);
 }
 
 // ---------- tasks ----------
@@ -246,18 +390,30 @@ async function runTask(kind, file) {
     await invoke("run_task", { kind, file: file || null });
   } catch (e) {
     append($("activity"), message(e));
+    alert(message(e));
   }
+}
+
+// The More menu closes once one of its items is picked.
+function fromMenu(fn) {
+  return () => {
+    $("more").open = false;
+    fn();
+  };
 }
 
 $("start").onclick = () => runTask("start");
 $("stop").onclick = () => runTask("stop");
-$("restart").onclick = () => runTask("restart");
+$("restart").onclick = fromMenu(() => runTask("restart"));
+$("build").onclick = fromMenu(() => runTask("build"));
 $("restart-now").onclick = () => {
   show($("restart-bar"), false);
   runTask("restart");
 };
-$("build").onclick = () => runTask("build");
 $("cancel").onclick = () => invoke("cancel_task");
+document.addEventListener("click", (e) => {
+  if (!$("more").contains(e.target)) $("more").open = false;
+});
 
 listen("task", (event) => {
   const { kind, running, ok } = event.payload;
@@ -274,6 +430,7 @@ listen("task", (event) => {
     refreshBackups();
     invoke("overview").then((o) => {
       overview = o;
+      drawServerInfo();
       updateButtons();
     });
   }
@@ -310,14 +467,14 @@ function selectTab(which) {
 }
 
 $("tab-activity").onclick = () => selectTab("activity");
-$("tab-logs").onclick = () => selectTab("logs");
+$("tab-logs").onclick = () => (selectedService ? selectTab("logs") : null);
 
 // ---------- game client ----------
 
 let clientStatus = null;
 
 async function refreshClient() {
-  if ($("main").hidden) return;
+  if (!configured()) return;
   try {
     clientStatus = await invoke("client_status");
   } catch (e) {
@@ -331,18 +488,29 @@ async function refreshClient() {
       : `Installed in ${c.dir}.`;
   if (c.program && c.outdated) $("client-state").textContent += " A newer build of vana-client is available.";
   show($("client-download-box"), !c.program || c.outdated);
-  $("client-download").textContent = c.program ? "Update vana-client" : "Download vana-client";
+  $("client-download-title").textContent = c.program ? "Update vana-client" : "Download vana-client";
+  $("client-download").textContent = c.program ? "Update" : "Download";
   show($("client-install-box"), c.program && !c.installed);
   show($("client-play-box"), c.installed);
+  show($("client-play"), c.installed);
+  show($("client-update"), c.installed);
   if (c.installer && !$("client-installer").value) $("client-installer").value = c.installer;
-  const busy = !!task;
-  for (const id of ["client-download", "client-install", "client-update"]) $(id).disabled = busy;
+
+  $("ov-client").textContent = !c.program ? "Not downloaded" : !c.installed ? "Needs game data" : "Ready";
+  $("ov-client-link").textContent = c.installed ? "Game client" : "Set it up";
+  show($("ov-play"), c.installed);
+  updateButtons();
+}
+
+function play() {
+  invoke("play").catch((e) => alert(message(e)));
 }
 
 $("client-download").onclick = () => runTask("client-download");
 $("client-install").onclick = () => runTask("client-install", $("client-installer").value.trim());
 $("client-update").onclick = () => runTask("client-update");
-$("client-play").onclick = () => invoke("play").catch((e) => alert(message(e)));
+$("client-play").onclick = play;
+$("ov-play").onclick = play;
 $("client-browse").onclick = async () => {
   const picked = await window.__TAURI__.dialog.open({
     filters: [{ name: "FFXI installer", extensions: ["exe"] }],
@@ -353,15 +521,18 @@ $("client-browse").onclick = async () => {
 
 // ---------- settings ----------
 
-$("save-settings").onclick = async () => {
+$("server-form").onsubmit = async (e) => {
+  e.preventDefault();
   show($("settings-error"), false);
+  show($("settings-saved"), false);
   try {
     const a = await invoke("set_public_ip", { publicIp: pickedAddress($("address"), $("address-typed")) });
     const b = await invoke("set_server_name", { name: $("name").value });
     if (a || b) show($("restart-bar"), true);
     overview = await invoke("overview");
-    showMain();
-    $("title").textContent = overview.server_name || "Server";
+    drawServerInfo();
+    fillServerForm();
+    show($("settings-saved"), true);
   } catch (e) {
     $("settings-error").textContent = message(e);
     show($("settings-error"), true);
@@ -370,14 +541,8 @@ $("save-settings").onclick = async () => {
 
 $("open-dir").onclick = () => invoke("open_stack_dir").catch((e) => alert(message(e)));
 
-// ---------- start ----------
-
-refresh();
-setInterval(refreshServices, 3000);
-// Docker may be started after the app (Docker Desktop on Windows).
-setInterval(() => {
-  if (overview && overview.docker_error) refresh();
-}, 10000);
+$("theme").value = document.documentElement.dataset.theme || "";
+$("theme").onchange = () => window.setTheme($("theme").value);
 
 // ---------- backups ----------
 
@@ -394,11 +559,12 @@ function size(bytes) {
 }
 
 async function refreshBackups() {
-  if ($("main").hidden) return;
+  if (!configured()) return;
   let b;
   try {
     b = await invoke("backups");
   } catch (e) {
+    $("backups-state").textContent = message(e);
     return;
   }
   const list = $("backups");
@@ -408,9 +574,9 @@ async function refreshBackups() {
     const text = document.createElement("div");
     const when = document.createElement("div");
     when.className = "when";
-    when.textContent = backup.created.slice(0, 16);
+    when.textContent = backup.created.slice(0, 16).replace("T", " ");
     const what = document.createElement("div");
-    what.className = "what";
+    what.className = "what muted";
     what.textContent = `${REASONS[backup.reason] || backup.reason} · ${size(backup.size)}`;
     text.append(when, what);
     const restore = document.createElement("button");
@@ -422,14 +588,12 @@ async function refreshBackups() {
     list.append(li);
   }
   show(list, b.backups.length > 0);
-  $("backups-state").textContent = b.backups.length
-    ? `In ${b.folder}.`
-    : "No backups yet.";
+  $("backups-state").textContent = b.backups.length ? `In ${b.folder}` : "No backups yet.";
 }
 
 async function restoreBackup(backup) {
   const sure = await window.__TAURI__.dialog.ask(
-    `Replace the database with the backup from ${backup.created.slice(0, 16)}?\n\n` +
+    `Replace the database with the backup from ${backup.created.slice(0, 16).replace("T", " ")}?\n\n` +
       "Everything since then (accounts, characters, items) is replaced. The game servers stop while it loads, " +
       "and the current database is backed up first, so this can be undone by restoring that.",
     { title: "Restore a backup", kind: "warning", okLabel: "Restore", cancelLabel: "Cancel" },
@@ -440,7 +604,7 @@ async function restoreBackup(backup) {
 $("backup-now").onclick = () => runTask("backup");
 $("open-backups").onclick = () => invoke("open_backups").catch((e) => alert(message(e)));
 
-// ---------- game settings ----------
+// ---------- game rules ----------
 
 let gameSettings = null;
 
@@ -448,6 +612,8 @@ async function loadGameSettings() {
   try {
     gameSettings = await invoke("game_settings");
   } catch (e) {
+    $("game-error").textContent = message(e);
+    show($("game-error"), true);
     return;
   }
   drawGameSettings(gameSettings.values);
@@ -457,40 +623,57 @@ function settingId(s) {
   return `${s.file}.${s.key}`;
 }
 
+// One card per group, one row per setting.
 function drawGameSettings(values) {
   const form = $("game-form");
   form.replaceChildren();
   let group = null;
+  let card = null;
   for (const s of gameSettings.settings) {
     if (s.group !== group) {
       group = s.group;
-      const h = document.createElement("h3");
+      card = document.createElement("section");
+      card.className = "card group";
+      const h = document.createElement("h2");
       h.textContent = group;
-      form.append(h);
+      card.append(h);
+      form.append(card);
     }
     const id = "gs-" + settingId(s).replace(".", "-");
     const row = document.createElement("div");
     row.className = "setting";
+    const text = document.createElement("div");
+    text.className = "setting-text";
     const label = document.createElement("label");
     label.htmlFor = id;
     label.textContent = s.label;
+    text.append(label);
+    if (s.hint) {
+      const hint = document.createElement("p");
+      hint.className = "hint";
+      hint.textContent = s.hint;
+      text.append(hint);
+    }
     let input;
     if (s.type === "bool" || s.type === "switch") {
       input = document.createElement("input");
       input.type = "checkbox";
+      input.className = "switch";
       input.checked = values[settingId(s)] === 1;
     } else if (s.type === "choice") {
       input = document.createElement("select");
-      for (const [value, text] of s.options) {
+      input.className = "setting-control";
+      for (const [value, label] of s.options) {
         const o = document.createElement("option");
         o.value = value;
-        o.textContent = text;
+        o.textContent = label;
         input.append(o);
       }
       input.value = values[settingId(s)];
     } else {
       input = document.createElement("input");
       input.type = "number";
+      input.className = "setting-control";
       input.min = s.min;
       input.max = s.max;
       input.step = s.whole ? 1 : 0.1;
@@ -498,18 +681,15 @@ function drawGameSettings(values) {
     }
     input.id = id;
     input.dataset.setting = settingId(s);
-    const mark = () => row.classList.toggle("changed", gameValue(s, input) !== s.default);
+    const mark = () => {
+      row.classList.toggle("changed", gameValue(s, input) !== s.default);
+      show($("game-saved"), false);
+    };
     input.addEventListener("input", mark);
     input.addEventListener("change", mark);
-    mark();
-    row.append(label, input);
-    if (s.hint) {
-      const hint = document.createElement("p");
-      hint.className = "hint";
-      hint.textContent = s.hint;
-      row.append(hint);
-    }
-    form.append(row);
+    row.classList.toggle("changed", gameValue(s, input) !== s.default);
+    row.append(text, input);
+    card.append(row);
   }
 }
 
@@ -519,12 +699,14 @@ function gameValue(s, input) {
 }
 
 $("save-game").onclick = async () => {
+  show($("game-saved"), false);
   const values = {};
   for (const s of gameSettings.settings) {
     const input = document.querySelector(`[data-setting="${settingId(s)}"]`);
     if (input.type === "number" && input.value.trim() === "") {
       $("game-error").textContent = `${s.label} needs a value.`;
       show($("game-error"), true);
+      input.focus();
       return;
     }
     values[settingId(s)] = gameValue(s, input);
@@ -534,6 +716,8 @@ $("save-game").onclick = async () => {
     show($("game-error"), false);
     if (restart) show($("restart-bar"), true);
     await loadGameSettings();
+    $("game-saved").textContent = restart ? "Saved. Restart the server to use them." : "Saved.";
+    show($("game-saved"), true);
   } catch (e) {
     $("game-error").textContent = message(e);
     show($("game-error"), true);
@@ -544,6 +728,7 @@ $("reset-game").onclick = () => {
   const defaults = {};
   for (const s of gameSettings.settings) defaults[settingId(s)] = s.default;
   drawGameSettings(defaults);
+  show($("game-saved"), false);
 };
 
 // ---------- tray ----------
@@ -551,3 +736,12 @@ $("reset-game").onclick = () => {
 listen("tray", (event) => {
   if (!task) runTask(event.payload);
 });
+
+// ---------- start ----------
+
+refresh();
+setInterval(refreshServices, 3000);
+// Docker may be started after the app (Docker Desktop on Windows).
+setInterval(() => {
+  if (overview && overview.docker_error) refresh();
+}, 10000);
