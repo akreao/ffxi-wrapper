@@ -8,11 +8,11 @@ You need Docker with the Compose plugin (Docker Desktop on Windows).
 
 ```sh
 cp .env.example .env   # then change the passwords
-docker compose up -d --build
+docker compose up -d
 docker compose logs -f connect world map
 ```
 
-The first build compiles LandSandBoat from [`akreao/lsb`](https://github.com/akreao/lsb) at the commit pinned in `.env` and takes a while (20 to 60 minutes, depending on the computer). On the first start `db-init` imports LSB's database, which takes a few more minutes; later starts only apply what changed.
+The first start downloads the server image (about a gigabyte), which GitHub builds from [`akreao/lsb`](https://github.com/akreao/lsb) at the commit pinned in `.env` (see [Server image](#server-image)). If there's no published image for that commit, or it can't be downloaded, Compose compiles LandSandBoat on this computer instead, which takes 20 to 60 minutes. On the first start `db-init` imports LSB's database, which takes a few more minutes; later starts only apply what changed.
 
 | Port | Server |
 |------|--------|
@@ -31,8 +31,16 @@ The client creates its account on the login screen (LSB's `ACCOUNT_CREATION` is 
 - `PUBLIC_IP` is the address clients are sent for the map server. Keep `127.0.0.1` when the client runs on this computer; use the computer's LAN or VPN address for players on other computers. It's applied by `db-init` on each start (`docker compose up -d`).
 - `BIND_IP`, when set to one of this computer's IPv4 addresses, makes the ports listen on that address only. Docker's port rules go around ufw and firewalld, so this, not the host firewall, keeps the server off other networks.
 - `SERVER_NAME` is the server name shown in the client. Left empty, `overrides/settings/main.lua` (or LSB's default, Nameless) decides.
-- `LSB_REPO` and `LSB_COMMIT` choose the LandSandBoat source to build. Change them, then `docker compose build`.
-- `LSB_IMAGE`, when set, uses a ready-made image (such as `ghcr.io/landsandboat/server:latest`, upstream LSB) instead of building.
+- `LSB_REPO` and `LSB_COMMIT` choose the LandSandBoat source. The stack uses `ghcr.io/akreao/ffxi-wrapper/lsb:<LSB_COMMIT>` when GitHub has built it, and compiles that commit here otherwise.
+- `LSB_IMAGE`, when set, uses another image instead (such as `ghcr.io/landsandboat/server:latest`, upstream LSB).
+
+### Server image
+
+The [`LSB server image`](.github/workflows/lsb-image.yml) workflow compiles LandSandBoat from `LSB_REPO` at the `LSB_COMMIT` pinned in `.env.example` and publishes it as `ghcr.io/akreao/ffxi-wrapper/lsb:<commit>` (and `:latest`), for linux/amd64. It runs when that pin changes on `main`, and by hand from the Actions tab, where it can also build any other commit. A commit that's already published isn't built again.
+
+To move the server to a newer LSB commit, change `LSB_COMMIT` in both `.env.example` and `compose.yaml` (its default) and merge; once the workflow has published the image, `docker compose up -d` pulls it and recreates the servers.
+
+To compile on this computer anyway, run `docker compose build db-init` (or `docker compose up -d --build`).
 
 ### Changing LSB's settings
 

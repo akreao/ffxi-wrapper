@@ -1,0 +1,162 @@
+# Builds LandSandBoat's server image from the fork at the commit pinned in
+# .env.example and publishes it to GitHub's container registry, so the stack
+# (and the desktop app) can pull it instead of compiling LSB on every computer.
+#
+# Published as ghcr.io/<owner>/ffxi-wrapper/lsb:<full LSB commit>, plus
+# :latest for the commit pinned in .env.example. A commit that's already
+# published is skipped.
+
+name: LSB server image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .env.example
+      - .github/workflows/lsb-image.yml
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: LSB commit to build (full SHA). Empty uses the one pinned in .env.example.
+        required: false
+        type: string
+      rebuild:
+        description: Build and push even if the image is already published.
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: lsb-image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      packages: write
+    env:
+      # One fixed id for the compile cache mounts in LSB's Dockerfile
+      # (build-ubuntu-<id>, ccache-ubuntu-<id>). The GitHub cache key below
+      # changes with the Dockerfile, so a toolchain bump starts a fresh cache.
+      BUILD_CACHE_ID: wrapper
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Work out what to build
+        id: pin
+        env:
+          INPUT_COMMIT: ${{ inputs.commit }}
+        run: |
+          set -eu
+          get() { sed -n "s/^$1=//p" .env.example | tr -d '\r' | tail -n1; }
+          repo="$(get LSB_REPO)"
+          pinned="$(get LSB_COMMIT)"
+          commit="${INPUT_COMMIT:-$pinned}"
+          case "$commit" in
+            *[!0-9a-f]* | "") echo "::error::Not a full commit SHA: '$commit'"; exit 1 ;;
+          esac
+          if [ "${#commit}" -ne 40 ]; then
+            echo "::error::Use the full 40-character commit SHA, got '$commit'"; exit 1
+          fi
+          # compose.yaml carries the same pin as its default; keep them in step.
+          if ! grep -q "LSB_COMMIT:-$pinned" compose.yaml; then
+            echo "::error::compose.yaml's default LSB_COMMIT doesn't match .env.example ($pinned)"; exit 1
+          fi
+          image="ghcr.io/${GITHUB_REPOSITORY,,}/lsb"
+          tags="$image:$commit"
+          if [ "$commit" = "$pinned" ]; then tags="$tags,$image:latest"; fi
+          {
+            echo "repo=$repo"
+            repo_path="${repo#https://github.com/}"
+            echo "repo_path=${repo_path%.git}"
+            echo "commit=$commit"
+            echo "image=$image"
+            echo "tags=$tags"
+          } >> "$GITHUB_OUTPUT"
+          echo "Building $repo at $commit as $tags"
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Skip if already published
+        id: existing
+        if: ${{ !inputs.rebuild }}
+        run: |
+          if docker manifest inspect "${{ steps.pin.outputs.image }}:${{ steps.pin.outputs.commit }}" > /dev/null 2>&1; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::${{ steps.pin.outputs.image }}:${{ steps.pin.outputs.commit }} is already published; nothing to do."
+          fi
+
+      - name: Check out LandSandBoat
+        if: ${{ steps.existing.outputs.found != 'true' }}
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ steps.pin.outputs.repo_path }}
+          ref: ${{ steps.pin.outputs.commit }}
+          path: lsb
+          # The navmesh submodules aren't needed to build; the stack's
+          # meshes service supplies them.
+          submodules: false
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@v4
+        if: ${{ steps.existing.outputs.found != 'true' }}
+        id: buildx
+
+      # LSB compiles inside a cache mount. Saving that mount (ccache and the
+      # build folder) between runs makes a pin bump recompile only what changed.
+      - name: Compile cache
+        if: ${{ steps.existing.outputs.found != 'true' }}
+        uses: actions/cache@v5
+        with:
+          path: |
+            /tmp/lsb-build
+            /tmp/lsb-ccache
+          key: lsb-compile-${{ hashFiles('lsb/docker/ubuntu.Dockerfile') }}-${{ steps.pin.outputs.commit }}
+          restore-keys: |
+            lsb-compile-${{ hashFiles('lsb/docker/ubuntu.Dockerfile') }}-
+
+      - name: Put the compile cache into BuildKit
+        if: ${{ steps.existing.outputs.found != 'true' }}
+        uses: reproducible-containers/buildkit-cache-dance@v3.4.0
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          cache-map: |
+            {
+              "/tmp/lsb-build": { "target": "/xiadmin/build", "id": "build-ubuntu-${{ env.BUILD_CACHE_ID }}", "uid": "1000", "gid": "1000" },
+              "/tmp/lsb-ccache": { "target": "/xiadmin/.ccache", "id": "ccache-ubuntu-${{ env.BUILD_CACHE_ID }}", "uid": "1000", "gid": "1000" }
+            }
+
+      - name: Build and push
+        if: ${{ steps.existing.outputs.found != 'true' }}
+        uses: docker/build-push-action@v7
+        env:
+          BUILDX_NO_DEFAULT_ATTESTATIONS: 1
+        with:
+          context: lsb
+          file: lsb/docker/ubuntu.Dockerfile
+          target: service
+          # LSB's base stage is pinned to the build platform, so amd64 only.
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.pin.outputs.tags }}
+          build-args: |
+            BUILD_CACHE_ID=${{ env.BUILD_CACHE_ID }}
+            REPO_URL=${{ steps.pin.outputs.repo }}
+            COMMIT_SHA=${{ steps.pin.outputs.commit }}
+          # source points at this repository so the package belongs to it
+          # (and this workflow can keep pushing to it); revision is the LSB
+          # commit inside.
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.pin.outputs.commit }}
+            org.opencontainers.image.title=LandSandBoat server for ffxi-wrapper
+            org.opencontainers.image.description=LandSandBoat (${{ steps.pin.outputs.repo }} at ${{ steps.pin.outputs.commit }}), built for ffxi-wrapper's compose stack.
+            org.opencontainers.image.licenses=GPL-3.0
