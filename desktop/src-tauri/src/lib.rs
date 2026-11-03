@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -35,6 +36,8 @@ struct App {
     logs: Mutex<Option<Child>>,
     /// Bumped on every log switch so the UI can drop lines from the old stream.
     logs_generation: AtomicU64,
+    /// The client commit main pins, and when it was last asked.
+    latest_pin: Mutex<Option<(Instant, Option<String>)>>,
 }
 
 impl App {
@@ -162,8 +165,8 @@ fn write_env(dir: &Path, path: &Path, public_ip: Option<String>, server_name: &s
     env.set("DB_ROOT_PASSWORD", &envfile::random_password(24)?);
     env.set("DB_DATA", stack::db_location(dir));
     env.set("SERVER_NAME", server_name);
-    // Empty follows the client this app version pins, so updating the app
-    // moves the client along.
+    // Empty follows the client main pins (or this app version's, offline),
+    // so moving the pin moves the client along.
     env.set("CLIENT_COMMIT", "");
     apply_public_ip(&mut env, public_ip);
     env.save().map_err(|e| e.to_string())
@@ -424,14 +427,31 @@ fn start_task(handle: &AppHandle, app: &App, kind: String, file: Option<String>)
 /// after login, and is one of this computer's own addresses too.
 const CLIENT_SERVER: &str = "127.0.0.1";
 
-/// The fork commit the client is built from: `.env`'s, or this app
-/// version's when `.env` has none (a setup from before the client).
+/// The fork commit the client is built from: `.env`'s, else the one main
+/// pins now (so a new pin reaches an installed app), else this app
+/// version's (offline, or a setup from before the client).
 fn client_commit(app: &App) -> String {
     app.env()
         .and_then(|e| e.get("CLIENT_COMMIT"))
         .filter(|c| !c.is_empty())
+        .or_else(|| latest_pin(app))
         .or_else(|| EnvFile::parse(stack::ENV_EXAMPLE).get("CLIENT_COMMIT"))
         .unwrap_or_default()
+}
+
+/// How long the pin main had is used before asking again.
+const PIN_CHECK_EVERY: Duration = Duration::from_secs(10 * 60);
+
+fn latest_pin(app: &App) -> Option<String> {
+    let mut cached = app.latest_pin.lock().unwrap();
+    if let Some((at, pin)) = &*cached {
+        if at.elapsed() < PIN_CHECK_EVERY {
+            return pin.clone();
+        }
+    }
+    let pin = client::latest_pin();
+    *cached = Some((Instant::now(), pin.clone()));
+    pin
 }
 
 #[tauri::command]
@@ -567,6 +587,7 @@ pub fn run() {
                 task: Arc::new(Mutex::new(None)),
                 logs: Mutex::new(None),
                 logs_generation: AtomicU64::new(0),
+                latest_pin: Mutex::new(None),
             });
             Ok(())
         })
