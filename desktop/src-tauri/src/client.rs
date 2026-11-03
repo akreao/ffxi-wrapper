@@ -18,6 +18,39 @@ use crate::host;
 /// workflow publishes them).
 pub const DOWNLOADS: &str = "https://github.com/akreao/ffxi-wrapper/releases/download";
 
+/// Where the current client pin is: `.env.example` on main. Moving
+/// `CLIENT_COMMIT` there moves every app along, without a new app build.
+pub const PIN_URL: &str = "https://raw.githubusercontent.com/akreao/ffxi-wrapper/main/.env.example";
+
+/// The client commit main pins now, if it can be read and its build and
+/// checksum are already published (the Game client workflow takes a few
+/// minutes after a pin moves). `None` when offline or not published yet.
+pub fn latest_pin() -> Option<String> {
+    let out = host::command("curl")
+        .args(["--fail", "--location", "--silent", "--max-time", "10", PIN_URL])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let commit = EnvFile::parse(&String::from_utf8_lossy(&out.stdout)).get("CLIENT_COMMIT")?;
+    check_commit(&commit).ok()?;
+    // A GET of the small checksum file: release downloads redirect to signed
+    // storage links that refuse HEAD.
+    let published = host::command("curl")
+        .args(["--fail", "--location", "--silent", "--max-time", "10", "--output"])
+        .arg(if cfg!(windows) { "NUL" } else { "/dev/null" })
+        .arg(format!("{}.sha256", download_url(&commit)))
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .ok()?
+        .success();
+    published.then_some(commit)
+}
+
 /// The download address of the build of `commit` for this platform.
 pub fn download_url(commit: &str) -> String {
     format!("{DOWNLOADS}/client-{}/{}", &commit[..commit.len().min(12)], asset())
