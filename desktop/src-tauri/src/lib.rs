@@ -7,6 +7,7 @@ mod host;
 mod net;
 mod settings;
 mod stack;
+mod tailscale;
 mod task;
 mod tray;
 
@@ -219,6 +220,41 @@ async fn set_server_name(handle: AppHandle, name: String) -> Result<bool, String
         Ok(changed && running(app))
     })
     .await?
+}
+
+/// What the Play with friends screen shows.
+#[derive(Serialize)]
+struct Friends {
+    tailscale: tailscale::Status,
+    public_ip: String,
+    public_ip_auto: bool,
+    /// The one address the ports listen on, when `.env` names one.
+    bind_ip: String,
+    /// The login certificate's fingerprint, once the server has made it.
+    fingerprint: Option<String>,
+    auth_port: u16,
+}
+
+#[tauri::command]
+async fn friends(handle: AppHandle) -> Result<Friends, String> {
+    off_main(handle, |_, app| {
+        let env = app.env();
+        let get = |key: &str| env.as_ref().and_then(|e| e.get(key)).unwrap_or_default();
+        Friends {
+            tailscale: tailscale::status(),
+            public_ip: get("PUBLIC_IP"),
+            public_ip_auto: get("PUBLIC_IP_AUTO") != "no",
+            bind_ip: get("BIND_IP"),
+            fingerprint: app.dir().ok().and_then(|dir| client::login_fingerprint(&dir)),
+            auth_port: client::AUTH_PORT,
+        }
+    })
+    .await
+}
+
+#[tauri::command]
+fn open_tailscale(page: String) -> Result<(), String> {
+    host::open(std::ffi::OsStr::new(tailscale::url(&page)?))
 }
 
 #[derive(Serialize)]
@@ -617,7 +653,9 @@ pub fn run() {
             follow_logs,
             backups,
             open_backups,
-            open_stack_dir
+            open_stack_dir,
+            friends,
+            open_tailscale
         ])
         .build(tauri::generate_context!())
         .expect("error while building the app")

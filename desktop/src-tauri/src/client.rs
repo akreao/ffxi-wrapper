@@ -205,6 +205,15 @@ fn cert_fingerprint(pem: &str) -> Option<String> {
     Some(Sha256::digest(der).iter().map(|b| format!("{b:02x}")).collect())
 }
 
+/// The login certificate's fingerprint as `openssl x509 -fingerprint -sha256`
+/// prints it (`AB:CD:...`), for players to pin with `vana-client
+/// trust-server --fingerprint`. `None` before the server's first start.
+pub fn login_fingerprint(stack: &Path) -> Option<String> {
+    let hex = cert_fingerprint(&fs::read_to_string(login_cert(stack)).ok()?)?;
+    let pairs: Vec<String> = hex.as_bytes().chunks(2).map(|p| String::from_utf8_lossy(p).to_ascii_uppercase()).collect();
+    Some(pairs.join(":"))
+}
+
 /// vana-client's list of server certificates (`known_servers.json`, beside
 /// the config `FFXI_CONFIG` names).
 fn known_servers_path(stack: &Path) -> PathBuf {
@@ -240,7 +249,7 @@ fn pin_login_cert(stack: &Path, server: &str) -> Result<(), String> {
 }
 
 /// The login server's port, where the client's TLS connection goes.
-const AUTH_PORT: u16 = 54231;
+pub const AUTH_PORT: u16 = 54231;
 
 /// `curl` downloading the pinned build into `client/` under a temporary
 /// name. curl comes with Linux distributions and with Windows 10 and later.
@@ -454,6 +463,11 @@ mod tests {
         let known: Value = serde_json::from_slice(&fs::read(known_servers_path(&stack)).unwrap()).unwrap();
         assert_eq!(known["127.0.0.1:54231"], json!({ "sha256": CERT_SHA256.trim(), "fixed": true }));
         assert_eq!(known["other:54231"]["sha256"], "11");
+
+        // As openssl prints it, for players to pin by hand.
+        let shown = login_fingerprint(&stack).unwrap();
+        assert_eq!(shown.replace(':', "").to_ascii_lowercase(), CERT_SHA256.trim());
+        assert_eq!(shown.len(), 32 * 3 - 1);
 
         assert!(cert_fingerprint("not a certificate").is_none());
         fs::remove_dir_all(stack).unwrap();

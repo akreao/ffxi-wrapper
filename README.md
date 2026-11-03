@@ -50,6 +50,10 @@ To move to a newer client, push the change to the fork, put its full commit SHA 
 
 vana-client pins each server's login certificate and refuses a different one later. `connect` keeps the certificate it makes on its first start in `DATA_DIR/tls/` (`login.cert` and `login.key`), so recreating the container or moving to a new server image keeps it. The desktop app pins it in its own client before each start, so that client never has to trust it on first use. Players on other computers can pin it with `vana-client trust-server SERVER --port 54231 --fingerprint ...`, using the fingerprint from `openssl x509 -in DATA_DIR/tls/login.cert -noout -fingerprint -sha256`. Deleting `DATA_DIR/tls/` makes a new certificate on the next start, which every player's client then has to trust again.
 
+### Players on other networks
+
+The server's ports include UDP 54230 (the game itself), so web tunnels such as Cloudflare Tunnel can't carry it. A private network such as Tailscale can: set `PUBLIC_IP` to this computer's Tailscale address, share the computer with each player in Tailscale, and players point vana-client at that address. The desktop app's **Play with friends** screen walks through it.
+
 ### Changing LSB's settings
 
 Any LSB setting can be set as an environment variable, `XI_<FILE>_<SETTING>` (for example `XI_MAP_EXP_RATE`), in the `x-lsb` environment in `compose.yaml`. For bigger changes, put a copy of one of LSB's settings files (`settings/default/map.lua` and the rest in the LSB repo) in [`overrides/settings/`](overrides/settings/README.md), keep only the values you change, and restart: `docker compose up -d --force-recreate connect search world map`.

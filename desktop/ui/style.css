@@ -811,3 +811,20 @@ details.help-row > summary { cursor: pointer; color: var(--muted); font-weight: 
 details.help-row > summary::marker { color: var(--gold-line); }
 details.help-row:not([open]) { gap: 0; }
 #settings-page .setting .setting-control { width: 300px; }
+
+/* Play with friends */
+.group > .card-head { padding: 12px 18px 4px; margin: 0; align-items: center; }
+.group > .card-head + .setting { border-top: 0; }
+.copy-line { display: flex; align-items: center; gap: 8px; }
+.copy-line[hidden] { display: none; }
+.copy-line code {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--raised);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+.copy-line button { flex: none; }

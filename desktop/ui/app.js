@@ -1,6 +1,6 @@
 // The app's one window: first-run setup, then a sidebar of screens:
 // Overview (status, services, the Activity and log panes), Game rules,
-// Game client, Backups and Settings. The header's Start, Stop and the
+// Game client, Play with friends, Backups and Settings. The header's Start, Stop and the
 // More menu work from every screen.
 
 const { invoke } = window.__TAURI__.core;
@@ -120,7 +120,7 @@ function showSetup() {
   show($("sidebar"), false);
   show($("status"), false);
   show($("header-actions"), false);
-  for (const id of ["overview-page", "game-page", "client-page", "backups-page", "settings-page"]) show($(id), false);
+  for (const id of ["overview-page", "game-page", "client-page", "friends-page", "backups-page", "settings-page"]) show($(id), false);
   $("page-title").textContent = "Welcome";
   show($("setup"), true);
   $("setup-dir").value = overview.stack_dir || overview.default_stack_dir;
@@ -170,6 +170,7 @@ const NAV = {
   overview: ["nav-overview", "overview-page", "Overview"],
   game: ["nav-game", "game-page", "Game rules"],
   client: ["nav-client", "client-page", "Game client"],
+  friends: ["nav-friends", "friends-page", "Play with friends"],
   backups: ["nav-backups", "backups-page", "Backups"],
   settings: ["nav-settings", "settings-page", "Settings"],
 };
@@ -191,6 +192,7 @@ function showPage(next) {
     if (!$("panel-client-cfg").hidden) loadClientSettings();
   }
   if (next === "backups") refreshBackups();
+  if (next === "friends") refreshFriends();
   if (next === "settings") {
     show($("settings-saved"), false);
     show($("settings-error"), false);
@@ -553,6 +555,108 @@ $("open-dir").onclick = () => invoke("open_stack_dir").catch((e) => alert(messag
 
 $("theme").value = document.documentElement.dataset.theme || "";
 $("theme").onchange = () => window.setTheme($("theme").value);
+
+// ---------- play with friends ----------
+
+let friends = null;
+
+const TS_STATES = {
+  missing: ["Tailscale isn't installed", "Install it, sign in, then check again."],
+  stopped: ["Tailscale is off", "Open Tailscale and connect, then check again."],
+  needs_login: ["Tailscale isn't signed in", "Open Tailscale and sign in, then check again."],
+  running: ["Tailscale is connected", ""],
+};
+
+async function refreshFriends() {
+  $("ts-state").textContent = "Checking…";
+  try {
+    friends = await invoke("friends");
+  } catch (e) {
+    $("ts-state").textContent = "Couldn't check Tailscale";
+    $("ts-detail").textContent = message(e);
+    return;
+  }
+  drawFriends();
+}
+
+function drawFriends() {
+  const ts = friends.tailscale;
+  const [title, detail] = TS_STATES[ts.state];
+  const on = ts.state === "running";
+  $("ts-state").textContent = title;
+  $("ts-detail").textContent = on
+    ? [`This computer is ${ts.ip}`, ts.dns_name && `(${ts.dns_name})`, ts.tailnet && `on ${ts.tailnet}'s network.`]
+        .filter(Boolean)
+        .join(" ")
+    : detail;
+  show($("ts-get"), ts.state === "missing");
+  show($("ts-address-box"), on);
+  show($("ts-invite-box"), on);
+  if (!on) return;
+
+  // LSB sends every player the map server's address, so it has to be the
+  // Tailscale one for players outside the LAN.
+  const using = !friends.public_ip_auto && friends.public_ip === ts.ip;
+  $("ts-address-state").textContent = using
+    ? `Players are sent to ${ts.ip}`
+    : `Players are sent to ${friends.public_ip || "no address yet"}${friends.public_ip_auto ? " (detected on each start)" : ""}`;
+  $("ts-address-hint").textContent = using
+    ? "Players on your own network need Tailscale too now. The game on this computer keeps working either way."
+    : "Players over Tailscale can log in with this, but can't enter the world: the game sends them to this address. Using the Tailscale address fixes that; players on your own network then need Tailscale too.";
+  $("ts-use").textContent = `Use ${ts.ip}`;
+  show($("ts-use"), !using);
+  show($("ts-address-error"), false);
+  const bind = friends.bind_ip;
+  $("ts-bind-warning").textContent =
+    bind && bind !== ts.ip
+      ? `The server only listens on ${bind} (BIND_IP in the server folder's .env), so players over Tailscale can't reach it. Set BIND_IP to ${ts.ip}, or leave it empty, and restart the server.`
+      : "";
+  show($("ts-bind-warning"), !!bind && bind !== ts.ip);
+
+  $("ts-invite-name").textContent = ts.dns_name || ts.ip;
+  $("ts-invite-ip").textContent = ts.ip;
+  if (friends.fingerprint) {
+    $("ts-fp-command").textContent = `vana-client trust-server ${ts.ip} --port ${friends.auth_port} --fingerprint ${friends.fingerprint}`;
+    $("ts-fp-hint").textContent =
+      "The client checks the login server's certificate, so nobody in between can pose as it. Running this once tells it which one to expect:";
+  } else {
+    $("ts-fp-hint").textContent =
+      "The server makes its certificate on its first start. Start it once and this step shows the command that tells players' clients which certificate to expect.";
+  }
+  show($("ts-fp-row"), !!friends.fingerprint);
+}
+
+$("ts-refresh").onclick = refreshFriends;
+$("ts-use").onclick = async () => {
+  show($("ts-address-error"), false);
+  try {
+    if (await invoke("set_public_ip", { publicIp: friends.tailscale.ip })) show($("restart-bar"), true);
+    overview = await invoke("overview");
+    drawServerInfo();
+    fillServerForm();
+    await refreshFriends();
+  } catch (e) {
+    $("ts-address-error").textContent = message(e);
+    show($("ts-address-error"), true);
+  }
+};
+for (const el of document.querySelectorAll("[data-tailscale]")) {
+  el.onclick = (e) => {
+    e.preventDefault();
+    invoke("open_tailscale", { page: el.dataset.tailscale }).catch((err) => alert(message(err)));
+  };
+}
+for (const button of document.querySelectorAll("[data-copy]")) {
+  button.onclick = async () => {
+    try {
+      await copyText($(button.dataset.copy).textContent);
+      button.textContent = "Copied";
+      setTimeout(() => (button.textContent = "Copy"), 1500);
+    } catch (e) {
+      alert(message(e));
+    }
+  };
+}
 
 // ---------- backups ----------
 
