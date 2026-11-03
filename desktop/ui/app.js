@@ -120,7 +120,7 @@ function showSetup() {
   show($("sidebar"), false);
   show($("status"), false);
   show($("header-actions"), false);
-  for (const id of ["overview-page", "game-page", "client-page", "friends-page", "backups-page", "settings-page"]) show($(id), false);
+  for (const id of ["overview-page", "game-page", "gm-page", "client-page", "friends-page", "backups-page", "settings-page"]) show($(id), false);
   $("page-title").textContent = "Welcome";
   show($("setup"), true);
   $("setup-dir").value = overview.stack_dir || overview.default_stack_dir;
@@ -169,6 +169,7 @@ function fillServerForm() {
 const NAV = {
   overview: ["nav-overview", "overview-page", "Overview"],
   game: ["nav-game", "game-page", "Game rules"],
+  gm: ["nav-gm", "gm-page", "Game masters"],
   client: ["nav-client", "client-page", "Game client"],
   friends: ["nav-friends", "friends-page", "Play with friends"],
   backups: ["nav-backups", "backups-page", "Backups"],
@@ -192,6 +193,7 @@ function showPage(next) {
     if (!$("panel-client-cfg").hidden) loadClientSettings();
   }
   if (next === "backups") refreshBackups();
+  if (next === "gm") refreshGameMasters();
   if (next === "friends") refreshFriends();
   if (next === "settings") {
     show($("settings-saved"), false);
@@ -657,6 +659,62 @@ for (const button of document.querySelectorAll("[data-copy]")) {
     }
   };
 }
+
+// ---------- game masters ----------
+
+const GM_LEVELS = ["Not a GM", "1", "2", "3", "4", "5 (all commands)"];
+
+async function refreshGameMasters() {
+  if (!configured()) return;
+  const list = $("gm-accounts");
+  let accounts;
+  try {
+    accounts = await invoke("game_masters");
+  } catch (e) {
+    list.replaceChildren();
+    $("gm-state").textContent = message(e);
+    return;
+  }
+  list.replaceChildren();
+  for (const account of accounts) {
+    const li = document.createElement("li");
+    const head = document.createElement("div");
+    head.className = "when";
+    head.textContent = account.login;
+    li.append(head);
+    if (!account.characters.length) {
+      const none = document.createElement("div");
+      none.className = "what muted";
+      none.textContent = "No characters yet.";
+      li.append(none);
+    }
+    for (const c of account.characters) {
+      const row = document.createElement("label");
+      row.className = "gm-char";
+      const name = document.createElement("span");
+      name.textContent = c.name;
+      const pick = document.createElement("select");
+      GM_LEVELS.forEach((label, level) => pick.add(new Option(label, level, false, level === c.gm_level)));
+      pick.onchange = async () => {
+        pick.disabled = true;
+        try {
+          await invoke("set_gm_level", { character: c.id, level: Number(pick.value) });
+          c.gm_level = Number(pick.value);
+        } catch (e) {
+          pick.value = c.gm_level;
+          alert(message(e));
+        }
+        pick.disabled = false;
+      };
+      row.append(name, pick);
+      li.append(row);
+    }
+    list.append(li);
+  }
+  $("gm-state").textContent = accounts.length ? "" : "No accounts yet. They show here once someone creates one in the game client.";
+}
+
+$("gm-refresh").onclick = () => refreshGameMasters();
 
 // ---------- backups ----------
 
