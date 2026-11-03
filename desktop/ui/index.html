@@ -25,6 +25,7 @@
     <div class="nav-group">
       <div class="nav-heading">Play</div>
       <button id="nav-client" class="nav-item"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="7" width="19" height="11" rx="4"/><path d="M7 11v3M5.5 12.5h3"/><circle cx="16" cy="11.5" r=".6"/><circle cx="18" cy="13.5" r=".6"/></svg><span>Game client</span></button>
+      <button id="nav-friends" class="nav-item"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6"/><circle cx="17" cy="9" r="2.6"/><path d="M16.5 14.2c3 .2 5 2.3 5 5.3"/></svg><span>Play with friends</span></button>
     </div>
     <div class="nav-group">
       <div class="nav-heading">System</div>
@@ -199,6 +200,66 @@
       <p class="hint">Changed values are highlighted. They're saved in the client's settings, <code id="client-cfg-path"></code>, and the game uses them the next time it starts. Close the game before saving: it saves its own settings while it runs. Everything else the game keeps there, such as logins, window places and key bindings, is left alone.</p>
       <div id="client-cfg-form"></div>
     </div>
+  </main>
+
+  <!-- Play with friends: players on other networks, over Tailscale -->
+  <main id="friends-page" class="page" hidden>
+    <p class="hint">Players on other networks can join over <a href="#" data-tailscale="download">Tailscale</a>, a free private network. It carries the server's ports, including the game's UDP port, as they are, so nothing has to be opened on your router. You and each player install Tailscale, and you share this computer with them.</p>
+
+    <section class="card group">
+      <div class="card-head"><h2>Tailscale on this computer</h2><button id="ts-refresh" class="small">Check again</button></div>
+      <div class="setting">
+        <div class="setting-text">
+          <span class="setting-title" id="ts-state">Checking…</span>
+          <p class="hint" id="ts-detail"></p>
+        </div>
+        <button id="ts-get" class="primary" data-tailscale="download" hidden>Get Tailscale</button>
+      </div>
+    </section>
+
+    <section id="ts-address-box" class="card group" hidden>
+      <h2>Address players are sent to</h2>
+      <div class="setting">
+        <div class="setting-text">
+          <span class="setting-title" id="ts-address-state"></span>
+          <p class="hint" id="ts-address-hint"></p>
+        </div>
+        <button id="ts-use" class="primary" hidden></button>
+      </div>
+      <p id="ts-bind-warning" class="notice" hidden></p>
+      <p id="ts-address-error" class="error" hidden></p>
+    </section>
+
+    <section id="ts-invite-box" class="card group" hidden>
+      <h2>Invite a player</h2>
+      <div class="setting stacked">
+        <div class="setting-text">
+          <span class="setting-title">1. Share this computer with them</span>
+          <p class="hint">On Tailscale's machines page, open this computer's <strong>…</strong> menu, pick <strong>Share</strong> and send the player the link. Sharing gives them this one computer, not the rest of your network. <a href="#" data-tailscale="sharing">How sharing works</a></p>
+        </div>
+        <div><button data-tailscale="machines">Open Tailscale's machines page</button></div>
+      </div>
+      <div class="setting stacked">
+        <div class="setting-text">
+          <span class="setting-title">2. They install Tailscale and accept the share</span>
+          <p class="hint">They sign in with any account. This computer then shows in their Tailscale as <code id="ts-invite-name"></code>.</p>
+        </div>
+      </div>
+      <div class="setting stacked">
+        <div class="setting-text">
+          <span class="setting-title">3. They point vana-client at this server</span>
+          <p class="hint">In the client's <code>config.json</code>, <code>"server"</code> becomes this address:</p>
+        </div>
+        <div class="copy-line"><code id="ts-invite-ip"></code><button class="small" data-copy="ts-invite-ip">Copy</button></div>
+      </div>
+      <div class="setting stacked">
+        <div class="setting-text">
+          <span class="setting-title">4. They trust this server's certificate</span>
+          <p class="hint" id="ts-fp-hint">The client checks the login server's certificate, so nobody in between can pose as it. Running this once tells it which one to expect:</p>
+        </div>
+        <div class="copy-line" id="ts-fp-row"><code id="ts-fp-command"></code><button class="small" data-copy="ts-fp-command">Copy</button></div>
+      </div>
+    </section>
   </main>
 
   <!-- Backups -->
