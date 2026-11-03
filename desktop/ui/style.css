@@ -828,3 +828,11 @@ details.help-row:not([open]) { gap: 0; }
   user-select: all;
 }
 .copy-line button { flex: none; }
+
+#gm-accounts { list-style: none; margin: 0; padding: 0; }
+#gm-accounts > li { padding: 10px 0; border-top: 1px solid var(--border); }
+#gm-accounts > li:first-child { border-top: 0; }
+#gm-accounts .when { font-weight: 500; margin-bottom: 4px; }
+#gm-accounts .what { font-size: 12px; }
+.gm-char { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 0 4px 12px; }
+.gm-char select { min-width: 160px; }

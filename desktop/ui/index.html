@@ -21,6 +21,7 @@
       <div class="nav-heading">Server</div>
       <button id="nav-overview" class="nav-item"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg><span>Overview</span></button>
       <button id="nav-game" class="nav-item"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></svg><span>Game rules</span></button>
+      <button id="nav-gm" class="nav-item"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8l4.5 3.5L12 5l4.5 6.5L21 8l-2 10H5z"/><path d="M5 21h14"/></svg><span>Game masters</span></button>
     </div>
     <div class="nav-group">
       <div class="nav-heading">Play</div>
@@ -259,6 +260,19 @@
         </div>
         <div class="copy-line" id="ts-fp-row"><code id="ts-fp-command"></code><button class="small" data-copy="ts-fp-command">Copy</button></div>
       </div>
+    </section>
+  </main>
+
+  <!-- Game masters -->
+  <main id="gm-page" class="page" hidden>
+    <div class="toolbar">
+      <button id="gm-refresh">Refresh</button>
+    </div>
+    <section class="card">
+      <h2>Game masters</h2>
+      <p class="hint">GM levels belong to characters: pick a level for each character that should have GM commands such as <code>!goto</code> or <code>!additem</code>. Level 5 can use every command. A character in game gets the new level the next time it zones or logs in. The database has to be running, so start the server first.</p>
+      <p id="gm-state" class="hint"></p>
+      <ul id="gm-accounts"></ul>
     </section>
   </main>
 

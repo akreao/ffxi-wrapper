@@ -3,6 +3,7 @@ mod client;
 mod clientcfg;
 mod config;
 mod envfile;
+mod gm;
 mod host;
 mod net;
 mod settings;
@@ -573,6 +574,18 @@ async fn backups(handle: AppHandle) -> Result<Backups, String> {
     .await?
 }
 
+/// Every account and its characters, with their GM levels.
+#[tauri::command]
+async fn game_masters(handle: AppHandle) -> Result<Vec<gm::Account>, String> {
+    off_main(handle, |_, app| gm::accounts(&app.dir()?)).await?
+}
+
+/// Sets a character's GM level; LSB reads it when the character next logs in or zones.
+#[tauri::command]
+async fn set_gm_level(handle: AppHandle, character: u32, level: u8) -> Result<(), String> {
+    off_main(handle, move |_, app| gm::set_level(&app.dir()?, character, level)).await?
+}
+
 #[tauri::command]
 fn open_backups(app: State<App>) -> Result<(), String> {
     let folder = backup::folder(&app.dir()?);
@@ -653,6 +666,8 @@ pub fn run() {
             follow_logs,
             backups,
             open_backups,
+            game_masters,
+            set_gm_level,
             open_stack_dir,
             friends,
             open_tailscale
