@@ -23,7 +23,7 @@ x-logging: &logging
 # use that. `--build` always compiles here.
 # LSB_IMAGE points at any other image, such as ghcr.io/landsandboat/server:latest.
 x-lsb: &lsb
-  image: ${LSB_IMAGE:-ghcr.io/akreao/ffxi-wrapper/lsb:${LSB_COMMIT:-226b3b7b699fee9daa8ec70d88b7b0834ef0f7ef}}
+  image: ${LSB_IMAGE:-ghcr.io/akreao/ffxi-wrapper/lsb:${LSB_COMMIT:-6c02b556f1ce1a8d0acf38e14cb7be6ddadb9988}}
   pull_policy: missing
   restart: on-failure
   logging: *logging
@@ -72,7 +72,7 @@ services:
     build:
       # LSB's own Dockerfile, at the pinned commit of the fork.
       # Submodules (LSB's navmeshes) aren't needed to build; meshes fills them.
-      context: ${LSB_REPO:-https://github.com/akreao/lsb.git}?ref=${LSB_COMMIT:-226b3b7b699fee9daa8ec70d88b7b0834ef0f7ef}&submodules=false
+      context: ${LSB_REPO:-https://github.com/akreao/lsb.git}?ref=${LSB_COMMIT:-6c02b556f1ce1a8d0acf38e14cb7be6ddadb9988}&submodules=false
       dockerfile: docker/ubuntu.Dockerfile
       target: service
       args:
@@ -80,7 +80,7 @@ services:
         # repository and commit to track database versions.
         BUILDKIT_CONTEXT_KEEP_GIT_DIR: "1"
         REPO_URL: ${LSB_REPO:-https://github.com/akreao/lsb.git}
-        COMMIT_SHA: ${LSB_COMMIT:-226b3b7b699fee9daa8ec70d88b7b0834ef0f7ef}
+        COMMIT_SHA: ${LSB_COMMIT:-6c02b556f1ce1a8d0acf38e14cb7be6ddadb9988}
     command: ["/bin/sh", "/wrapper/db-init.sh"]
     # Root so it can write dbtool's state into DATA_DIR.
     user: root
