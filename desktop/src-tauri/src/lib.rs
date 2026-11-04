@@ -76,7 +76,10 @@ struct Overview {
     docker_version: Option<String>,
     docker_error: Option<String>,
     public_ip: String,
+    /// Detected again on each start: the LAN address.
     public_ip_auto: bool,
+    /// "lan", "wan" or "fixed"; see [`ip_mode`].
+    public_ip_mode: &'static str,
     addresses: Vec<net::Address>,
     server_name: String,
     /// "a folder" or "a Docker volume", for the Settings screen.
@@ -104,7 +107,8 @@ async fn overview(handle: AppHandle) -> Result<Overview, String> {
             docker_version,
             docker_error,
             public_ip: get("PUBLIC_IP"),
-            public_ip_auto: get("PUBLIC_IP_AUTO") != "no",
+            public_ip_auto: ip_mode(&get("PUBLIC_IP_AUTO")) == "lan",
+            public_ip_mode: ip_mode(&get("PUBLIC_IP_AUTO")),
             addresses: net::lan_addresses(),
             server_name: get("SERVER_NAME"),
             db_data: get("DB_DATA"),
@@ -172,36 +176,67 @@ fn write_env(dir: &Path, path: &Path, public_ip: Option<String>, server_name: &s
     env.set("CLIENT_COMMIT", "");
     // The same for the server: empty uses compose.yaml's pin.
     env.set("LSB_COMMIT", "");
-    apply_public_ip(&mut env, public_ip);
+    apply_public_ip(&mut env, public_ip.map_or(Pick::Lan, Pick::Fixed))?;
     env.save().map_err(|e| e.to_string())
 }
 
-/// Sets the address players are sent to: a pinned one, or with `None`,
-/// this computer's LAN address now (re-detected on every start).
-fn apply_public_ip(env: &mut EnvFile, public_ip: Option<String>) {
-    match public_ip {
-        Some(ip) => {
+/// How the address players are sent to is chosen.
+enum Pick {
+    /// This computer's LAN address, detected again on every start.
+    Lan,
+    /// The network's public address, looked up again on every start.
+    Wan,
+    /// One address, kept as it is.
+    Fixed(String),
+}
+
+/// `PUBLIC_IP_AUTO` as the UI names it: `no` pins PUBLIC_IP, `wan` looks
+/// up the public address on each start, anything else (`yes`, or empty in
+/// an older .env) detects the LAN address.
+fn ip_mode(auto: &str) -> &'static str {
+    match auto {
+        "no" => "fixed",
+        "wan" => "wan",
+        _ => "lan",
+    }
+}
+
+/// Sets the address players are sent to.
+fn apply_public_ip(env: &mut EnvFile, pick: Pick) -> Result<(), String> {
+    match pick {
+        Pick::Fixed(ip) => {
             env.set("PUBLIC_IP", ip.trim());
             env.set("PUBLIC_IP_AUTO", "no");
         }
-        None => {
+        Pick::Wan => {
+            env.set("PUBLIC_IP", &net::wan_ip()?);
+            env.set("PUBLIC_IP_AUTO", "wan");
+        }
+        Pick::Lan => {
             env.set("PUBLIC_IP", &net::best_lan_ip().unwrap_or_else(|| "127.0.0.1".into()));
             env.set("PUBLIC_IP_AUTO", "yes");
         }
     }
+    Ok(())
 }
 
-/// Saves the address players are sent to. Returns whether the running
+/// Saves the address players are sent to: `public_ip`, or with none, the
+/// LAN address, or with `wan`, the public one. Returns whether the running
 /// server needs a restart to use it.
 #[tauri::command]
-async fn set_public_ip(handle: AppHandle, public_ip: Option<String>) -> Result<bool, String> {
+async fn set_public_ip(handle: AppHandle, public_ip: Option<String>, wan: Option<bool>) -> Result<bool, String> {
     off_main(handle, move |_, app| {
         if let Some(ip) = &public_ip {
             net::check_address(ip)?;
         }
+        let pick = match (public_ip, wan.unwrap_or(false)) {
+            (Some(ip), _) => Pick::Fixed(ip),
+            (None, true) => Pick::Wan,
+            (None, false) => Pick::Lan,
+        };
         let changed = app.edit_env(|env| {
             let before = env.get("PUBLIC_IP");
-            apply_public_ip(env, public_ip);
+            apply_public_ip(env, pick)?;
             Ok(before != env.get("PUBLIC_IP"))
         })?;
         Ok(changed && running(app))
@@ -231,6 +266,9 @@ struct Friends {
     tailscale: tailscale::Status,
     public_ip: String,
     public_ip_auto: bool,
+    public_ip_mode: &'static str,
+    /// This computer's address on the LAN, which the router forwards to.
+    lan_ip: Option<String>,
     /// The one address the ports listen on, when `.env` names one.
     bind_ip: String,
     /// The login certificate's fingerprint, once the server has made it.
@@ -246,13 +284,21 @@ async fn friends(handle: AppHandle) -> Result<Friends, String> {
         Friends {
             tailscale: tailscale::status(),
             public_ip: get("PUBLIC_IP"),
-            public_ip_auto: get("PUBLIC_IP_AUTO") != "no",
+            public_ip_auto: ip_mode(&get("PUBLIC_IP_AUTO")) == "lan",
+            public_ip_mode: ip_mode(&get("PUBLIC_IP_AUTO")),
+            lan_ip: net::best_lan_ip(),
             bind_ip: get("BIND_IP"),
             fingerprint: app.dir().ok().and_then(|dir| client::login_fingerprint(&dir)),
             auth_port: client::AUTH_PORT,
         }
     })
     .await
+}
+
+/// This network's public address, for the Play with friends screen.
+#[tauri::command]
+async fn wan_ip(handle: AppHandle) -> Result<String, String> {
+    off_main(handle, |_, _| net::wan_ip()).await?
 }
 
 #[tauri::command]
@@ -422,8 +468,15 @@ fn start_task(handle: &AppHandle, app: &App, kind: String, file: Option<String>)
             ctx.check_cancelled()?;
             match step {
                 Step::Address => envfile::edit(&ctx.dir.join(".env"), |env| {
-                    if env.get("PUBLIC_IP_AUTO").as_deref() != Some("no") {
-                        apply_public_ip(env, None);
+                    match ip_mode(&env.get("PUBLIC_IP_AUTO").unwrap_or_default()) {
+                        "fixed" => {}
+                        // Offline, the last public address is kept rather than failing the start.
+                        "wan" => {
+                            if let Err(e) = apply_public_ip(env, Pick::Wan) {
+                                ctx.line(format!("{e} Keeping the last one."));
+                            }
+                        }
+                        _ => apply_public_ip(env, Pick::Lan)?,
                     }
                     ctx.line(format!("Players are sent to {}.", env.get("PUBLIC_IP").unwrap_or_default()));
                     Ok(())
@@ -678,6 +731,7 @@ pub fn run() {
             set_gm_level,
             open_stack_dir,
             friends,
+            wan_ip,
             open_tailscale
         ])
         .build(tauri::generate_context!())

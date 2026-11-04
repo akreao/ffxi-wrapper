@@ -261,6 +261,34 @@
         <div class="copy-line" id="ts-fp-row"><code id="ts-fp-command"></code><button class="small" data-copy="ts-fp-command">Copy</button></div>
       </div>
     </section>
+
+    <section class="card group">
+      <h2>Without Tailscale: port forwarding</h2>
+      <p class="hint">Players can also connect over the internet to your network's public (WAN) address. Nothing needs installing, but your router has to forward the server's ports to this computer, and anyone on the internet can then reach them.</p>
+      <div class="setting">
+        <div class="setting-text">
+          <span class="setting-title" id="wan-state">Look up this network's public address</span>
+          <p class="hint">Looked up with an outside service (ipify, with icanhazip and Amazon as fallbacks). To use a fixed address instead, such as a dynamic DNS one's, type it in Settings.</p>
+        </div>
+        <button id="wan-lookup">Look up</button>
+        <button id="wan-use" class="primary" hidden></button>
+      </div>
+      <div class="setting stacked">
+        <div class="setting-text">
+          <span class="setting-title">On your router, forward these ports to <code id="wan-lan"></code></span>
+          <p class="hint">TCP 54001, 54002, 54230 and 54231, and UDP 54230. Look for <em>Port forwarding</em> or <em>Virtual server</em> in the router's settings, and give this computer a fixed LAN address there so the forwarding keeps pointing at it.</p>
+          <p class="hint">The game sends every player the public address, so players on your own network, and the game on this computer, only get into the world if the router supports NAT loopback (hairpin NAT). If your router's own WAN address differs from the one above, your internet provider uses CGNAT and forwarding can't work; use Tailscale instead.</p>
+        </div>
+      </div>
+      <div class="setting stacked" id="wan-fp-row" hidden>
+        <div class="setting-text">
+          <span class="setting-title">Players set <code>"server"</code> in <code>config.json</code> to the public address, and trust the certificate once</span>
+        </div>
+        <div class="copy-line"><code id="wan-fp-command"></code><button class="small" data-copy="wan-fp-command">Copy</button></div>
+      </div>
+      <p id="wan-bind-warning" class="notice" hidden></p>
+      <p id="wan-error" class="error" hidden></p>
+    </section>
   </main>
 
   <!-- Game masters -->
@@ -310,7 +338,7 @@
         <div class="setting">
           <div class="setting-text">
             <label for="address">Address players connect to</label>
-            <p class="hint">Players on other computers need this computer's LAN or VPN address. <em>Detect automatically</em> picks the LAN address again on every start.</p>
+            <p class="hint">Players on other computers need this computer's LAN or VPN address, or for players over the internet, your network's public (WAN) address. <em>Detect automatically</em> picks the address again on every start. The public address only works once your router forwards the server's ports to this computer; see Play with friends.</p>
           </div>
           <select id="address" class="setting-control"></select>
         </div>
