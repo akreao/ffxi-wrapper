@@ -3,7 +3,11 @@
 
 use std::net::{IpAddr, Ipv4Addr};
 
+use std::process::Stdio;
+
 use serde::Serialize;
+
+use crate::host;
 
 #[derive(Serialize, Clone)]
 pub struct Address {
@@ -48,6 +52,37 @@ pub fn lan_addresses() -> Vec<Address> {
 /// players at home couldn't reach it without joining the VPN.
 pub fn best_lan_ip() -> Option<String> {
     lan_addresses().into_iter().find(|a| a.vpn.is_none()).map(|a| a.ip)
+}
+
+/// Services that answer with the caller's public IPv4 address as plain
+/// text, tried in turn.
+const WAN_LOOKUPS: [&str; 3] = ["https://api.ipify.org", "https://ipv4.icanhazip.com", "https://checkip.amazonaws.com"];
+
+/// This network's public (WAN) address, as the internet sees it, asked of
+/// a lookup service with curl. Players outside the LAN reach the server on
+/// it once the router forwards the server's ports to this computer.
+pub fn wan_ip() -> Result<String, String> {
+    for url in WAN_LOOKUPS {
+        let out = host::command("curl")
+            .args(["-fsS4", "--max-time", "5", url])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output();
+        if let Some(ip) = out.ok().filter(|o| o.status.success()).and_then(|o| parse_wan(&o.stdout)) {
+            return Ok(ip);
+        }
+    }
+    Err("Couldn't look up this network's public address. Check the internet connection, or type the address in.".into())
+}
+
+/// A lookup service's answer, if it's a public IPv4 address.
+fn parse_wan(body: &[u8]) -> Option<String> {
+    let ip: Ipv4Addr = std::str::from_utf8(body).ok()?.trim().parse().ok()?;
+    let [a, b, ..] = ip.octets();
+    let shared = a == 100 && (64..128).contains(&b);
+    let public = !(ip.is_private() || ip.is_loopback() || ip.is_link_local() || ip.is_unspecified()
+        || ip.is_broadcast() || ip.is_multicast() || shared);
+    public.then(|| ip.to_string())
 }
 
 /// Checks an address typed into the picker. LSB hands it to every client
@@ -107,6 +142,15 @@ mod tests {
         assert_eq!(vpn_name("wt0", ip("100.70.1.2")), Some("NetBird"));
         assert_eq!(vpn_name("eth0", ip("192.168.1.20")), None);
         assert_eq!(vpn_name("wlan0", ip("100.128.0.1")), None);
+    }
+
+    #[test]
+    fn wan_answers() {
+        assert_eq!(parse_wan(b"203.0.113.7\n").as_deref(), Some("203.0.113.7"));
+        assert_eq!(parse_wan(b"192.168.1.20"), None);
+        assert_eq!(parse_wan(b"100.64.1.2"), None);
+        assert_eq!(parse_wan(b"<html>rate limited</html>"), None);
+        assert_eq!(parse_wan(b"2001:db8::1"), None);
     }
 
     #[test]

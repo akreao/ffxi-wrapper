@@ -9,6 +9,7 @@ const { listen } = window.__TAURI__.event;
 const $ = (id) => document.getElementById(id);
 const TYPE = "__type__";
 const AUTO = "__auto__";
+const WAN = "__wan__";
 const MAX_LINES = 5000;
 const GAME_SERVERS = ["connect", "search", "world", "map"];
 
@@ -57,8 +58,9 @@ async function copyText(text) {
 }
 
 // The address picker: detect, each address this computer has, 127.0.0.1,
-// or one typed in. `typedRow` is what shows for a typed one.
-function fillAddresses(select, typed, typedRow, current, auto) {
+// or one typed in. `typedRow` is what shows for a typed one. `mode` is
+// "lan", "wan" or "fixed"; the public (WAN) choice only shows with `wan`.
+function fillAddresses(select, typed, typedRow, current, mode, wan) {
   select.replaceChildren();
   const add = (value, text) => {
     const o = document.createElement("option");
@@ -67,6 +69,7 @@ function fillAddresses(select, typed, typedRow, current, auto) {
     select.append(o);
   };
   add(AUTO, "Detect automatically (LAN address)");
+  if (wan) add(WAN, "Detect automatically (public WAN address, needs port forwarding)");
   const known = new Set();
   for (const a of overview.addresses) {
     known.add(a.ip);
@@ -75,8 +78,10 @@ function fillAddresses(select, typed, typedRow, current, auto) {
   if (!known.has("127.0.0.1")) add("127.0.0.1", "127.0.0.1 (this computer only)");
   known.add("127.0.0.1");
   add(TYPE, "Type an address…");
-  if (auto) {
+  if (mode === "lan") {
     select.value = AUTO;
+  } else if (mode === "wan" && wan) {
+    select.value = WAN;
   } else if (known.has(current)) {
     select.value = current;
   } else {
@@ -89,7 +94,7 @@ function fillAddresses(select, typed, typedRow, current, auto) {
 
 // The picker's choice: null to detect, or an address.
 function pickedAddress(select, typed) {
-  if (select.value === AUTO) return null;
+  if (select.value === AUTO || select.value === WAN) return null;
   if (select.value === TYPE) return typed.value.trim();
   return select.value;
 }
@@ -124,7 +129,7 @@ function showSetup() {
   $("page-title").textContent = "Welcome";
   show($("setup"), true);
   $("setup-dir").value = overview.stack_dir || overview.default_stack_dir;
-  fillAddresses($("setup-address"), $("setup-address-typed"), $("setup-address-typed"), "", true);
+  fillAddresses($("setup-address"), $("setup-address-typed"), $("setup-address-typed"), "", "lan", false);
 }
 
 function showMain() {
@@ -148,10 +153,11 @@ function showMain() {
 // The bits of the overview that come from .env.
 function drawServerInfo() {
   $("brand-sub").textContent = overview.server_name || "Nameless";
-  const auto = overview.public_ip_auto;
+  const mode = overview.public_ip_mode;
   $("connect-addr").textContent = overview.public_ip || "not detected yet";
   $("connect-addr").title = overview.public_ip || "";
-  $("connect-auto").textContent = auto ? "Detected on each start" : "";
+  $("connect-auto").textContent =
+    mode === "lan" ? "Detected on each start" : mode === "wan" ? "Public address, looked up on each start" : "";
   $("stack-dir").textContent = overview.stack_dir || "";
   $("db-where").textContent =
     overview.db_data === "db-data"
@@ -160,7 +166,7 @@ function drawServerInfo() {
 }
 
 function fillServerForm() {
-  fillAddresses($("address"), $("address-typed"), $("address-typed-row"), overview.public_ip, overview.public_ip_auto);
+  fillAddresses($("address"), $("address-typed"), $("address-typed-row"), overview.public_ip, overview.public_ip_mode, true);
   $("name").value = overview.server_name;
 }
 
@@ -540,7 +546,10 @@ $("server-form").onsubmit = async (e) => {
   show($("settings-error"), false);
   show($("settings-saved"), false);
   try {
-    const a = await invoke("set_public_ip", { publicIp: pickedAddress($("address"), $("address-typed")) });
+    const a = await invoke("set_public_ip", {
+      publicIp: pickedAddress($("address"), $("address-typed")),
+      wan: $("address").value === WAN,
+    });
     const b = await invoke("set_server_name", { name: $("name").value });
     if (a || b) show($("restart-bar"), true);
     overview = await invoke("overview");
@@ -582,6 +591,7 @@ async function refreshFriends() {
 }
 
 function drawFriends() {
+  drawWan();
   const ts = friends.tailscale;
   const [title, detail] = TS_STATES[ts.state];
   const on = ts.state === "running";
@@ -627,6 +637,61 @@ function drawFriends() {
   }
   show($("ts-fp-row"), !!friends.fingerprint);
 }
+
+// Without Tailscale: the router forwards the ports and players use the
+// network's public address. Looked up only when asked, since it asks an
+// outside service.
+let wanIp = null;
+
+function drawWan() {
+  const using = friends && friends.public_ip_mode === "wan";
+  $("wan-state").textContent = using
+    ? `Players are sent to ${friends.public_ip}, the public address (looked up on each start)`
+    : wanIp
+      ? `This network's public address is ${wanIp}`
+      : "Look up this network's public address";
+  show($("wan-use"), !!wanIp && !using);
+  $("wan-use").textContent = `Use ${wanIp} (looked up on each start)`;
+  show($("wan-lookup"), !wanIp && !using);
+  $("wan-lan").textContent = (friends && friends.lan_ip) || "this computer's LAN address";
+  const bind = friends && friends.bind_ip;
+  $("wan-bind-warning").textContent = bind && friends.lan_ip && bind !== friends.lan_ip
+    ? `The server only listens on ${bind} (BIND_IP in the server folder's .env), so forwarded ports can't reach it. Leave BIND_IP empty and restart the server.`
+    : "";
+  show($("wan-bind-warning"), !!$("wan-bind-warning").textContent);
+  const ip = wanIp || (using ? friends.public_ip : "");
+  show($("wan-fp-row"), !!(ip && friends && friends.fingerprint));
+  if (ip && friends && friends.fingerprint) {
+    $("wan-fp-command").textContent = `vana-client trust-server ${ip} --port ${friends.auth_port} --fingerprint ${friends.fingerprint}`;
+  }
+}
+
+$("wan-lookup").onclick = async () => {
+  show($("wan-error"), false);
+  $("wan-lookup").disabled = true;
+  try {
+    wanIp = await invoke("wan_ip");
+    drawWan();
+  } catch (e) {
+    $("wan-error").textContent = message(e);
+    show($("wan-error"), true);
+  } finally {
+    $("wan-lookup").disabled = false;
+  }
+};
+$("wan-use").onclick = async () => {
+  show($("wan-error"), false);
+  try {
+    if (await invoke("set_public_ip", { publicIp: null, wan: true })) show($("restart-bar"), true);
+    overview = await invoke("overview");
+    drawServerInfo();
+    fillServerForm();
+    await refreshFriends();
+  } catch (e) {
+    $("wan-error").textContent = message(e);
+    show($("wan-error"), true);
+  }
+};
 
 $("ts-refresh").onclick = refreshFriends;
 $("ts-use").onclick = async () => {
