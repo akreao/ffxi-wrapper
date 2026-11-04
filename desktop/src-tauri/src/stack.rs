@@ -18,6 +18,31 @@ pub const PROJECT: &str = "ffxi-wrapper";
 /// The settings template, compiled in: Tauri's resource bundling skips dotfiles.
 pub const ENV_EXAMPLE: &str = include_str!("../../../.env.example");
 
+/// Every `LSB_COMMIT` an app version has pinned. Setup used to copy the pin
+/// into `.env`, where it then stayed through app updates; a `.env` still
+/// holding one of these follows the app's pin instead. Add the old pin here
+/// whenever it moves. A commit someone typed in themselves is left alone.
+const APP_LSB_PINS: [&str; 4] = [
+    "6cc5715c79331addb38e2bd20445d1b3d3e48504",
+    "226b3b7b699fee9daa8ec70d88b7b0834ef0f7ef",
+    "6c02b556f1ce1a8d0acf38e14cb7be6ddadb9988",
+    "e87cb4905e471dc44a7dd5dbf99742617d3fa2b4",
+];
+
+/// Empties a `LSB_COMMIT` in `env` that an older setup copied from the app's
+/// pin, so compose.yaml's default (this app version's pin) applies. Returns
+/// whether it changed anything.
+pub fn follow_lsb_pin(env: &mut crate::envfile::EnvFile) -> bool {
+    let pinned = env.get("LSB_COMMIT").is_some_and(|c| {
+        APP_LSB_PINS.contains(&c.as_str())
+            || crate::envfile::EnvFile::parse(ENV_EXAMPLE).get("LSB_COMMIT").as_deref() == Some(c.as_str())
+    });
+    if pinned {
+        env.set("LSB_COMMIT", "");
+    }
+    pinned
+}
+
 /// The LSB services, which read `overrides/settings/`.
 pub const GAME_SERVERS: [&str; 4] = ["connect", "search", "world", "map"];
 
@@ -471,6 +496,23 @@ mod tests {
         assert_eq!(read("overrides/settings/map.lua"), "mine");
         assert_eq!(read("data/dbtool/config.yaml"), "state");
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn old_app_pins_follow_the_current_one() {
+        use crate::envfile::EnvFile;
+        let current = EnvFile::parse(ENV_EXAMPLE).get("LSB_COMMIT").unwrap();
+        assert!(APP_LSB_PINS.contains(&current.as_str()), "add the new LSB pin to APP_LSB_PINS");
+        for pin in [APP_LSB_PINS[1], current.as_str()] {
+            let mut env = EnvFile::parse(&format!("LSB_COMMIT={pin}"));
+            assert!(follow_lsb_pin(&mut env));
+            assert_eq!(env.get("LSB_COMMIT").as_deref(), Some(""));
+        }
+        for own in ["", "0123456789abcdef0123456789abcdef01234567"] {
+            let mut env = EnvFile::parse(&format!("LSB_COMMIT={own}"));
+            assert!(!follow_lsb_pin(&mut env));
+            assert_eq!(env.get("LSB_COMMIT").as_deref(), Some(own));
+        }
     }
 
     #[test]

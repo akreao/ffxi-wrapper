@@ -38,7 +38,7 @@ The client creates its account on the login screen (LSB's `ACCOUNT_CREATION` is 
 
 The [`LSB server image`](.github/workflows/lsb-image.yml) workflow compiles LandSandBoat from `LSB_REPO` at the `LSB_COMMIT` pinned in `.env.example` and publishes it as `ghcr.io/akreao/ffxi-wrapper/lsb:<commit>` (and `:latest`), for linux/amd64. It runs when that pin changes on `main`, and by hand from the Actions tab, where it can also build any other commit. A commit that's already published isn't built again.
 
-To move the server to a newer LSB commit, change `LSB_COMMIT` in both `.env.example` and `compose.yaml` (its default) and merge; once the workflow has published the image, `docker compose up -d` pulls it and recreates the servers.
+To move the server to a newer LSB commit, change `LSB_COMMIT` in both `.env.example` and `compose.yaml` (its default), add the new commit to `APP_LSB_PINS` in `desktop/src-tauri/src/stack.rs` (a test fails until you do), and merge. The app leaves `LSB_COMMIT` empty in its `.env`, so it always uses the pin it shipped with; once the workflow has published the image, `docker compose up -d` pulls it and recreates the servers.
 
 To compile on this computer anyway, run `docker compose build db-init` (or `docker compose up -d --build`).
 
