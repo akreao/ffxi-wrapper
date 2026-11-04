@@ -170,6 +170,8 @@ fn write_env(dir: &Path, path: &Path, public_ip: Option<String>, server_name: &s
     // Empty follows the client main pins (or this app version's, offline),
     // so moving the pin moves the client along.
     env.set("CLIENT_COMMIT", "");
+    // The same for the server: empty uses compose.yaml's pin.
+    env.set("LSB_COMMIT", "");
     apply_public_ip(&mut env, public_ip);
     env.save().map_err(|e| e.to_string())
 }
@@ -620,6 +622,12 @@ pub fn run() {
                         if let Err(e) = stack::install(&bundled, dir) {
                             eprintln!("Couldn't update the server's files in {}: {e}", dir.display());
                         }
+                        let env = dir.join(".env");
+                        if env.exists() {
+                            if let Err(e) = envfile::edit(&env, |env| Ok(stack::follow_lsb_pin(env))) {
+                                eprintln!("Couldn't update LSB_COMMIT in {}: {e}", env.display());
+                            }
+                        }
                     }
                     dir
                 }
@@ -706,7 +714,7 @@ mod tests {
         assert_eq!(env.get("DB_DATA").as_deref(), Some(stack::db_location(&dir)));
         // Everything else comes from .env.example.
         assert_eq!(env.get("DATA_DIR").as_deref(), Some("./data"));
-        assert!(env.get("LSB_COMMIT").is_some_and(|c| c.len() == 40));
+        assert_eq!(env.get("LSB_COMMIT").as_deref(), Some(""));
         assert_eq!(env.get("CLIENT_COMMIT").as_deref(), Some(""));
         std::fs::remove_dir_all(dir).unwrap();
     }
