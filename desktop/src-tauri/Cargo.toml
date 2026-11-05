@@ -1,6 +1,6 @@
 [package]
 name = "ffxi-wrapper"
-version = "0.1.0"
+version = "1.0.0"
 description = "Runs a private LandSandBoat (Final Fantasy XI) server and its database"
 edition = "2021"
 publish = false
