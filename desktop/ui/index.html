@@ -20,7 +20,7 @@
     <div class="nav-group">
       <div class="nav-heading">Server</div>
       <button id="nav-overview" class="nav-item"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg><span>Overview</span></button>
-      <button id="nav-game" class="nav-item"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></svg><span>Game rules</span></button>
+      <button id="nav-game" class="nav-item"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></svg><span>Server settings</span></button>
       <button id="nav-gm" class="nav-item"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8l4.5 3.5L12 5l4.5 6.5L21 8l-2 10H5z"/><path d="M5 21h14"/></svg><span>Game masters</span></button>
     </div>
     <div class="nav-group">
@@ -136,16 +136,28 @@
     </div>
   </main>
 
-  <!-- Game rules: LandSandBoat settings the app writes to zz_app.lua -->
+  <!-- Server settings: an editor for LandSandBoat's settings, which the app writes to zz_app.lua -->
   <main id="game-page" class="page" hidden>
-    <div class="toolbar">
-      <button id="game-save" class="primary">Save</button>
-      <button id="game-reset" title="Put every value back to LandSandBoat's default">Defaults</button>
+    <div class="editor">
+      <nav class="editor-nav card" aria-label="Server settings sections">
+        <input id="game-search" type="search" placeholder="Search settings" aria-label="Search settings" autocomplete="off" spellcheck="false">
+        <label class="editor-filter"><input id="game-changed-only" type="checkbox" class="switch"> Changed only</label>
+        <ul id="game-sections"></ul>
+        <p class="hint">Saved to <code>overrides/settings/zz_app.lua</code>, which wins over the same settings in your own files there.</p>
+      </nav>
+      <div id="game-scroll" class="editor-main">
+        <div id="game-form"></div>
+        <p id="game-empty" class="hint" hidden>No settings match.</p>
+      </div>
+    </div>
+    <div class="editor-bar">
+      <span id="game-status" class="editor-status"></span>
       <span id="game-saved" class="hint" hidden>Saved.</span>
       <span id="game-error" class="error" hidden></span>
+      <button id="game-reset" title="Put every value back to LandSandBoat's default (not saved until you press Save)">All defaults</button>
+      <button id="game-discard" disabled>Discard</button>
+      <button id="game-save" class="primary" disabled>Save</button>
     </div>
-    <p class="hint">Changed values are highlighted. They're saved to <code>overrides/settings/zz_app.lua</code>, which wins over the same settings in your own files there. A running server needs a restart to use them.</p>
-    <div id="game-form"></div>
   </main>
 
   <!-- Game client: vana-client and the game data -->

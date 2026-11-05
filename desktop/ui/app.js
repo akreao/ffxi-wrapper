@@ -1,5 +1,5 @@
 // The app's one window: first-run setup, then a sidebar of screens:
-// Overview (status, services, the Activity and log panes), Game rules,
+// Overview (status, services, the Activity and log panes), Server settings,
 // Game client, Play with friends, Backups and Settings. The header's Start, Stop and the
 // More menu work from every screen.
 
@@ -174,7 +174,7 @@ function fillServerForm() {
 
 const NAV = {
   overview: ["nav-overview", "overview-page", "Overview"],
-  game: ["nav-game", "game-page", "Game rules"],
+  game: ["nav-game", "game-page", "Server settings"],
   gm: ["nav-gm", "gm-page", "Game masters"],
   client: ["nav-client", "client-page", "Game client"],
   friends: ["nav-friends", "friends-page", "Play with friends"],
@@ -206,7 +206,6 @@ function showPage(next) {
     show($("settings-error"), false);
     fillServerForm();
   }
-  if (next === "game") show($("game-saved"), false);
 }
 
 for (const [name, [nav]] of Object.entries(NAV)) $(nav).onclick = () => showPage(name);
@@ -841,7 +840,7 @@ async function restoreBackup(backup) {
 $("backup-now").onclick = () => runTask("backup");
 $("open-backups").onclick = () => invoke("open_backups").catch((e) => alert(message(e)));
 
-// ---------- settings forms: Game rules and the client's settings ----------
+// ---------- settings form: the client's settings ----------
 
 // One form: `get` and `set` are its load and save commands. Each setting is
 // `file.key`, with one card per group and one row per setting.
@@ -972,17 +971,359 @@ function settingsForm(prefix, get, set, onSaved) {
   return { load };
 }
 
-const gameRules = settingsForm("game", "game_settings", "set_game_settings", (restart) => {
-  if (restart) show($("restart-bar"), true);
-  return restart ? "Saved. Restart the server to use them." : "Saved.";
-});
-const loadGameSettings = gameRules.load;
 
 const clientSettings = settingsForm("client-cfg", "client_settings", "set_client_settings", () => "Saved. The game uses them the next time it starts.");
 async function loadClientSettings() {
   const data = await clientSettings.load();
   if (data) $("client-cfg-path").textContent = data.path;
 }
+
+// ---------- Server settings: the editor for LandSandBoat's settings ----------
+
+// Sections down the left, search and a changed-only filter, and each setting
+// as a control that shows its value: a switch, a slider with a box, a row of
+// choices or a list. Unsaved edits are kept until Save or Discard.
+const serverEditor = (() => {
+  const form = $("game-form");
+  const scroller = $("game-scroll");
+  const sectionList = $("game-sections");
+  const search = $("game-search");
+  const changedOnly = $("game-changed-only");
+  const statusEl = $("game-status");
+  const errorEl = $("game-error");
+  const savedEl = $("game-saved");
+  let data = null;
+  let saved = {};
+  let current = {};
+  let rows = [];
+  let sections = [];
+
+  const id = (s) => `${s.file}.${s.key}`;
+  const slug = (group) => "game-sec-" + group.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+
+  function fmt(s, v) {
+    if (s.type === "bool" || s.type === "switch") return v === 1 ? "On" : "Off";
+    if (s.type === "choice") return (s.options.find(([o]) => o === v) || [v, String(v)])[1];
+    const n = Number.isInteger(v) ? v.toLocaleString("en-GB") : String(v);
+    return s.unit === "×" ? `${n}×` : s.unit ? `${n} ${s.unit}` : n;
+  }
+
+  function stepOf(s) {
+    if (s.whole) return 1;
+    const span = (s.slider || s.max) - s.min;
+    return span <= 2 ? 0.01 : span <= 20 ? 0.05 : 0.5;
+  }
+
+  // One control: { el, get, set, input }.
+  function control(s, onChange) {
+    if (s.type === "bool" || s.type === "switch") {
+      const wrap = document.createElement("label");
+      wrap.className = "editor-toggle";
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.className = "switch";
+      const word = document.createElement("span");
+      wrap.append(box, word);
+      const sync = () => (word.textContent = box.checked ? "On" : "Off");
+      box.addEventListener("change", () => {
+        sync();
+        onChange();
+      });
+      return {
+        el: wrap,
+        input: box,
+        get: () => (box.checked ? 1 : 0),
+        set: (v) => {
+          box.checked = v === 1;
+          sync();
+        },
+      };
+    }
+    if (s.type === "choice" && s.options.length <= 3 && s.options.reduce((n, [, t]) => n + t.length, 0) <= 30) {
+      const group = document.createElement("div");
+      group.className = "segmented";
+      group.setAttribute("role", "radiogroup");
+      let value = null;
+      const buttons = s.options.map(([v, text]) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.textContent = text;
+        b.setAttribute("role", "radio");
+        b.onclick = () => {
+          set(v);
+          onChange();
+        };
+        group.append(b);
+        return [v, b];
+      });
+      function set(v) {
+        value = v;
+        for (const [o, b] of buttons) {
+          b.classList.toggle("on", o === v);
+          b.setAttribute("aria-checked", o === v ? "true" : "false");
+        }
+      }
+      return { el: group, input: buttons[0][1], get: () => value, set };
+    }
+    if (s.type === "choice") {
+      const select = document.createElement("select");
+      for (const [v, t] of s.options) {
+        const o = document.createElement("option");
+        o.value = v;
+        o.textContent = t;
+        select.append(o);
+      }
+      select.addEventListener("change", onChange);
+      return { el: select, input: select, get: () => Number(select.value), set: (v) => (select.value = v) };
+    }
+    const wrap = document.createElement("div");
+    wrap.className = "editor-number";
+    const box = document.createElement("input");
+    box.type = "number";
+    box.min = s.min;
+    box.max = s.max;
+    box.step = s.whole ? 1 : "any";
+    let range = null;
+    if (s.slider > s.min) {
+      range = document.createElement("input");
+      range.type = "range";
+      range.min = s.min;
+      range.max = s.slider;
+      range.step = stepOf(s);
+      range.tabIndex = -1;
+      range.setAttribute("aria-hidden", "true");
+      range.addEventListener("input", () => {
+        box.value = Number(range.value);
+        onChange();
+      });
+      wrap.append(range);
+    }
+    box.addEventListener("input", () => {
+      if (range && box.value.trim() !== "") range.value = Math.min(Number(box.value), s.slider);
+      onChange();
+    });
+    wrap.append(box);
+    const unit = document.createElement("span");
+    unit.className = "unit";
+    unit.textContent = s.unit;
+    wrap.append(unit);
+    return {
+      el: wrap,
+      input: box,
+      get: () => (box.value.trim() === "" ? NaN : Number(box.value)),
+      set: (v) => {
+        box.value = v;
+        if (range) range.value = Math.min(v, s.slider);
+      },
+    };
+  }
+
+  function mark(row) {
+    const v = row.ctl.get();
+    current[row.id] = v;
+    const changed = v !== row.s.default;
+    row.el.classList.toggle("changed", changed);
+    row.el.classList.toggle("dirty", v !== saved[row.id]);
+    row.reset.classList.toggle("idle", !changed);
+    row.reset.tabIndex = changed ? 0 : -1;
+  }
+
+  function counts() {
+    const changed = rows.filter((r) => current[r.id] !== r.s.default).length;
+    const dirty = rows.filter((r) => current[r.id] !== saved[r.id]).length;
+    statusEl.textContent =
+      (dirty ? `${dirty} unsaved ${dirty === 1 ? "change" : "changes"} · ` : "") +
+      `${changed} of ${rows.length} settings differ from LandSandBoat's defaults`;
+    statusEl.classList.toggle("dirty", dirty > 0);
+    $("game-save").disabled = dirty === 0;
+    $("game-discard").disabled = dirty === 0;
+    for (const sec of sections) {
+      const n = sec.rows.filter((r) => current[r.id] !== r.s.default).length;
+      sec.badge.textContent = n || "";
+      sec.badge.hidden = n === 0;
+    }
+  }
+
+  function edited() {
+    show(savedEl, false);
+    show(errorEl, false);
+    counts();
+    if (changedOnly.checked) filter();
+  }
+
+  function draw() {
+    form.replaceChildren();
+    sectionList.replaceChildren();
+    rows = [];
+    sections = [];
+    let sec = null;
+    for (const s of data.settings) {
+      if (!sec || sec.group !== s.group) {
+        const card = document.createElement("section");
+        card.className = "card group";
+        card.id = slug(s.group);
+        const h = document.createElement("h2");
+        h.textContent = s.group;
+        card.append(h);
+        form.append(card);
+        const li = document.createElement("li");
+        const b = document.createElement("button");
+        b.type = "button";
+        const name = document.createElement("span");
+        name.textContent = s.group;
+        const badge = document.createElement("span");
+        badge.className = "badge";
+        badge.title = "Changed from the default";
+        b.append(name, badge);
+        li.append(b);
+        sectionList.append(li);
+        sec = { group: s.group, card, li, button: b, badge, rows: [] };
+        b.onclick = () => {
+          const top = scroller.scrollTop + card.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+          scroller.scrollTo({ top, behavior: "smooth" });
+          activate(sec.group);
+        };
+        sections.push(sec);
+      }
+      const el = document.createElement("div");
+      el.className = "setting";
+      const text = document.createElement("div");
+      text.className = "setting-text";
+      const label = document.createElement("label");
+      label.textContent = s.label;
+      text.append(label);
+      if (s.hint) {
+        const hint = document.createElement("p");
+        hint.className = "hint";
+        hint.textContent = s.hint;
+        text.append(hint);
+      }
+      const meta = document.createElement("p");
+      meta.className = "editor-meta";
+      const key = document.createElement("code");
+      key.textContent = `${s.file}.lua · ${s.key}`;
+      meta.append(`Default: ${fmt(s, s.default)} `, key);
+      text.append(meta);
+
+      const row = { s, id: id(s), el, text: `${s.label} ${s.hint} ${s.key} ${s.group}`.toLowerCase() };
+      row.ctl = control(s, () => {
+        mark(row);
+        edited();
+      });
+      row.ctl.input.id = `game-${row.id}`.replace(".", "-");
+      label.htmlFor = row.ctl.input.id;
+      const reset = document.createElement("button");
+      reset.type = "button";
+      reset.className = "icon-button small editor-reset";
+      reset.title = `Back to the default (${fmt(s, s.default)})`;
+      reset.setAttribute("aria-label", reset.title);
+      reset.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.3-5.6M4 4v5h5"/></svg>';
+      reset.onclick = () => {
+        row.ctl.set(s.default);
+        mark(row);
+        edited();
+      };
+      row.reset = reset;
+      const side = document.createElement("div");
+      side.className = "editor-control";
+      side.append(row.ctl.el, reset);
+      el.append(text, side);
+      sec.card.append(el);
+      sec.rows.push(row);
+      rows.push(row);
+      row.ctl.set(current[row.id]);
+      mark(row);
+    }
+    filter();
+    counts();
+    activate(sections[0] && sections[0].group);
+  }
+
+  function filter() {
+    const words = search.value.toLowerCase().split(/\s+/).filter(Boolean);
+    let any = false;
+    for (const sec of sections) {
+      let shown = 0;
+      for (const r of sec.rows) {
+        const on =
+          words.every((w) => r.text.includes(w)) && (!changedOnly.checked || current[r.id] !== r.s.default);
+        show(r.el, on);
+        if (on) shown++;
+      }
+      show(sec.card, shown > 0);
+      sec.button.disabled = shown === 0;
+      any ||= shown > 0;
+    }
+    show($("game-empty"), !any);
+  }
+
+  function activate(group) {
+    for (const sec of sections) sec.button.classList.toggle("active", sec.group === group);
+  }
+
+  scroller.addEventListener("scroll", () => {
+    const top = scroller.getBoundingClientRect().top + 24;
+    let at = null;
+    for (const sec of sections) if (!sec.card.hidden && sec.card.getBoundingClientRect().top <= top) at = sec.group;
+    const first = sections.find((s) => !s.card.hidden);
+    activate(at || (first && first.group));
+  });
+  search.addEventListener("input", filter);
+  changedOnly.addEventListener("change", filter);
+
+  function setAll(values) {
+    for (const r of rows) {
+      r.ctl.set(values[r.id]);
+      mark(r);
+    }
+    edited();
+  }
+
+  async function load() {
+    try {
+      data = await invoke("game_settings");
+    } catch (e) {
+      errorEl.textContent = message(e);
+      show(errorEl, true);
+      return null;
+    }
+    saved = { ...data.values };
+    current = { ...data.values };
+    show(errorEl, false);
+    draw();
+    return data;
+  }
+
+  $("game-save").onclick = async () => {
+    if (!data) return;
+    show(savedEl, false);
+    const bad = rows.find((r) => Number.isNaN(current[r.id]));
+    if (bad) {
+      errorEl.textContent = `${bad.s.label} needs a value.`;
+      show(errorEl, true);
+      bad.ctl.input.focus();
+      return;
+    }
+    try {
+      const restart = await invoke("set_game_settings", { values: current });
+      await load();
+      if (restart) show($("restart-bar"), true);
+      savedEl.textContent = restart ? "Saved. Restart the server to use them." : "Saved.";
+      show(savedEl, true);
+    } catch (e) {
+      errorEl.textContent = message(e);
+      show(errorEl, true);
+    }
+  };
+  $("game-discard").onclick = () => setAll(saved);
+  $("game-reset").onclick = () => {
+    if (!data) return;
+    setAll(Object.fromEntries(rows.map((r) => [r.id, r.s.default])));
+  };
+
+  return { load };
+})();
+const loadGameSettings = serverEditor.load;
 
 // ---------- tray ----------
 
