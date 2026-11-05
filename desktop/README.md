@@ -38,3 +38,20 @@ cargo tauri build --bundles appimage   # or: --bundles nsis on Windows
 `FFXI_WRAPPER_STACK_DIR=/path/to/clone cargo tauri dev` runs the app on a stack folder as it is, such as a clone of this repository.
 
 The [Desktop app workflow](../.github/workflows/desktop.yml) runs the tests and builds the AppImage and the Windows installer on every pull request that touches the app or the stack, and keeps them as workflow artifacts for 14 days.
+
+## Releases and updates
+
+The app updates itself (Settings > App > Updates, and a bar at the top when a new version is out). It reads `latest.json` from the newest release of this repository and installs a version only if its file is signed with the updater key and the signature names that version. The AppImage replaces itself and restarts; on Windows the new installer runs and opens the app again. A copy run any other way (not as the AppImage, or a build without the key) says so instead.
+
+To publish a version:
+
+1. Set the same `version` in `src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml` (and `Cargo.lock`), and optionally write `release-notes/vX.Y.Z.md`. Merge that.
+2. Push the tag: `git tag vX.Y.Z && git push origin vX.Y.Z`. The [Release workflow](../.github/workflows/release.yml) builds and signs both, and publishes them with `latest.json` and `.sha256` files.
+
+The updater key is set up once:
+
+```sh
+cargo tauri signer generate -w ~/.tauri/ffxi-wrapper-updater.key
+```
+
+Put the public key it prints in `plugins.updater.pubkey` in `src-tauri/tauri.conf.json`, and the private key file's contents and its password in the repository secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Keep the key file: a lost key means every installed copy has to be updated by hand once.

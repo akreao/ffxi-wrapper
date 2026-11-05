@@ -1331,6 +1331,89 @@ listen("tray", (event) => {
   if (!task) runTask(event.payload);
 });
 
+// ---------- app updates ----------
+
+// Settings > App > Updates, and the bar that offers a new version. Checking
+// only looks; nothing installs until Install and restart.
+const appUpdate = (() => {
+  const AUTO_KEY = "check-updates";
+  let busy = false;
+
+  function status(text) {
+    $("app-update-status").textContent = text || "";
+    show($("app-update-status"), !!text);
+  }
+
+  function offer(info) {
+    $("app-update-version").textContent = info.version;
+    show($("app-update-bar"), true);
+    status(`Version ${info.version} is available.`);
+    $("app-update-notes").textContent = info.notes || "";
+    show($("app-update-notes"), !!info.notes);
+  }
+
+  async function check(quiet) {
+    if (busy) return;
+    busy = true;
+    $("app-update-check").disabled = true;
+    if (!quiet) status("Checking...");
+    try {
+      const info = await invoke("check_update");
+      $("app-version").textContent = info.current;
+      if (info.version) offer(info);
+      else {
+        show($("app-update-bar"), false);
+        status(quiet ? "" : "This is the newest version.");
+      }
+    } catch (err) {
+      if (!quiet) status(message(err));
+    } finally {
+      busy = false;
+      $("app-update-check").disabled = false;
+    }
+  }
+
+  async function install() {
+    if (busy) return;
+    busy = true;
+    $("app-update-install").disabled = true;
+    $("app-update-check").disabled = true;
+    status("Downloading...");
+    try {
+      // On success the app restarts, so this doesn't return.
+      await invoke("install_update");
+    } catch (err) {
+      status(message(err));
+      $("app-update-bar").querySelector("p").textContent = message(err);
+      busy = false;
+      $("app-update-install").disabled = false;
+      $("app-update-check").disabled = false;
+    }
+  }
+
+  listen("update-progress", (event) => {
+    const { done, total } = event.payload;
+    const text = total ? `Downloading... ${Math.floor((done / total) * 100)}%` : `Downloading... ${size(done)}`;
+    status(text);
+    $("app-update-install").textContent = text;
+  });
+
+  let auto = true;
+  try {
+    auto = localStorage.getItem(AUTO_KEY) !== "off";
+  } catch {}
+  $("app-update-auto").checked = auto;
+  $("app-update-auto").onchange = () => {
+    try {
+      localStorage.setItem(AUTO_KEY, $("app-update-auto").checked ? "on" : "off");
+    } catch {}
+  };
+  $("app-update-check").onclick = () => check(false);
+  $("app-update-install").onclick = install;
+  if (window.__TAURI__.app) window.__TAURI__.app.getVersion().then((v) => ($("app-version").textContent = v));
+  if (auto) check(true);
+})();
+
 // ---------- start ----------
 
 refresh();

@@ -11,6 +11,7 @@ mod stack;
 mod tailscale;
 mod task;
 mod tray;
+mod update;
 
 use std::path::{Path, PathBuf};
 use std::process::Child;
@@ -660,6 +661,7 @@ pub fn run() {
         // app again brings this window forward instead.
         .plugin(tauri_plugin_single_instance::init(|handle, _, _| tray::show_main(handle)))
         .plugin(tauri_plugin_dialog::init())
+        .plugin(update::plugin())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
             let data_dir = app.path().app_data_dir()?;
@@ -699,6 +701,7 @@ pub fn run() {
                 logs_generation: AtomicU64::new(0),
                 latest_pin: Mutex::new(None),
             });
+            update::manage(app);
             Ok(())
         })
         // Closing the window leaves the app in the tray, when there is one.
@@ -732,7 +735,9 @@ pub fn run() {
             open_stack_dir,
             friends,
             wan_ip,
-            open_tailscale
+            open_tailscale,
+            update::check_update,
+            update::install_update
         ])
         .build(tauri::generate_context!())
         .expect("error while building the app")

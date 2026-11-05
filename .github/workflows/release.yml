@@ -1,0 +1,160 @@
+# Publishes a version of the desktop app as a GitHub release, which the app's
+# updater finds (Settings > App > Updates). Push a tag vX.Y.Z on a commit
+# whose desktop/src-tauri/tauri.conf.json and Cargo.toml say X.Y.Z.
+#
+# The AppImage and the Windows installer are signed with the updater key
+# (secrets TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD;
+# its public half is plugins.updater.pubkey in tauri.conf.json). The release
+# gets latest.json, which points the updater at both, and a .sha256 per file.
+# Release notes come from desktop/release-notes/vX.Y.Z.md when there is one.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+
+jobs:
+  check:
+    name: Version and key
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: version
+        name: The tag matches the app's version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          conf=$(jq -r .version desktop/src-tauri/tauri.conf.json)
+          cargo=$(sed -n 's/^version = "\(.*\)"$/\1/p' desktop/src-tauri/Cargo.toml | head -1)
+          if [ "v$conf" != "$TAG" ] || [ "$conf" != "$cargo" ]; then
+            echo "::error::Tag $TAG, tauri.conf.json $conf and Cargo.toml $cargo must name the same version."
+            exit 1
+          fi
+          echo "version=$conf" >> "$GITHUB_OUTPUT"
+      - name: The updater key is set up
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$(jq -r .plugins.updater.pubkey desktop/src-tauri/tauri.conf.json)" ]; then
+            echo "::error::plugins.updater.pubkey in tauri.conf.json is empty."
+            exit 1
+          fi
+          if [ -z "$KEY" ]; then
+            echo "::error::The TAURI_SIGNING_PRIVATE_KEY secret isn't set."
+            exit 1
+          fi
+
+  appimage:
+    name: AppImage
+    needs: check
+    # The oldest supported Ubuntu, as in the Desktop app workflow.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Tauri's system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev file
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
+        with:
+          toolchain: stable
+      - name: Tauri's CLI
+        run: cargo install tauri-cli --version "=2.12.3" --locked
+      - name: Build and sign the AppImage
+        working-directory: desktop/src-tauri
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: cargo tauri build --bundles appimage --config tauri.release.conf.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: appimage
+          path: |
+            desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+            desktop/src-tauri/target/release/bundle/appimage/*.AppImage.sig
+          if-no-files-found: error
+
+  windows:
+    name: Windows installer
+    needs: check
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
+        with:
+          toolchain: stable
+      - name: Tauri's CLI
+        run: cargo install tauri-cli --version "=2.12.3" --locked
+      - name: Build and sign the installer
+        working-directory: desktop/src-tauri
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: cargo tauri build --bundles nsis --config tauri.release.conf.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows
+          path: |
+            desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
+            desktop/src-tauri/target/release/bundle/nsis/*-setup.exe.sig
+          if-no-files-found: error
+
+  publish:
+    name: Publish
+    needs: [check, appimage, windows]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@v8
+        with:
+          path: assets
+          merge-multiple: true
+      - name: latest.json and checksums
+        working-directory: assets
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          appimage=$(ls ./*.AppImage)
+          setup=$(ls ./*-setup.exe)
+          appimage=${appimage#./}
+          setup=${setup#./}
+          # The app only installs a file whose signature names its version.
+          for sig in "$appimage.sig" "$setup.sig"; do
+            base64 -d "$sig" | grep '^trusted comment:' | tr '\t' '\n' | grep -qxF "version:$VERSION" || { echo "::error::$sig doesn't name version $VERSION."; exit 1; }
+          done
+          notes_file="../desktop/release-notes/$TAG.md"
+          notes=""
+          [ -f "$notes_file" ] && notes=$(cat "$notes_file")
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
+          jq -n \
+            --arg version "$VERSION" \
+            --arg notes "$notes" \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg linux_url "$base/$appimage" --rawfile linux_sig "$appimage.sig" \
+            --arg win_url "$base/$setup" --rawfile win_sig "$setup.sig" \
+            '{version: $version, notes: $notes, pub_date: $date, platforms: {
+               "linux-x86_64": {url: $linux_url, signature: ($linux_sig | gsub("\\s"; ""))},
+               "windows-x86_64": {url: $win_url, signature: ($win_sig | gsub("\\s"; ""))}}}' > latest.json
+          cat latest.json
+          for f in "$appimage" "$setup"; do sha256sum "$f" > "$f.sha256"; done
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          notes=(--generate-notes)
+          [ -f "desktop/release-notes/$TAG.md" ] && notes=(--notes-file "desktop/release-notes/$TAG.md")
+          gh release create "$TAG" assets/* --repo "$GITHUB_REPOSITORY" --verify-tag --latest \
+            --title "FFXI Wrapper $VERSION" "${notes[@]}"

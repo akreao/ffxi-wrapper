@@ -903,3 +903,12 @@ details.help-row:not([open]) { gap: 0; }
   .editor { grid-template-columns: 190px minmax(0, 1fr); }
   .editor-control { width: 280px; }
 }
+
+.update-notes {
+  margin: 6px 0 0;
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font: inherit;
+  font-size: 12.5px;
+}
