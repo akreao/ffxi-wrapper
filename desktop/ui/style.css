@@ -766,16 +766,78 @@ label[hidden] { display: none; }
   overflow-wrap: anywhere;
 }
 
-/* Game rules: one card per group, each value on its own row. */
-#game-form, #client-cfg-form { display: flex; flex-direction: column; gap: 16px; }
-#game-form .setting .setting-control, #client-cfg-form .setting .setting-control { width: 200px; }
+/* The client's settings: one card per group, each value on its own row. */
+#client-cfg-form { display: flex; flex-direction: column; gap: 16px; }
+#client-cfg-form .setting .setting-control { width: 200px; }
 /* A changed value: a blue wash and a blue label, like the Modern UI's picked rows. */
-#game-form .setting.changed, #client-cfg-form .setting.changed {
+#client-cfg-form .setting.changed, #game-form .setting.changed {
   background: linear-gradient(90deg, color-mix(in srgb, var(--focus) 16%, transparent), color-mix(in srgb, var(--focus) 4%, transparent));
   box-shadow: inset 3px 0 0 var(--focus);
   border-radius: 2px;
 }
-#game-form .setting.changed label, #client-cfg-form .setting.changed label { color: var(--accent); }
+#client-cfg-form .setting.changed label, #game-form .setting.changed label { color: var(--accent); }
+
+/* Server settings: sections on the left, the settings scrolling on the
+   right, and a bar along the bottom with Save. */
+#game-page { overflow: hidden; gap: 12px; }
+#game-page > * { max-width: 1180px; }
+.editor { flex: 1; min-height: 0; display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 16px; }
+.editor-nav { display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow: auto; padding: 12px; }
+.editor-nav input[type="search"] { margin: 0; }
+.editor-filter { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--label); cursor: pointer; }
+.editor-nav ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.editor-nav li button {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%; min-height: 30px; padding: 5px 10px;
+  border: 1px solid transparent; border-radius: 4px;
+  background: none; box-shadow: none; color: var(--text);
+  font-weight: 500; text-align: left; text-shadow: none;
+}
+.editor-nav li button:hover:not(:disabled) { background: var(--picked); }
+.editor-nav li button.active { background: var(--picked); border-color: color-mix(in srgb, var(--focus) 55%, transparent); color: var(--accent); }
+.editor-nav li button:disabled { opacity: .4; }
+.editor-nav .badge {
+  min-width: 20px; padding: 1px 6px; border-radius: 10px;
+  background: var(--grad-blue); color: #fff; font-size: 11.5px; font-weight: 600; text-align: center;
+}
+.editor-nav .badge[hidden] { display: none; }
+.editor-nav > .hint { margin: auto 0 0; font-size: 12px; overflow-wrap: anywhere; }
+.editor-main { min-height: 0; overflow: auto; padding-right: 4px; }
+#game-form { display: flex; flex-direction: column; gap: 16px; }
+#game-form .card[hidden] { display: none; }
+#game-form .setting { gap: 24px; }
+.editor-meta { margin: 4px 0 0; font-size: 11.5px; color: var(--muted); }
+.editor-meta code { margin-left: 6px; font: 11px "JetBrains Mono", ui-monospace, monospace; opacity: .8; }
+.editor-control { flex: none; width: 330px; display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.editor-control > :first-child { flex: 1; min-width: 0; }
+.editor-reset.idle { visibility: hidden; }
+.editor-reset svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.editor-toggle { display: flex; align-items: center; justify-content: flex-end; gap: 10px; font-size: 13px; color: var(--muted); cursor: pointer; }
+.editor-toggle span { width: 54px; }
+.editor-number { display: flex; align-items: center; gap: 10px; }
+.editor-number input[type="number"] { width: 96px; flex: none; margin: 0; text-align: right; }
+.editor-number input[type="range"] { flex: 1; min-width: 0; margin: 0; padding: 0; border: 0; box-shadow: none; background: none; accent-color: var(--accent); }
+.editor-number .unit { flex: none; width: 44px; font-size: 12.5px; color: var(--muted); }
+.editor-control select { margin: 0; }
+.segmented { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0; }
+.segmented button {
+  flex: 1 1 auto; min-height: 30px; padding: 4px 10px; margin-left: -1px;
+  border-radius: 0; font-size: 12.5px; font-weight: 500;
+}
+.segmented button:first-child { border-radius: 4px 0 0 4px; margin-left: 0; }
+.segmented button:last-child { border-radius: 0 4px 4px 0; }
+.segmented button.on { background: var(--ticks), var(--grad-blue); color: #fff; text-shadow: 0 1px 1px rgb(0 0 0 / 65%); position: relative; }
+/* An edit not saved yet: a gold mark on the left. */
+#game-form .setting.dirty { box-shadow: inset 3px 0 0 var(--gold); }
+#game-form .setting.dirty label::after { content: " •"; color: var(--gold-line); }
+.editor-bar {
+  flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 10px 14px; border-radius: var(--radius);
+  border: 1px solid var(--gold-line); background: var(--window); box-shadow: var(--shadow);
+}
+.editor-status { flex: 1; min-width: 200px; font-size: 13px; color: var(--muted); }
+.editor-status.dirty { color: var(--label); font-weight: 600; }
+.editor-bar .hint, .editor-bar .error { margin: 0; }
 
 /* Game client */
 .setting-control.wide { width: 100%; }
@@ -836,3 +898,8 @@ details.help-row:not([open]) { gap: 0; }
 #gm-accounts .what { font-size: 12px; }
 .gm-char { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 0 4px 12px; }
 .gm-char select { min-width: 160px; }
+
+@media (max-width: 1100px) {
+  .editor { grid-template-columns: 190px minmax(0, 1fr); }
+  .editor-control { width: 280px; }
+}

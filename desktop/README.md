@@ -2,7 +2,7 @@
 
 A Tauri app for Linux and Windows that runs the server: it drives `docker compose` on the stack in this repository.
 
-The window follows rag-wrapper's layout: a sidebar of screens (Overview, Game rules, Game client, Play with friends, Backups, Settings), with Start, Stop and a More menu (Restart, Rebuild) in the header on every screen. Overview shows the server's status, the address players connect to, the client, the services and the Activity and log panes. Settings has the server's name and address, the server folder, and a Light/Dark theme choice.
+The window follows rag-wrapper's layout: a sidebar of screens (Overview, Server settings, Game client, Play with friends, Backups, Settings), with Start, Stop and a More menu (Restart, Rebuild) in the header on every screen. Overview shows the server's status, the address players connect to, the client, the services and the Activity and log panes. Settings has the server's name and address, the server folder, and a Light/Dark theme choice.
 
 It looks like vana-client's Modern UI (akreao/vana-client, `docs/modern-ui.md`): charcoal panels in its bronze and gold window frame (`ui/modern/frame.svg`, the pack's `window_normal_border`, tiled round the edges), its blue for what's picked and its button, tab, list row and field styles, with Fira Sans for the interface and JetBrains Mono for logs and addresses (`ui/fonts`, SIL OFL, Latin subsets). Dark is that look; Light is a parchment version of it, with the sidebar, header and log panes kept dark.
 
