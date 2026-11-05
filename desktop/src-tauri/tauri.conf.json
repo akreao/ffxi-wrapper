@@ -40,7 +40,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDY4MzI4NkFGNzZDRTc1NTIKUldSU2RjNTJyNFl5YUNYQ0pkL2VLNlNiQlVaMEhkMDBpTHE0cWlYaUpIY1FKQjNQdEc1QXhWVDcK",
       "endpoints": ["https://github.com/akreao/ffxi-wrapper/releases/latest/download/latest.json"],
       "requireSignedVersion": true,
       "windows": {
