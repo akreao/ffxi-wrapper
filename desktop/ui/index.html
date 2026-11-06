@@ -22,6 +22,7 @@
       <button id="nav-overview" class="nav-item"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg><span>Overview</span></button>
       <button id="nav-game" class="nav-item"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></svg><span>Server settings</span></button>
       <button id="nav-gm" class="nav-item"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8l4.5 3.5L12 5l4.5 6.5L21 8l-2 10H5z"/><path d="M5 21h14"/></svg><span>Game masters</span></button>
+      <button id="nav-ah" class="nav-item"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4l6 6M11 7l6 6M12.5 5.5l-6 6 3 3 6-6M8 13l-5 5 3 3 5-5M4 21h9"/></svg><span>Auction house</span></button>
     </div>
     <div class="nav-group">
       <div class="nav-heading">Play</div>
@@ -317,6 +318,97 @@
       <p class="hint">GM levels belong to characters: pick a level for each character that should have GM commands such as <code>!goto</code> or <code>!additem</code>. Level 5 can use every command. A character in game gets the new level the next time it zones or logs in. The database has to be running, so start the server first.</p>
       <p id="gm-state" class="hint"></p>
       <ul id="gm-accounts"></ul>
+    </section>
+  </main>
+
+  <!-- Auction house bot -->
+  <main id="ah-page" class="page" hidden>
+    <form id="ah-form" class="card group">
+      <h2>Auction house bot</h2>
+      <p class="hint">The bot (ffxiahbot) buys what players put up for sale and keeps the auction house stocked, at prices taken from retail. It runs beside the server and starts and stops with it.</p>
+      <div class="setting">
+        <div class="setting-text">
+          <label for="ah-enabled">Run the bot</label>
+          <p class="hint">The first start downloads it (about 110 MB).</p>
+        </div>
+        <input id="ah-enabled" class="switch" type="checkbox">
+      </div>
+      <div class="setting">
+        <div class="setting-text">
+          <label for="ah-name">Name at the auction house</label>
+          <p class="hint">Shown as the seller of its items and the buyer of yours. Up to 15 characters.</p>
+        </div>
+        <input id="ah-name" class="setting-control" type="text" maxlength="15" spellcheck="false">
+      </div>
+      <div class="setting">
+        <div class="setting-text">
+          <label for="ah-sell">Sell items</label>
+          <p class="hint">Keeps every item on the price list in stock.</p>
+        </div>
+        <input id="ah-sell" class="switch" type="checkbox">
+      </div>
+      <div class="setting">
+        <div class="setting-text">
+          <label for="ah-buy">Buy players' items</label>
+          <p class="hint">Buys an item a player lists at or below the price list's price.</p>
+        </div>
+        <input id="ah-buy" class="switch" type="checkbox">
+      </div>
+      <div class="setting">
+        <div class="setting-text">
+          <label for="ah-tick">Look for players' items every</label>
+        </div>
+        <div class="setting-control editor-number"><input id="ah-tick" type="number" min="5" max="3600" step="1"><span class="unit">seconds</span></div>
+      </div>
+      <div class="setting">
+        <div class="setting-text">
+          <label for="ah-restock">Restock every</label>
+          <p class="hint">It also stocks when it starts.</p>
+        </div>
+        <div class="setting-control editor-number"><input id="ah-restock" type="number" min="1" max="10080" step="1"><span class="unit">minutes</span></div>
+      </div>
+      <div class="setting">
+        <div class="setting-text">
+          <label for="ah-items">Price list</label>
+          <p class="hint">Retail prices can be below what NPCs pay for an item, which lets players make gil by buying from the bot and selling to an NPC; the level 75 list has fewer such items than the full one. <em>Your own list</em> is <code>items.csv</code> in the bot's folder, made from the level 75 list the first time; edit it in a spreadsheet.</p>
+        </div>
+        <select id="ah-items" class="setting-control">
+          <option value="items75">Level 75 era items (about 7,400)</option>
+          <option value="items">Every item (about 10,800)</option>
+          <option value="custom">Your own list</option>
+        </select>
+      </div>
+      <div class="save-row">
+        <p id="ah-error" class="error" hidden></p>
+        <p id="ah-saved" class="notice" hidden>Saved.</p>
+        <button id="ah-save" class="primary" type="submit">Save</button>
+      </div>
+    </form>
+    <section class="card group">
+      <h2>Now</h2>
+      <div class="setting">
+        <div class="setting-text">
+          <span class="setting-title">Stock the auction house</span>
+          <p class="hint">Tops up every item on the price list without waiting for the next restock. The server has to be running.</p>
+        </div>
+        <button id="ah-refill">Stock now</button>
+      </div>
+      <div class="setting">
+        <div class="setting-text">
+          <span class="setting-title">Take the bot's items down</span>
+          <p class="hint">Removes everything the bot is selling. Players' own listings stay. While the bot runs it stocks again at the next restock.</p>
+        </div>
+        <button id="ah-clear">Remove listings</button>
+      </div>
+      <div class="setting">
+        <div class="setting-text">
+          <span class="setting-title">Log and files</span>
+          <p class="hint">The bot's folder holds its log and your own price list.</p>
+          <p id="ah-state" class="hint"></p>
+        </div>
+        <button id="ah-log">Show log</button>
+        <button id="ah-open">Open folder</button>
+      </div>
     </section>
   </main>
 

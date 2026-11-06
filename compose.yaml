@@ -173,6 +173,38 @@ services:
       world:
         condition: service_started
 
+  # The auction house bot (ffxiahbot): buys what players put up and keeps
+  # the auction house stocked from a price list. Off unless .env's
+  # COMPOSE_PROFILES includes ahbot; settings are AHBOT_* in .env. Its log
+  # (and a price list of your own) go in DATA_DIR/ahbot.
+  ahbot:
+    image: ${AHBOT_IMAGE:-ghcr.io/akreao/ffxi-wrapper/ahbot:${AHBOT_COMMIT:-8a42d681e6c94437bade0d4d03d9a8ac9234db0f}}
+    pull_policy: missing
+    # Used only when the image can't be pulled, like db-init's.
+    build:
+      context: ./docker/ahbot
+      args:
+        AHBOT_REPO: ${AHBOT_REPO:-https://github.com/AdamGagorik/ffxiahbot}
+        AHBOT_COMMIT: ${AHBOT_COMMIT:-8a42d681e6c94437bade0d4d03d9a8ac9234db0f}
+    profiles: [ahbot]
+    restart: on-failure
+    logging: *logging
+    command: ["broker"]
+    environment:
+      DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+      AHBOT_NAME: ${AHBOT_NAME:-}
+      AHBOT_TICK: ${AHBOT_TICK:-}
+      AHBOT_RESTOCK: ${AHBOT_RESTOCK:-}
+      AHBOT_BUY: ${AHBOT_BUY:-}
+      AHBOT_SELL: ${AHBOT_SELL:-}
+      AHBOT_ITEMS: ${AHBOT_ITEMS:-}
+    volumes:
+      - ./docker/ahbot:/wrapper:ro
+      - ${DATA_DIR:-./data}/ahbot:/ahbot
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+
 volumes:
   # Used when DB_DATA is db-data (the default).
   db-data:
