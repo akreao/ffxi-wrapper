@@ -2,7 +2,7 @@
 name = "ffxi-wrapper"
 version = "1.1.0"
 description = "Runs a private LandSandBoat (Final Fantasy XI) server and its database"
-edition = "2026"
+edition = "2021"
 publish = false
 
 [lib]
