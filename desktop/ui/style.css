@@ -473,6 +473,9 @@ main { flex: 1; min-height: 0; padding: 16px 24px 20px; }
 .card-head .muted, .card-head a { font-size: 12.5px; }
 .page { overflow: auto; display: flex; flex-direction: column; gap: 16px; }
 .page > * { max-width: 860px; width: 100%; }
+/* Cards keep their full height and the page scrolls; shrunk, a card.group
+   (overflow: hidden) would cut off its last settings and Save. */
+#ah-page > *, #friends-page > *, #gm-page > *, #backups-page > * { flex: none; }
 
 /* Sub-tabs: the pack's tabs, rounded on top; the picked one blue. */
 .subtabs { display: flex; gap: 4px; margin-bottom: 16px; padding: 0 6px; border-bottom: 1px solid var(--gold-line); }
