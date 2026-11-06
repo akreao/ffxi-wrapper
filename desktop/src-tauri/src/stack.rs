@@ -288,7 +288,7 @@ struct Publisher {
 }
 
 /// The order services start in, which the app lists them in.
-const ORDER: [&str; 7] = ["db", "db-init", "meshes", "world", "connect", "search", "map"];
+const ORDER: [&str; 8] = ["db", "db-init", "meshes", "world", "connect", "search", "map", "ahbot"];
 
 /// Every service in compose.yaml with its container's state.
 pub fn status(dir: &Path) -> Result<Vec<ServiceStatus>, String> {

@@ -1,3 +1,4 @@
+mod ahbot;
 mod backup;
 mod client;
 mod clientcfg;
@@ -393,7 +394,8 @@ enum Step {
 }
 
 /// Runs `start`, `restart` (the LSB servers, to apply settings), `stop`,
-/// `build`, or for the game client `client-download`, `client-install`
+/// `build`, for the auction house bot `ahbot-apply`, `ahbot-refill` or
+/// `ahbot-clear`, or for the game client `client-download`, `client-install`
 /// (from the installer `file`) or `client-update`, streaming its output as
 /// `task-line` events.
 #[tauri::command]
@@ -403,6 +405,11 @@ async fn run_task(handle: AppHandle, kind: String, file: Option<String>) -> Resu
 
 fn start_task(handle: &AppHandle, app: &App, kind: String, file: Option<String>) -> Result<(), String> {
     let dir = app.dir()?;
+    // The bot's one-off runs need the database up.
+    if matches!(kind.as_str(), "ahbot-refill" | "ahbot-clear") && !running(app) {
+        return Err("Start the server first: the auction house bot needs the database running.".into());
+    }
+    let ahbot_on = app.env().is_some_and(|env| ahbot::load(&env).enabled);
     let mut slot = app.task.lock().unwrap();
     if let Some(running) = slot.as_ref() {
         return Err(format!("Wait for the current {} to finish.", running.kind));
@@ -429,6 +436,21 @@ fn start_task(handle: &AppHandle, app: &App, kind: String, file: Option<String>)
         "restore" => vec![Step::Restore(file.ok_or("Pick a backup to restore.")?)],
         "build" => {
             cmd.args(["build", "db-init"]);
+            vec![Step::Run(cmd)]
+        }
+        // Starts, restarts (for new settings) or removes the auction house
+        // bot to match its settings, leaving the rest of the server alone.
+        "ahbot-apply" => {
+            if ahbot_on {
+                cmd.args(["up", "--detach", "--no-deps", "--force-recreate", ahbot::SERVICE]);
+            } else {
+                cmd.args(["rm", "--stop", "--force", ahbot::SERVICE]);
+            }
+            vec![Step::Run(cmd)]
+        }
+        // Stocks the auction house now, or takes the bot's listings down.
+        "ahbot-refill" | "ahbot-clear" => {
+            cmd.args(["run", "--rm", "--no-deps", ahbot::SERVICE, kind.trim_start_matches("ahbot-")]);
             vec![Step::Run(cmd)]
         }
         "client-download" => {
@@ -642,6 +664,33 @@ async fn set_gm_level(handle: AppHandle, character: u32, level: u8) -> Result<()
     off_main(handle, move |_, app| gm::set_level(&app.dir()?, character, level)).await?
 }
 
+/// The auction house bot's settings, from `.env`.
+#[tauri::command]
+async fn ahbot_settings(handle: AppHandle) -> Result<ahbot::Settings, String> {
+    off_main(handle, |_, app| Ok(ahbot::load(&app.env().ok_or("Finish setup first.")?))).await?
+}
+
+/// Saves the bot's settings. Returns whether the running server needs the
+/// bot started, restarted or removed (the `ahbot-apply` task) to match.
+#[tauri::command]
+async fn set_ahbot_settings(handle: AppHandle, values: ahbot::Settings) -> Result<bool, String> {
+    off_main(handle, move |_, app| {
+        let changed = app.edit_env(|env| ahbot::save(env, &values))?;
+        Ok(changed && running(app))
+    })
+    .await?
+}
+
+/// The bot's folder in DATA_DIR: its log and the price list of your own.
+#[tauri::command]
+fn open_ahbot_dir(app: State<App>) -> Result<(), String> {
+    let dir = app.dir()?;
+    let data = app.env().and_then(|e| e.get("DATA_DIR")).filter(|d| !d.is_empty()).unwrap_or_else(|| "./data".into());
+    let folder = dir.join(data).join("ahbot");
+    std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
+    host::open(folder.as_os_str())
+}
+
 #[tauri::command]
 fn open_backups(app: State<App>) -> Result<(), String> {
     let folder = backup::folder(&app.dir()?);
@@ -732,6 +781,9 @@ pub fn run() {
             open_backups,
             game_masters,
             set_gm_level,
+            ahbot_settings,
+            set_ahbot_settings,
+            open_ahbot_dir,
             open_stack_dir,
             friends,
             wan_ip,

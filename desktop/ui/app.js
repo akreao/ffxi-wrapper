@@ -1,7 +1,7 @@
 // The app's one window: first-run setup, then a sidebar of screens:
 // Overview (status, services, the Activity and log panes), Server settings,
-// Game client, Play with friends, Backups and Settings. The header's Start, Stop and the
-// More menu work from every screen.
+// Game masters, Auction house, Game client, Play with friends, Backups and
+// Settings. The header's Start, Stop and the More menu work from every screen.
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
@@ -125,7 +125,7 @@ function showSetup() {
   show($("sidebar"), false);
   show($("status"), false);
   show($("header-actions"), false);
-  for (const id of ["overview-page", "game-page", "gm-page", "client-page", "friends-page", "backups-page", "settings-page"]) show($(id), false);
+  for (const id of ["overview-page", "game-page", "gm-page", "ah-page", "client-page", "friends-page", "backups-page", "settings-page"]) show($(id), false);
   $("page-title").textContent = "Welcome";
   show($("setup"), true);
   $("setup-dir").value = overview.stack_dir || overview.default_stack_dir;
@@ -176,6 +176,7 @@ const NAV = {
   overview: ["nav-overview", "overview-page", "Overview"],
   game: ["nav-game", "game-page", "Server settings"],
   gm: ["nav-gm", "gm-page", "Game masters"],
+  ah: ["nav-ah", "ah-page", "Auction house"],
   client: ["nav-client", "client-page", "Game client"],
   friends: ["nav-friends", "friends-page", "Play with friends"],
   backups: ["nav-backups", "backups-page", "Backups"],
@@ -200,6 +201,7 @@ function showPage(next) {
   }
   if (next === "backups") refreshBackups();
   if (next === "gm") refreshGameMasters();
+  if (next === "ah") loadAuctionBot();
   if (next === "friends") refreshFriends();
   if (next === "settings") {
     show($("settings-saved"), false);
@@ -433,6 +435,9 @@ document.addEventListener("click", (e) => {
 listen("task", (event) => {
   const { kind, running, ok } = event.payload;
   task = running ? kind : null;
+  if (AH_TASKS[kind]) {
+    $("ah-state").textContent = running ? `${AH_TASKS[kind]}…` : `${AH_TASKS[kind]}: ${ok ? "done" : "failed; see Activity on the Overview"}.`;
+  }
   if (running) {
     append($("activity"), `── ${kind} ──`);
   } else {
@@ -779,6 +784,69 @@ async function refreshGameMasters() {
 }
 
 $("gm-refresh").onclick = () => refreshGameMasters();
+
+// ---------- auction house bot ----------
+
+async function loadAuctionBot() {
+  if (!configured()) return;
+  show($("ah-saved"), false);
+  show($("ah-error"), false);
+  let s;
+  try {
+    s = await invoke("ahbot_settings");
+  } catch (e) {
+    $("ah-error").textContent = message(e);
+    show($("ah-error"), true);
+    return;
+  }
+  $("ah-enabled").checked = s.enabled;
+  $("ah-name").value = s.name;
+  $("ah-sell").checked = s.sell;
+  $("ah-buy").checked = s.buy;
+  $("ah-tick").value = s.tick;
+  $("ah-restock").value = Math.max(1, Math.round(s.restock / 60));
+  $("ah-items").value = s.items;
+}
+
+$("ah-form").onsubmit = async (e) => {
+  e.preventDefault();
+  show($("ah-saved"), false);
+  show($("ah-error"), false);
+  const values = {
+    enabled: $("ah-enabled").checked,
+    name: $("ah-name").value.trim(),
+    sell: $("ah-sell").checked,
+    buy: $("ah-buy").checked,
+    tick: Number($("ah-tick").value),
+    restock: Number($("ah-restock").value) * 60,
+    items: $("ah-items").value,
+  };
+  try {
+    const apply = await invoke("set_ahbot_settings", { values });
+    show($("ah-saved"), true);
+    // The server is running: start, restart or remove the bot to match.
+    if (apply) runTask("ahbot-apply");
+  } catch (err) {
+    $("ah-error").textContent = message(err);
+    show($("ah-error"), true);
+  }
+};
+
+$("ah-refill").onclick = () => runTask("ahbot-refill");
+$("ah-clear").onclick = () => {
+  if (confirm("Remove everything the bot is selling at the auction house?")) runTask("ahbot-clear");
+};
+$("ah-open").onclick = () => invoke("open_ahbot_dir").catch((e) => alert(message(e)));
+$("ah-log").onclick = () => {
+  showPage("overview");
+  followLogs("ahbot");
+};
+
+const AH_TASKS = {
+  "ahbot-apply": "Updating the bot",
+  "ahbot-refill": "Stocking the auction house",
+  "ahbot-clear": "Removing the bot's listings",
+};
 
 // ---------- backups ----------
 

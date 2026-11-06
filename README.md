@@ -58,6 +58,12 @@ The server's ports include UDP 54230 (the game itself), so web tunnels such as C
 
 Any LSB setting can be set as an environment variable, `XI_<FILE>_<SETTING>` (for example `XI_MAP_EXP_RATE`), in the `x-lsb` environment in `compose.yaml`. For bigger changes, put a copy of one of LSB's settings files (`settings/default/map.lua` and the rest in the LSB repo) in [`overrides/settings/`](overrides/settings/README.md), keep only the values you change, and restart: `docker compose up -d --force-recreate connect search world map`.
 
+### Auction house bot
+
+The optional `ahbot` service runs [ffxiahbot](https://github.com/AdamGagorik/ffxiahbot) (MIT): it buys what players put up for sale and keeps the auction house stocked from a price list of retail prices. It's off unless `.env` has `COMPOSE_PROFILES=ahbot`; its settings are the `AHBOT_*` lines in `.env.example`, and the desktop app's **Auction house** screen edits them. Its log, and a price list of your own (`AHBOT_ITEMS=custom`), live in `DATA_DIR/ahbot/`. `docker compose run --rm --no-deps ahbot refill` stocks it now; `... ahbot clear` takes the bot's own listings down.
+
+The [`Auction house bot image`](.github/workflows/ahbot-image.yml) workflow builds it at `AHBOT_COMMIT` and publishes `ghcr.io/akreao/ffxi-wrapper/ahbot:<commit>`; without one, the stack builds it from [`docker/ahbot/`](docker/ahbot/Dockerfile). Change the pin in `.env.example` and `compose.yaml` together.
+
 ### Stopping and wiping
 
 `docker compose down` stops everything; the database stays in `DB_DATA`. To start over with an empty database, run `docker compose down -v` (with the default `DB_DATA`) or delete the `DB_DATA` folder. The [desktop app](desktop/README.md) can back the database up into `backups/` and restore it.
