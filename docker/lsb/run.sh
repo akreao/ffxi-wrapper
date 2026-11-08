@@ -17,10 +17,13 @@ if [ -n "${SERVER_NAME:-}" ]; then
 fi
 unset SERVER_NAME
 
-# xi_connect makes login.key and login.cert in /server on its first start,
-# and a new container would make new ones, which vana-client refuses once
-# it has pinned the old certificate. So they're links into /tls (DATA_DIR/tls),
-# which outlives the container; xi_connect writes them there the first time.
+# xi_connect makes login.key and login.cert on its first start, and a new
+# container would make new ones, which vana-client refuses once it has
+# pinned the old certificate. So they live in /tls (DATA_DIR/tls), which
+# outlives the container. LSB from its xiloader 3.0 change is pointed there
+# by XI_NETWORK_TLS_KEY/CERT (compose.yaml): it makes the key with an
+# exclusive create, which fails on a dangling link. Older images read
+# /server/login.*, so the links stay for them.
 # Half a pair is dropped so a whole new one is made.
 if [ "${1:-}" = /server/xi_connect ] && [ -d /tls ]; then
     if { [ -e /tls/login.key ] && [ ! -e /tls/login.cert ]; } || { [ ! -e /tls/login.key ] && [ -e /tls/login.cert ]; }; then
