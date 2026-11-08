@@ -125,11 +125,18 @@ services:
     command: ["/server/xi_connect"]
     # The login certificate xi_connect makes on its first start is kept
     # here, so a new container keeps it. vana-client pins it and refuses a
-    # different one.
+    # different one. The same certificate serves the auth, data and view
+    # ports (TLS since LSB's xiloader 3.0 change).
     volumes:
       - ./docker/lsb:/wrapper:ro
       - ./overrides:/overrides:ro
       - ${DATA_DIR:-./data}/tls:/tls
+    environment:
+      <<: *lsb-env
+      # LSB from the xiloader 3.0 change reads the pair from these paths,
+      # and makes it there on first start; older images use run.sh's links.
+      XI_NETWORK_TLS_KEY: /tls/login.key
+      XI_NETWORK_TLS_CERT: /tls/login.cert
     ports:
       - "${BIND_IP:+${BIND_IP}:}54001:54001"
       - "${BIND_IP:+${BIND_IP}:}54230:54230"
