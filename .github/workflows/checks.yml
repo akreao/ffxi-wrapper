@@ -1,0 +1,76 @@
+# Quick checks for everything the Desktop app workflow doesn't build: the
+# pin script and its pins, compose.yaml, the stack's shell scripts, the UI's
+# JavaScript and the workflows themselves. Runs on every pull request; each
+# job takes well under a minute.
+name: Checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pins:
+    name: Pins and bump-pins.py
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Includes the check that .env.example, compose.yaml and APP_LSB_PINS
+      # in stack.rs all name the same LSB, client and ahbot commits.
+      - name: bump-pins.py tests
+        run: python3 -m unittest discover -s scripts -v
+
+  compose:
+    name: compose.yaml
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: It parses with the example settings
+        run: docker compose --env-file .env.example config --quiet
+      - name: And with the ahbot profile
+        run: docker compose --env-file .env.example --profile ahbot config --quiet
+
+  scripts:
+    name: Shell and UI scripts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: ShellCheck
+        run: shellcheck --version && shellcheck docker/*/*.sh
+      - name: The UI's JavaScript parses
+        run: |
+          for f in desktop/ui/*.js; do
+            node --check "$f"
+          done
+
+  workflows:
+    name: Workflows
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      ACTIONLINT_VERSION: 1.7.12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: actionlint
+        run: |
+          set -eu
+          base="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}"
+          tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          mkdir -p "$RUNNER_TEMP/actionlint"
+          cd "$RUNNER_TEMP/actionlint"
+          curl -fsSLO "$base/$tarball"
+          curl -fsSL "$base/actionlint_${ACTIONLINT_VERSION}_checksums.txt" | grep " $tarball\$" | sha256sum -c -
+          tar xzf "$tarball" actionlint
+          cd "$GITHUB_WORKSPACE"
+          "$RUNNER_TEMP/actionlint/actionlint" -color
