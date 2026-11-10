@@ -89,7 +89,7 @@ jobs:
               echo "$tag is already published."
               for f in $assets; do
                 case "$f" in *.sha256) continue ;; esac
-                if ! printf '%s\n' $assets | grep -qxF "$f.sha256"; then
+                if ! printf '%s\n' "$assets" | grep -qxF "$f.sha256"; then
                   checksums=true
                   echo "$f has no checksum yet; adding them."
                 fi
