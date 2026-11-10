@@ -863,13 +863,25 @@ label[hidden] { display: none; }
 #services li:first-child { border-top-color: transparent; }
 #services .state { text-align: right; }
 
-/* Game rules: Save stays in reach while the page scrolls. */
 #game-page { padding-top: 0; }
 #client-page { padding-top: 0; }
 #client-page > .subtabs { padding-top: 12px; }
 #settings-page > .subtabs { padding-top: 0; }
-.toolbar.sticky { position: sticky; top: 0; z-index: 2; padding: 10px 0; background: var(--bg) var(--bg-image) fixed; }
-#game-page .toolbar { position: sticky; top: 0; z-index: 2; padding: 16px 0 10px; background: var(--bg) var(--bg-image) fixed; }
+/* The client's Settings: Save stays in reach while the page scrolls, in a
+   framed bar like Server settings'. Never give it the page's fixed background
+   (background-attachment: fixed): a fixed background inside a scrolling page
+   makes WebKitGTK repaint the whole page on every scroll step, and the page
+   stutters and lags behind the wheel. */
+.toolbar.sticky {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--gold-line);
+  background: var(--window);
+  box-shadow: var(--shadow);
+}
 
 /* The optional installer step folds away. */
 details.help-row > summary { cursor: pointer; color: var(--muted); font-weight: 500; }
