@@ -194,19 +194,53 @@ pub fn login_cert(stack: &Path) -> PathBuf {
     stack.join(data).join("tls").join("login.cert")
 }
 
-/// The SHA-256 of a PEM file's first certificate (its DER), as lowercase hex:
-/// the fingerprint vana-client pins.
+/// The SHA-256 of the public key (SubjectPublicKeyInfo) of a PEM file's first
+/// certificate, as lowercase hex: the fingerprint vana-client pins. Not the
+/// whole certificate's, which `openssl x509 -fingerprint` prints.
 fn cert_fingerprint(pem: &str) -> Option<String> {
     use base64::Engine;
     use sha2::{Digest, Sha256};
     let body = pem.split("-----BEGIN CERTIFICATE-----").nth(1)?.split("-----END CERTIFICATE-----").next()?;
     let b64: String = body.chars().filter(|c| !c.is_whitespace()).collect();
     let der = base64::engine::general_purpose::STANDARD.decode(b64).ok()?;
-    Some(Sha256::digest(der).iter().map(|b| format!("{b:02x}")).collect())
+    Some(Sha256::digest(cert_spki(&der)?).iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// The login certificate's fingerprint as `openssl x509 -fingerprint -sha256`
-/// prints it (`AB:CD:...`), for players to pin with `vana-client
+/// One DER element at the start of `d`: (tag, contents, the rest after it).
+/// Definite lengths only (DER).
+fn der(d: &[u8]) -> Option<(u8, &[u8], &[u8])> {
+    let (&tag, d) = d.split_first()?;
+    let (&first, d) = d.split_first()?;
+    let (len, d) = if first < 0x80 {
+        (first as usize, d)
+    } else {
+        let n = (first & 0x7f) as usize;
+        if n == 0 || n > 4 || d.len() < n {
+            return None;
+        }
+        (d[..n].iter().fold(0usize, |v, &b| v << 8 | b as usize), &d[n..])
+    };
+    (d.len() >= len).then(|| (tag, &d[..len], &d[len..]))
+}
+
+/// The SubjectPublicKeyInfo (tag and length included) of an X.509 certificate
+/// of any version (LSB's is v1), as vana-client reads it: tbsCertificate ->
+/// [0] version (v2/v3 only), serial, signature, issuer, validity, subject,
+/// subjectPublicKeyInfo.
+fn cert_spki(cert: &[u8]) -> Option<&[u8]> {
+    let (0x30, c, _) = der(cert)? else { return None };
+    let (0x30, mut tbs, _) = der(c)? else { return None };
+    if tbs.first() == Some(&0xa0) {
+        tbs = der(tbs)?.2;
+    }
+    for _ in 0..5 {
+        tbs = der(tbs)?.2;
+    }
+    let (0x30, _, rest) = der(tbs)? else { return None };
+    Some(&tbs[..tbs.len() - rest.len()])
+}
+
+/// The login certificate's key fingerprint as `AB:CD:...`, for players to pin with `vana-client
 /// trust-server --fingerprint`. `None` before the server's first start.
 pub fn login_fingerprint(stack: &Path) -> Option<String> {
     let hex = cert_fingerprint(&fs::read_to_string(login_cert(stack)).ok()?)?;
@@ -237,7 +271,9 @@ fn pin_login_cert(stack: &Path, server: &str) -> Result<(), String> {
         .filter(Value::is_object)
         .unwrap_or_else(|| json!({}));
     let key = format!("{}:{}", server.to_ascii_lowercase(), AUTH_PORT);
-    let pin = json!({ "sha256": sha256, "fixed": true });
+    // vana-client's Pin enum is tagged by "trust": an entry without it makes the
+    // client set the whole file aside and learn every pin again.
+    let pin = json!({ "trust": "key", "sha256": sha256, "fixed": true });
     if known[&key] == pin {
         return Ok(());
     }
@@ -442,10 +478,13 @@ mod tests {
         fs::remove_dir_all(stack).unwrap();
     }
 
-    // A self-signed certificate; its fingerprint is from
-    // `openssl x509 -noout -fingerprint -sha256`.
+    // A self-signed certificate; its key fingerprint is from
+    // `openssl x509 -noout -pubkey | openssl pkey -pubin -outform DER | openssl dgst -sha256`.
     const CERT: &str = include_str!("../testdata/login.cert");
     const CERT_SHA256: &str = include_str!("../testdata/login.cert.sha256");
+    // An X.509 v1 one, as LSB makes (vana-client's net/testdata/rsa-v1.der).
+    const CERT_V1: &str = include_str!("../testdata/login-v1.cert");
+    const CERT_V1_SHA256: &str = include_str!("../testdata/login-v1.cert.sha256");
 
     #[test]
     fn pins_the_login_certificate() {
@@ -458,18 +497,20 @@ mod tests {
         fs::write(stack.join(".env"), "DATA_DIR=./server-data\n").unwrap();
         fs::create_dir_all(stack.join("server-data/tls")).unwrap();
         fs::write(stack.join("server-data/tls/login.cert"), CERT).unwrap();
-        fs::write(known_servers_path(&stack), r#"{"127.0.0.1:54231":{"sha256":"00","fixed":false},"other:54231":{"sha256":"11"}}"#).unwrap();
+        fs::write(known_servers_path(&stack), r#"{"127.0.0.1:54231":{"trust":"key","sha256":"00","fixed":false},"other:54231":{"trust":"key","sha256":"11","fixed":false},"ca:54231":{"trust":"authority"}}"#).unwrap();
         write_config(&stack, "127.0.0.1").unwrap();
         let known: Value = serde_json::from_slice(&fs::read(known_servers_path(&stack)).unwrap()).unwrap();
-        assert_eq!(known["127.0.0.1:54231"], json!({ "sha256": CERT_SHA256.trim(), "fixed": true }));
+        assert_eq!(known["127.0.0.1:54231"], json!({ "trust": "key", "sha256": CERT_SHA256.trim(), "fixed": true }));
         assert_eq!(known["other:54231"]["sha256"], "11");
+        assert_eq!(known["ca:54231"], json!({ "trust": "authority" }));
 
-        // As openssl prints it, for players to pin by hand.
+        // As `AB:CD:...`, for players to pin by hand.
         let shown = login_fingerprint(&stack).unwrap();
         assert_eq!(shown.replace(':', "").to_ascii_lowercase(), CERT_SHA256.trim());
         assert_eq!(shown.len(), 32 * 3 - 1);
 
         assert!(cert_fingerprint("not a certificate").is_none());
+        assert_eq!(cert_fingerprint(CERT_V1).unwrap(), CERT_V1_SHA256.trim());
         fs::remove_dir_all(stack).unwrap();
     }
 
