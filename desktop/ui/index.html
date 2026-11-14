@@ -23,6 +23,7 @@
       <button id="nav-game" class="nav-item"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></svg><span>Server settings</span></button>
       <button id="nav-gm" class="nav-item"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8l4.5 3.5L12 5l4.5 6.5L21 8l-2 10H5z"/><path d="M5 21h14"/></svg><span>Game masters</span></button>
       <button id="nav-ah" class="nav-item"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4l6 6M11 7l6 6M12.5 5.5l-6 6 3 3 6-6M8 13l-5 5 3 3 5-5M4 21h9"/></svg><span>Auction house</span></button>
+      <button id="nav-web" class="nav-item"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z"/></svg><span>Website</span></button>
     </div>
     <div class="nav-group">
       <div class="nav-heading">Play</div>
@@ -408,6 +409,63 @@
         </div>
         <button id="ah-log">Show log</button>
         <button id="ah-open">Open folder</button>
+      </div>
+    </section>
+  </main>
+
+  <!-- Website -->
+  <main id="web-page" class="page" hidden>
+    <div id="web-apply-bar" class="update-bar" hidden>
+      <p><strong>Restart the website to use the new settings.</strong> The game servers keep running.</p>
+      <button id="web-apply" class="primary">Restart website</button>
+    </div>
+    <form id="web-form" class="card group">
+      <h2>Website</h2>
+      <p class="hint">A website for the server: a home page, <strong>My account</strong> for every game account, and an admin panel for game masters and you. It runs beside the server and starts and stops with it.</p>
+      <div class="setting">
+        <div class="setting-text">
+          <label for="web-enabled">Run the website</label>
+          <p class="hint">The first start downloads it (a few MB).</p>
+        </div>
+        <input id="web-enabled" class="switch" type="checkbox">
+      </div>
+      <div class="setting">
+        <div class="setting-text">
+          <label for="web-bind">Who can reach it</label>
+          <p class="hint">The site speaks plain HTTP, so pick <em>This computer only</em> unless the other PCs are on your own LAN or on <a href="#" id="web-friends">Tailscale</a>. Don't open it to the internet like this.</p>
+        </div>
+        <select id="web-bind" class="setting-control"></select>
+      </div>
+      <p id="web-port-hint" class="hint"></p>
+      <div class="save-row">
+        <p id="web-error" class="error" hidden></p>
+        <p id="web-saved" class="notice" hidden>Saved.</p>
+        <button id="web-save" class="primary" type="submit">Save</button>
+      </div>
+    </form>
+    <section class="card group">
+      <h2>Now</h2>
+      <div class="setting">
+        <div class="setting-text">
+          <span class="setting-title" id="web-state">Checking…</span>
+          <p class="hint" id="web-address"></p>
+        </div>
+        <button id="web-copy" class="small" hidden>Copy address</button>
+      </div>
+      <div class="setting">
+        <div class="setting-text">
+          <span class="setting-title">Admin panel</span>
+          <p class="hint">Opens the panel in your browser, signed in as the owner, with a link that works once and for a minute. Game accounts of level 3 and up can also sign in on the site itself.</p>
+        </div>
+        <button id="web-admin" class="primary">Open admin panel</button>
+      </div>
+      <div class="setting">
+        <div class="setting-text">
+          <span class="setting-title">The site and its log</span>
+          <p id="web-task" class="hint"></p>
+        </div>
+        <button id="web-open">Open website</button>
+        <button id="web-log">Show log</button>
       </div>
     </section>
   </main>

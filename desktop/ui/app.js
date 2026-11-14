@@ -177,6 +177,7 @@ const NAV = {
   game: ["nav-game", "game-page", "Server settings"],
   gm: ["nav-gm", "gm-page", "Game masters"],
   ah: ["nav-ah", "ah-page", "Auction house"],
+  web: ["nav-web", "web-page", "Website"],
   client: ["nav-client", "client-page", "Game client"],
   friends: ["nav-friends", "friends-page", "Play with friends"],
   backups: ["nav-backups", "backups-page", "Backups"],
@@ -202,6 +203,7 @@ function showPage(next) {
   if (next === "backups") refreshBackups();
   if (next === "gm") refreshGameMasters();
   if (next === "ah") loadAuctionBot();
+  if (next === "web") loadWebsite();
   if (next === "friends") refreshFriends();
   if (next === "settings") {
     show($("settings-saved"), false);
@@ -327,6 +329,7 @@ const TASK_NAMES = {
   build: "Building",
   backup: "Backing up",
   restore: "Restoring a backup",
+  "web-apply": "Updating the website",
   "client-download": "Downloading the client",
   "client-install": "Installing game data",
   "client-update": "Updating game data",
@@ -435,6 +438,13 @@ document.addEventListener("click", (e) => {
 listen("task", (event) => {
   const { kind, running, ok } = event.payload;
   task = running ? kind : null;
+  if (WEB_TASKS[kind]) {
+    $("web-task").textContent = running ? `${WEB_TASKS[kind]}…` : `${WEB_TASKS[kind]}: ${ok ? "done" : "failed; see Activity on the Overview"}.`;
+    if (!running) {
+      if (ok) show($("web-apply-bar"), false);
+      if (page === "web") loadWebsite();
+    }
+  }
   if (AH_TASKS[kind]) {
     $("ah-state").textContent = running ? `${AH_TASKS[kind]}…` : `${AH_TASKS[kind]}: ${ok ? "done" : "failed; see Activity on the Overview"}.`;
   }
@@ -846,6 +856,105 @@ const AH_TASKS = {
   "ahbot-apply": "Updating the bot",
   "ahbot-refill": "Stocking the auction house",
   "ahbot-clear": "Removing the bot's listings",
+};
+
+// ---------- website ----------
+
+const LOCAL = "";
+
+// What the page last read: the saved settings and the container.
+let web = null;
+
+async function loadWebsite() {
+  if (!configured()) return;
+  show($("web-saved"), false);
+  show($("web-error"), false);
+  try {
+    web = await invoke("website");
+  } catch (e) {
+    $("web-error").textContent = message(e);
+    show($("web-error"), true);
+    return;
+  }
+  $("web-enabled").checked = web.enabled;
+  const bind = $("web-bind");
+  bind.replaceChildren();
+  const add = (value, text) => {
+    const o = document.createElement("option");
+    o.value = value;
+    o.textContent = text;
+    bind.append(o);
+  };
+  add(LOCAL, "This computer only");
+  const known = new Set();
+  for (const a of web.addresses) {
+    known.add(a.ip);
+    add(a.ip, a.vpn ? `${a.ip} (${a.vpn})` : `${a.ip} (LAN, ${a.interface})`);
+  }
+  // An address saved earlier that no interface has now.
+  if (web.bind_ip && !known.has(web.bind_ip)) add(web.bind_ip, `${web.bind_ip} (not found on this computer)`);
+  bind.value = web.bind_ip;
+  $("web-port-hint").textContent = `The site's port is ${web.port} (WEB_PORT in the server folder's .env).`;
+  drawWebsite();
+}
+
+function drawWebsite() {
+  if (!web) return;
+  const s = web.service;
+  let state;
+  if (!web.enabled) state = s && s.state === "running" ? "Turned off; still running until it's restarted" : "Off";
+  else if (!s || s.state === "absent") state = "On; starts with the server";
+  else if (s.state === "running") state = s.health === "starting" ? "Starting…" : s.health === "unhealthy" ? "Running, but not answering" : "Running";
+  else state = `Not running (${s.state})`;
+  $("web-state").textContent = state;
+  const up = !!s && s.state === "running";
+  $("web-address").textContent = web.enabled ? web.url : "";
+  show($("web-copy"), web.enabled);
+  $("web-admin").disabled = !up || !web.enabled || !web.owner_link_ready;
+  $("web-open").disabled = !up || !web.enabled;
+  $("web-log").disabled = !s || s.state === "absent";
+}
+
+$("web-form").onsubmit = async (e) => {
+  e.preventDefault();
+  show($("web-saved"), false);
+  show($("web-error"), false);
+  const values = { enabled: $("web-enabled").checked, bind_ip: $("web-bind").value };
+  try {
+    const apply = await invoke("set_website", { values });
+    show($("web-saved"), true);
+    // The server is running: offer to start, restart or remove the site to match.
+    show($("web-apply-bar"), apply);
+    await loadWebsite();
+    show($("web-saved"), true);
+  } catch (err) {
+    $("web-error").textContent = message(err);
+    show($("web-error"), true);
+  }
+};
+
+$("web-apply").onclick = () => {
+  show($("web-apply-bar"), false);
+  runTask("web-apply");
+};
+$("web-admin").onclick = () => invoke("open_admin_panel").catch((e) => alert(message(e)));
+$("web-open").onclick = () => invoke("open_website").catch((e) => alert(message(e)));
+$("web-copy").onclick = async () => {
+  try {
+    await copyText(web.url);
+  } catch {}
+};
+$("web-log").onclick = () => {
+  showPage("overview");
+  followLogs("web");
+};
+$("web-friends").onclick = (e) => {
+  e.preventDefault();
+  showPage("friends");
+};
+
+const WEB_TASKS = {
+  "web-apply": "Updating the website",
 };
 
 // ---------- backups ----------

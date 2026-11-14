@@ -117,6 +117,21 @@ fn value(raw: &str) -> String {
     v.trim().to_owned()
 }
 
+/// The Compose profiles `.env`'s `COMPOSE_PROFILES` names.
+pub fn profiles(env: &EnvFile) -> Vec<String> {
+    let list = env.get("COMPOSE_PROFILES").unwrap_or_default();
+    list.split(',').map(|p| p.trim().to_owned()).filter(|p| !p.is_empty()).collect()
+}
+
+/// Adds `profile` to `COMPOSE_PROFILES`, or takes it out, keeping the others.
+pub fn set_profile(env: &mut EnvFile, profile: &str, on: bool) {
+    let mut list: Vec<String> = profiles(env).into_iter().filter(|p| p != profile).collect();
+    if on {
+        list.push(profile.to_owned());
+    }
+    env.set("COMPOSE_PROFILES", &list.join(","));
+}
+
 /// A random password of letters and digits, safe in `.env` and SQL as-is.
 pub fn random_password(len: usize) -> Result<String, String> {
     const CHARS: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";

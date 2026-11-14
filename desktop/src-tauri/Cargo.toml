@@ -25,6 +25,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 base64 = "0.23"
 sha2 = "0.10"
 tauri-plugin-updater = "2"
+wrapper-core = { path = "../../core" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"

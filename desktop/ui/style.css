@@ -30,7 +30,7 @@ main { flex: 1; min-height: 0; padding: 16px 24px 20px; }
 .page > * { max-width: 860px; width: 100%; }
 /* Cards keep their full height and the page scrolls; shrunk, a card.group
    (overflow: hidden) would cut off its last settings and Save. */
-#ah-page > *, #friends-page > *, #gm-page > *, #backups-page > * { flex: none; }
+#ah-page > *, #web-page > *, #friends-page > *, #gm-page > *, #backups-page > * { flex: none; }
 
 
 aside { display: flex; flex-direction: column; gap: 16px; overflow: auto; }
