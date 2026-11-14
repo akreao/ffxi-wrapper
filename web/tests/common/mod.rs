@@ -560,7 +560,10 @@ impl Site {
     }
 
     pub async fn send(&self, req: Req) -> Resp {
-        let mut b = Request::builder().method(req.method.clone()).uri(&req.path).header(header::HOST, "site.test");
+        let mut b = Request::builder().method(req.method.clone()).uri(&req.path).header(header::HOST, req.host.as_str());
+        for f in &req.forwarded {
+            b = b.header("x-forwarded-for", f);
+        }
         if let Some(c) = &req.cookie {
             b = b.header(header::COOKIE, format!("web_session={c}"));
         }
@@ -580,7 +583,7 @@ impl Site {
             None => Body::empty(),
         };
         let mut r = b.body(body).unwrap();
-        r.extensions_mut().insert(ConnectInfo(SocketAddr::from((req.addr.unwrap_or([10, 0, 0, req.peer]), 5555))));
+        r.extensions_mut().insert(ConnectInfo(req.from.map_or(SocketAddr::from(([10, 0, 0, req.peer], 5555)), |ip| SocketAddr::new(ip, 5555))));
         let res = self.router.clone().oneshot(r).await.unwrap();
         let status = res.status();
         let headers = res.headers().clone();
@@ -605,13 +608,15 @@ pub struct Req {
     pub origin: Option<String>,
     pub content_type: bool,
     pub peer: u8,
-    /// A full peer address, instead of 10.0.0.<peer>.
-    pub addr: Option<[u8; 4]>,
+    pub host: String,
+    pub forwarded: Vec<String>,
+    /// A peer address other than 10.0.0.<peer>.
+    pub from: Option<std::net::IpAddr>,
 }
 
 impl Req {
     pub fn get(path: &str) -> Req {
-        Req { method: Method::GET, path: path.into(), body: None, cookie: None, csrf: None, origin: None, content_type: true, peer: 2, addr: None }
+        Req { method: Method::GET, path: path.into(), body: None, cookie: None, csrf: None, origin: None, content_type: true, peer: 2, host: "site.test".into(), forwarded: vec![], from: None }
     }
     pub fn post(path: &str, body: serde_json::Value) -> Req {
         Req { method: Method::POST, body: Some(body), origin: Some("http://site.test".into()), ..Req::get(path) }
@@ -631,8 +636,17 @@ impl Req {
         self.cookie = Some(cookie.into());
         self
     }
-    pub fn with_addr(mut self, addr: [u8; 4]) -> Req {
-        self.addr = Some(addr);
+    pub fn host(mut self, host: &str) -> Req {
+        self.host = host.into();
+        self
+    }
+    /// Adds an `X-Forwarded-For` header line.
+    pub fn forwarded(mut self, line: &str) -> Req {
+        self.forwarded.push(line.into());
+        self
+    }
+    pub fn from(mut self, ip: &str) -> Req {
+        self.from = Some(ip.parse().unwrap());
         self
     }
     pub fn peer(mut self, last: u8) -> Req {

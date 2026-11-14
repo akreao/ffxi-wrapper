@@ -11,6 +11,7 @@ pub mod limits;
 pub mod lsb_settings;
 pub mod markdown;
 pub mod model;
+pub mod proxy;
 pub mod routes;
 pub mod state;
 pub mod status;
@@ -33,11 +34,13 @@ pub struct Parts {
 }
 
 pub fn app_state(p: Parts) -> Shared {
+    let proxies = proxy::Proxies::new(&p.cfg.trusted_proxy);
     Arc::new(AppState {
         cfg: p.cfg,
         game: p.game,
         store: p.store,
         limiter: limits::Limiter::new(),
+        proxies,
         probe: p.probe,
         news_cache: cache::PublicCache::default(),
         clock: p.clock,

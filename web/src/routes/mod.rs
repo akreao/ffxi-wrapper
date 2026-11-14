@@ -33,6 +33,6 @@ pub fn router(state: Shared) -> Router {
         .merge(pages::router())
         .merge(session::pages())
         .nest("/api", api)
-        .layer(middleware::from_fn(http::secure_headers))
+        .layer(middleware::from_fn_with_state(state.clone(), http::edge))
         .with_state(state)
 }
