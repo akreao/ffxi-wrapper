@@ -24,25 +24,8 @@
 main { flex: 1; min-height: 0; padding: 16px 24px 20px; }
 #setup { overflow: auto; }
 #overview-page { display: flex; flex-direction: column; gap: 16px; overflow: auto; }
-.stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; flex: none; }
-.stat { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.stat-label { font-size: 12px; font-weight: 600; color: var(--title); text-transform: uppercase; letter-spacing: .08em; }
-.stat-value { display: flex; align-items: center; gap: 8px; min-height: 34px; font-size: 22px; font-weight: 600; }
-.stat-value code { font: 18px "JetBrains Mono", ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.stat-value .dot { width: 10px; height: 10px; }
-.stat-value .dot.ok { box-shadow: 0 0 8px 2px color-mix(in srgb, var(--ok) 60%, transparent); }
-.stat-value .dot.busy { box-shadow: 0 0 8px 2px color-mix(in srgb, var(--busy) 60%, transparent); }
-.stat-value .dot.bad { box-shadow: 0 0 8px 2px color-mix(in srgb, var(--bad) 60%, transparent); }
-.stat-aside { font-size: 13px; font-weight: 400; color: var(--muted); }
-.stat-sub { font-size: 12.5px; color: var(--muted); min-height: 18px; }
-.icon-button.small { width: 28px; height: 28px; }
-.icon-button.small svg { width: 14px; height: 14px; }
-.icon-button.done { color: var(--ok); border-color: var(--ok); }
 .overview { flex: 1; min-height: 240px; display: grid; grid-template-columns: minmax(300px, 380px) minmax(0, 1fr); gap: 16px; }
 .overview-side { display: flex; flex-direction: column; gap: 16px; min-height: 0; overflow: auto; }
-.card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
-.card-head h2 { margin: 0; }
-.card-head .muted, .card-head a { font-size: 12.5px; }
 .page { overflow: auto; display: flex; flex-direction: column; gap: 16px; }
 .page > * { max-width: 860px; width: 100%; }
 /* Cards keep their full height and the page scrolls; shrunk, a card.group

@@ -115,22 +115,55 @@ pub fn decode_ip(v: i64) -> std::net::Ipv4Addr {
     std::net::Ipv4Addr::from((v as u32).to_le_bytes())
 }
 
-/// `bronze_sword` -> `Bronze Sword`.
+/// `bronze_sword` -> `Bronze Sword`, `hi-potion` -> `Hi-Potion`.
 pub fn title_case(name: &str) -> String {
-    name.split('_')
-        .filter(|w| !w.is_empty())
-        .map(|w| {
-            let mut c = w.chars();
-            match c.next() {
-                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-                None => String::new(),
+    let mut out = String::with_capacity(name.len());
+    let mut start = true;
+    for c in name.chars() {
+        match c {
+            '_' => {
+                if !out.is_empty() && !out.ends_with(' ') {
+                    out.push(' ');
+                }
+                start = true;
             }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+            '-' => {
+                out.push('-');
+                start = true;
+            }
+            c if start => {
+                out.extend(c.to_uppercase());
+                start = false;
+            }
+            c => out.push(c),
+        }
+    }
+    out.trim().to_string()
 }
 
 /// `Northern_San_dOria` -> `Northern San dOria`.
 pub fn zone_name(name: &str) -> String {
     name.replace('_', " ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn item_and_zone_names_are_tidied() {
+        assert_eq!(title_case("bronze_sword"), "Bronze Sword");
+        assert_eq!(title_case("hi-potion"), "Hi-Potion");
+        assert_eq!(title_case("flask_of_echo_drops"), "Flask Of Echo Drops");
+        assert_eq!(title_case("_odd__name_"), "Odd Name");
+        assert_eq!(zone_name("Northern_San_dOria"), "Northern San dOria");
+    }
+
+    #[test]
+    fn session_addresses_decode_like_lsb_stores_them() {
+        // Network byte order read as a little-endian u32: bytes c0 a8 00 01.
+        assert_eq!(decode_ip(0x0100A8C0).to_string(), "192.168.0.1");
+        assert_eq!(decode_ip(0x0000_007F).to_string(), "127.0.0.0");
+        assert_eq!(decode_ip(0xFFFF_FFFF).to_string(), "255.255.255.255");
+    }
 }
