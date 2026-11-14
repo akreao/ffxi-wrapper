@@ -139,3 +139,28 @@ a.btn { text-decoration: none; }
   .podium { grid-template-columns: minmax(0, 1fr); }
   .podium div { flex-direction: row; justify-content: space-between; text-align: left; }
 }
+
+/* Markdown the server rendered (posts, rules, the home text, the footer). */
+.prose > :first-child { margin-top: 0; }
+.prose > :last-child { margin-bottom: 0; }
+.prose h1, .prose h2, .prose h3, .prose h4 { color: var(--title); margin: 18px 0 8px; line-height: 1.25; }
+.prose h1 { font-size: 22px; } .prose h2 { font-size: 19px; } .prose h3 { font-size: 16px; } .prose h4 { font-size: 14px; }
+.prose p { margin: 0 0 10px; max-width: 70ch; }
+.prose ul, .prose ol { margin: 0 0 10px; padding-left: 22px; max-width: 68ch; }
+.prose li { margin: 3px 0; }
+.prose code { padding: 1px 5px; border-radius: 3px; background: var(--raised); border: 1px solid var(--border); font-size: .92em; }
+.prose pre { overflow-x: auto; padding: 10px 12px; border-radius: 4px; background: var(--raised); border: 1px solid var(--border); }
+.prose pre code { padding: 0; border: 0; background: none; }
+.prose blockquote { margin: 0 0 10px; padding: 2px 14px; border-left: 3px solid var(--gold-line); color: var(--muted); }
+.prose table { border-collapse: collapse; margin: 0 0 10px; }
+.prose th, .prose td { padding: 5px 10px; border: 1px solid var(--border); text-align: left; }
+.prose hr { border: 0; border-top: 1px solid var(--border); margin: 16px 0; }
+.hero .prose p { margin-bottom: 14px; }
+.connect .prose { font-size: 13px; }
+.connect .prose ol { padding-left: 18px; }
+.connect .prose p { margin-bottom: 4px; }
+.post.full { padding: 22px 26px; }
+.post.full h3 { font-size: 24px; }
+.site-foot .prose { display: inline; }
+.site-foot .prose p { display: inline; margin: 0; }
+.back-link { display: inline-block; margin-bottom: 12px; font-size: 13px; }

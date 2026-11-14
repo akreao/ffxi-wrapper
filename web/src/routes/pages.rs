@@ -34,12 +34,17 @@ enum Access {
     SignedIn,
     /// Moderator and Owner; a player gets "not found".
     Staff,
+    /// The owner alone; everyone else, moderators too, gets "not found".
+    Owner,
 }
 
 pub fn router() -> Router<Shared> {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/", get(|s, v| page(s, v, "home.html", Access::Anyone)))
+        .route("/news", get(|s, v| page(s, v, "news.html", Access::Anyone)))
+        .route("/news/{id}", get(|s, v, _p: Path<String>| page(s, v, "post.html", Access::Anyone)))
+        .route("/rules", get(|s, v| page(s, v, "rules.html", Access::Anyone)))
         .route("/signin", get(|s, v| page(s, v, "signin.html", Access::Anyone)))
         .route("/me", get(|s, v| page(s, v, "me.html", Access::SignedIn)))
         .route("/me/characters/{id}", get(|s, v, _p: Path<String>| page(s, v, "me-character.html", Access::SignedIn)))
@@ -50,6 +55,9 @@ pub fn router() -> Router<Shared> {
         .route("/admin/characters/{id}", get(|s, v, _p: Path<String>| page(s, v, "character.html", Access::Staff)))
         .route("/admin/bans", get(|s, v| page(s, v, "bans.html", Access::Staff)))
         .route("/admin/log", get(|s, v| page(s, v, "log.html", Access::Staff)))
+        .route("/admin/news", get(|s, v| page(s, v, "admin-news.html", Access::Owner)))
+        .route("/admin/news/{id}", get(|s, v, _p: Path<String>| page(s, v, "admin-news.html", Access::Owner)))
+        .route("/admin/content", get(|s, v| page(s, v, "admin-content.html", Access::Owner)))
         .route("/ui/{*path}", get(asset))
 }
 
@@ -76,6 +84,8 @@ async fn page(State(state): State<Shared>, Viewer(id): Viewer, file: &'static st
         (Access::SignedIn, None) => return Redirect::to(&format!("/signin?next={}", "/me")).into_response(),
         (Access::SignedIn, Some(i)) if i.owner_link() => return Redirect::to("/admin").into_response(),
         (Access::Staff, None) => return Redirect::to("/signin?next=/admin").into_response(),
+        (Access::Owner, None) => return Redirect::to("/signin?next=/admin").into_response(),
+        (Access::Owner, Some(i)) if i.role != crate::auth::Role::Owner => return (StatusCode::NOT_FOUND, "Not found").into_response(),
         (Access::Staff, Some(i)) if !i.role.is_admin() => return (StatusCode::NOT_FOUND, "Not found").into_response(),
         _ => {}
     }

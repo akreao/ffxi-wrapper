@@ -16,6 +16,8 @@ pub struct AppState {
     pub store: Store,
     pub limiter: Limiter,
     pub probe: Arc<dyn Probe>,
+    /// The public JSON answers, kept 30 seconds and dropped on any edit.
+    pub public_cache: crate::cache::PublicCache,
     pub clock: Clock,
     /// The newest two-step code step accepted for each account, so a code works once.
     pub totp_seen: Mutex<HashMap<i64, u64>>,
