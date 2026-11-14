@@ -41,6 +41,14 @@ jobs:
         run: docker compose --env-file .env.example --profile ahbot config --quiet
       - name: And with the web profile
         run: docker compose --env-file .env.example --profile web config --quiet
+      - name: And with the public and ddns profiles
+        run: docker compose --env-file .env.example --profile web --profile public --profile ddns config --quiet
+      # An .env from before these keys existed must still parse.
+      - name: And with an .env that has only the required keys
+        run: |
+          printf 'DB_PASSWORD=a\nDB_ROOT_PASSWORD=b\n' > old.env
+          docker compose --env-file old.env config --quiet
+          docker compose --env-file old.env --profile web --profile public --profile ddns config --quiet
 
   scripts:
     name: Shell and UI scripts

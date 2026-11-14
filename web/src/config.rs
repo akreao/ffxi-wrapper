@@ -14,6 +14,8 @@ pub struct Config {
     pub server_name: String,
     /// `https://name.example` when a proxy fronts the site (phase 4).
     pub public_url: String,
+    /// Names or addresses of the reverse proxy whose `X-Forwarded-For` is believed (`proxy`).
+    pub trusted_proxy: String,
     /// Where the site's own SQLite file lives (`/data` in the container).
     pub data_dir: PathBuf,
     pub listen: String,
@@ -47,7 +49,8 @@ impl Config {
             db_password,
             admin_secret: get("ADMIN_SECRET").trim().to_string(),
             server_name: or("SERVER_NAME", "Your server"),
-            public_url: get("WEB_PUBLIC_URL").trim().to_string(),
+            public_url: get("WEB_PUBLIC_URL").trim().trim_end_matches('/').to_string(),
+            trusted_proxy: get("WEB_TRUSTED_PROXY").trim().to_string(),
             data_dir: PathBuf::from(or("DATA_DIR", "/data")),
             listen: or("WEB_LISTEN", "0.0.0.0:8080"),
             ui_dir: std::env::var("WEB_UI_DIR").ok().filter(|s| !s.is_empty()).map(PathBuf::from),
@@ -70,6 +73,7 @@ impl Config {
             admin_secret: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f".into(),
             server_name: "Test Server".into(),
             public_url: String::new(),
+            trusted_proxy: String::new(),
             data_dir: PathBuf::from("."),
             listen: "127.0.0.1:0".into(),
             ui_dir: None,

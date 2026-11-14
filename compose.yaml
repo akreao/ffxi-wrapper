@@ -241,8 +241,11 @@ services:
       DB_PASSWORD: ${WEB_DB_PASSWORD:-}
       ADMIN_SECRET: ${ADMIN_SECRET:-}
       SERVER_NAME: ${SERVER_NAME:-}
-      # Phase 4: the address players use, and the proxy it may trust.
+      # The address players use (https://<WEB_DOMAIN> when the public profile is on),
+      # and the proxy container whose X-Forwarded-For it believes. Where there is no
+      # `proxy` service the name doesn't resolve and no header is trusted.
       WEB_PUBLIC_URL: ${WEB_PUBLIC_URL:-}
+      WEB_TRUSTED_PROXY: proxy
     volumes:
       - ${DATA_DIR:-./data}/web:/data
     ports:
@@ -256,6 +259,58 @@ services:
     depends_on:
       db:
         condition: service_healthy
+
+  # The website on the internet: Caddy (https://caddyserver.com) answers on ports 80
+  # and 443, gets and renews a certificate for WEB_DOMAIN from Let's Encrypt, sends
+  # plain-HTTP visitors to HTTPS and passes everything on to `web`. Off unless .env's
+  # COMPOSE_PROFILES includes public (with web). Needs WEB_DOMAIN to point at this
+  # computer and the router to forward TCP 80 and 443 to it; see the README. Its
+  # certificates and account key are in DATA_DIR/caddy: keep them private.
+  proxy:
+    image: caddy:2.11
+    profiles: [public]
+    restart: on-failure:5
+    logging: *logging
+    # Not `:?` on the variable: compose checks the whole file whatever the profile.
+    command:
+      - sh
+      - -c
+      - '[ -n "$$WEB_DOMAIN" ] || { echo "proxy: set WEB_DOMAIN in .env (the name players type, such as ffxi.example.com)" >&2; exit 1; }; exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile'
+    environment:
+      WEB_DOMAIN: ${WEB_DOMAIN:-}
+    ports:
+      - "${BIND_IP:+${BIND_IP}:}80:80"
+      - "${BIND_IP:+${BIND_IP}:}443:443"
+    volumes:
+      - ./docker/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${DATA_DIR:-./data}/caddy/data:/data
+      - ${DATA_DIR:-./data}/caddy/config:/config
+    # Starts after the site when that is on; alone it answers 502 until it is.
+    depends_on:
+      web:
+        condition: service_started
+        required: false
+
+  # Keeps WEB_DOMAIN's DNS record on Cloudflare pointing at this computer's current
+  # internet address (favonia/cloudflare-ddns), for homes whose address changes.
+  # Off unless COMPOSE_PROFILES includes ddns. CLOUDFLARE_API_TOKEN in .env needs only
+  # Zone > DNS > Edit on the domain's zone; the record stays DNS only (not proxied).
+  ddns:
+    image: favonia/cloudflare-ddns:1.15.1
+    profiles: [ddns]
+    restart: on-failure
+    logging: *logging
+    read_only: true
+    cap_drop: [all]
+    security_opt: ["no-new-privileges:true"]
+    user: "1000:1000"
+    environment:
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
+      DOMAINS: ${WEB_DOMAIN:-}
+      PROXIED: "false"
+      IP4_PROVIDER: cloudflare.trace
+      # The router forwards IPv4 only: no AAAA record.
+      IP6_PROVIDER: none
 
 volumes:
   # Used when DB_DATA is db-data (the default).

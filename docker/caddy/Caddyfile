@@ -1,0 +1,34 @@
+# The public face of the website: HTTPS with certificates Caddy gets and renews
+# by itself, in front of the `web` service. compose.yaml's `proxy` service
+# (profile `public`) runs this with WEB_DOMAIN from .env.
+{
+	# Nothing to administer from outside the container.
+	admin off
+	servers {
+		timeouts {
+			read_header 10s
+			idle 2m
+		}
+	}
+}
+
+{$WEB_DOMAIN} {
+	encode zstd gzip
+
+	# Sign-in and the pages' own requests are small; nothing here takes an upload.
+	request_body {
+		max_size 64KB
+	}
+
+	reverse_proxy web:8080 {
+		# The site believes this header only from this container, and only its
+		# last entry. Set it to the address the connection really came from, so
+		# whatever a visitor wrote in X-Forwarded-For is dropped here.
+		header_up X-Forwarded-For {remote_host}
+		header_up -X-Real-IP
+		header_up -Forwarded
+		header_up X-Forwarded-Proto https
+	}
+
+	header -Server
+}

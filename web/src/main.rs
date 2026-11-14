@@ -78,6 +78,7 @@ async fn serve() {
     });
     spawn_housekeeping(state.clone());
     spawn_ban_lifter(state.clone());
+    spawn_proxy_lookup(state.clone());
 
     let listener = match tokio::net::TcpListener::bind(&listen).await {
         Ok(l) => l,
@@ -121,6 +122,21 @@ fn spawn_ban_lifter(state: ffxi_web::Shared) {
             if n > 0 {
                 tracing::info!("lifted {n} ban(s) that ran out");
             }
+        }
+    });
+}
+
+/// Finds the proxy container's address now and again every 15 seconds, so a recreated proxy
+/// (new address) is trusted within moments and a removed one stops being trusted.
+fn spawn_proxy_lookup(state: ffxi_web::Shared) {
+    if state.cfg.trusted_proxy.is_empty() {
+        return;
+    }
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(15));
+        loop {
+            tick.tick().await;
+            state.proxies.refresh().await;
         }
     });
 }
