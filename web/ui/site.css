@@ -164,3 +164,5 @@ a.btn { text-decoration: none; }
 .site-foot .prose { display: inline; }
 .site-foot .prose p { display: inline; margin: 0; }
 .back-link { display: inline-block; margin-bottom: 12px; font-size: 13px; }
+/* Online and rankings: the line shown when a list is empty. */
+.empty { margin: 0; padding: 28px 16px; text-align: center; color: var(--muted); }
