@@ -1,0 +1,141 @@
+/* The public pages and My account: a top bar instead of the admin sidebar,
+   content in one centred column, a footer. Same tokens, frames and controls. */
+
+body.site { height: auto; min-height: 100vh; }
+.topbar {
+  position: sticky; top: 0; z-index: 20;
+  gap: 18px;
+  padding: 8px 24px;
+}
+.site-brand { display: flex; align-items: center; gap: 10px; color: inherit; text-decoration: none; flex: none; }
+.site-brand strong { display: block; color: var(--gold); font-size: 16px; font-weight: 600; line-height: 1.15; text-shadow: 0 1px 2px rgb(0 0 0 / 60%); }
+.site-brand small { display: block; color: #8f9da6; font-size: 11.5px; }
+.site-nav { display: flex; align-items: stretch; gap: 2px; align-self: stretch; margin: -8px 0; }
+.site-nav a {
+  position: relative;
+  display: flex; align-items: center;
+  padding: 0 14px;
+  color: #c9c3b6; text-decoration: none; font-weight: 500;
+}
+.site-nav a:hover { color: #fff; background: rgb(62 112 157 / 22%); }
+/* The picked page: a gold rule along the bottom with the diamond on it. */
+.site-nav a.active { color: var(--gold); }
+.site-nav a.active::after {
+  content: ""; position: absolute; left: 10px; right: 10px; bottom: -1px; height: 2px;
+  background: linear-gradient(90deg, transparent, var(--gold) 20%, var(--gold) 80%, transparent);
+}
+.site-nav a.active::before {
+  content: ""; position: absolute; left: 50%; bottom: -4px; width: 7px; height: 7px; margin-left: -3.5px;
+  transform: rotate(45deg);
+  background: linear-gradient(135deg, #fff0b4, #b88b49 45%, #e4c077); box-shadow: 0 0 0 1px #3c2819;
+}
+.topbar .menu-toggle { display: none; }
+.site-nav .phone-only { display: none; }
+
+/* Link-buttons in the bar (Sign in, Create account): the pack's buttons as <a>. */
+.btn-link {
+  display: inline-flex; align-items: center; min-height: 32px; padding: 5px 14px;
+  border: 1px solid var(--bronze); border-radius: 4px;
+  background: var(--ticks, none), var(--grad-dark); color: #e6e1d6;
+  box-shadow: inset 0 1px 0 var(--gold-soft);
+  font-weight: 500; text-decoration: none; white-space: nowrap;
+}
+.btn-link:hover { border-color: var(--gold); filter: brightness(1.12); }
+.btn-link.primary { background: var(--grad-blue); color: #fff; text-shadow: 0 1px 1px rgb(0 0 0 / 65%); }
+a.btn { text-decoration: none; }
+
+.site-main { width: 100%; max-width: 1120px; margin: 0 auto; padding: 24px 24px 32px; display: flex; flex-direction: column; gap: 18px; flex: 1; }
+.site-main.narrow { max-width: 520px; }
+.site-foot {
+  display: flex; justify-content: center; gap: 6px 18px; flex-wrap: wrap;
+  padding: 18px 24px 24px; color: var(--muted); font-size: 12.5px;
+  border-top: 1px solid var(--border);
+}
+
+/* Home: the server's name, whether it's up, how to connect. */
+.hero {
+  display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 20px; align-items: stretch;
+  padding: 26px 28px;
+  border-image-source: url(modern/frame-focused.svg);
+  background:
+    radial-gradient(90% 140% at 0% 0%, color-mix(in srgb, var(--focus) 16%, transparent), transparent 60%),
+    var(--window) border-box;
+}
+.hero h2 { font-size: 30px; margin: 0 0 6px; text-shadow: 0 1px 2px rgb(0 0 0 / 25%); }
+.hero p { margin: 0 0 14px; max-width: 56ch; }
+.hero .meta { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+.hero .cta { display: flex; gap: 10px; flex-wrap: wrap; }
+.connect { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; border-radius: 4px; background: var(--raised); border: 1px solid var(--border); }
+.connect h3 { margin: 0; font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--title); }
+.connect ol { margin: 0; padding-left: 18px; font-size: 13px; }
+.connect li { margin: 3px 0; }
+
+/* News posts */
+.posts { display: flex; flex-direction: column; gap: 16px; }
+.post { padding: 18px 22px 18px; }
+.post header, .post-head { all: unset; display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; margin-bottom: 8px; }
+.post h3 { margin: 0; font-size: 19px; color: var(--title); }
+.post h3 a { color: inherit; text-decoration: none; }
+.post h3 a:hover { text-decoration: underline; }
+.post .byline { color: var(--muted); font-size: 12.5px; }
+.post p { margin: 0 0 10px; max-width: 70ch; }
+.post ul { margin: 0 0 10px; padding-left: 20px; max-width: 68ch; }
+.post .more { font-size: 13px; }
+.post.pinned { border-image-source: url(modern/frame-focused.svg); }
+.side-grid { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 18px; align-items: start; }
+.side-grid > * { min-width: 0; }
+
+/* Rankings: a podium of the top three, then the table. */
+.podium { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--gold-line); }
+.podium div { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 12px 8px; border-radius: 4px; background: var(--raised); border: 1px solid var(--border); text-align: center; }
+.podium .place { font-size: 11px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--title); }
+.podium strong { font-size: 17px; }
+.podium span:last-child { color: var(--muted); font-size: 12.5px; }
+.podium .first { border-color: var(--gold-line); box-shadow: inset 0 1px 0 var(--gold-soft); background: linear-gradient(color-mix(in srgb, var(--gold) 16%, var(--raised)), var(--raised)); }
+.rank { width: 46px; color: var(--muted); font-weight: 600; }
+
+/* My account: one card per character. */
+.char-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+.char-card { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px 14px; color: inherit; text-decoration: none; }
+.char-card:hover { border-image-source: url(modern/frame-focused.svg); }
+.char-card .top { display: flex; align-items: center; gap: 10px; }
+.char-card .avatar { width: 38px; height: 38px; font-size: 16px; }
+.char-card strong { font-size: 16px; color: var(--title); display: block; }
+.char-card .row2 { color: var(--muted); font-size: 12.5px; }
+.char-card dl { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; margin: 0; font-size: 13px; }
+.char-card dt { color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; }
+.char-card dd { margin: 0; font-weight: 500; }
+.form-grid label { margin: 12px 0 4px; font-weight: 600; color: var(--label); }
+.form-grid .hint { margin: 4px 0 0; }
+.form-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--gold-line); }
+.form-actions .notice { flex: 1; margin: 0; }
+.meter { height: 5px; margin-top: 6px; border-radius: 3px; background: var(--raised); overflow: hidden; }
+.meter span { display: block; height: 100%; width: 75%; background: var(--ok); }
+
+@media (max-width: 960px) {
+  .hero { grid-template-columns: minmax(0, 1fr); }
+  .side-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 800px) {
+  .topbar { padding: 8px 12px; gap: 8px; flex-wrap: wrap; }
+  .site-brand small { display: none; }
+  .site-brand strong { font-size: 15px; }
+  .topbar .menu-toggle { display: inline-flex; }
+  .topbar .theme-toggle, .topbar .status, .topbar .btn-link:not(.primary) { display: none; }
+  .topbar .btn-link.primary { padding: 4px 10px; font-size: 13px; }
+  .site-nav { display: none; order: 3; flex-basis: 100%; flex-direction: column; margin: 4px -12px -8px; padding: 4px 0 6px; border-top: 1px solid rgb(184 139 73 / 35%); }
+  .nav-open .site-nav { display: flex; }
+  .site-nav a { padding: 11px 18px; }
+  .site-nav .phone-only { display: flex; border-top: 1px solid rgb(184 139 73 / 25%); }
+  .nav-open .site-nav { width: calc(100% + 24px); }
+  .site-nav a.active { background: var(--grad-blue); color: #fff; box-shadow: inset 0 1px 0 var(--gold-line), inset 0 -1px 0 var(--gold-line); }
+  .site-nav a.active::after { display: none; }
+  .site-nav a.active::before { left: 7px; bottom: auto; top: 50%; margin: -3.5px 0 0; }
+  .site-main { padding: 16px 16px 24px; }
+  .hero { padding: 18px 16px; }
+  .hero h2 { font-size: 24px; }
+  .post { padding: 14px 16px; }
+  .podium { grid-template-columns: minmax(0, 1fr); }
+  .podium div { flex-direction: row; justify-content: space-between; text-align: left; }
+}
