@@ -38,7 +38,7 @@ async fn the_forwarded_address_is_believed_only_from_the_proxy() {
     for _ in 0..5 {
         s.send(Req::post("/api/auth/login", login("wrong-pw")).peer(9).forwarded("198.51.100.77")).await;
     }
-    let log = s.state.store.actions(None, 50, false).await.unwrap();
+    let log = s.state.store.actions(None, 50, false, true).await.unwrap();
     assert!(log.iter().all(|a| a.ip.as_deref() == Some("10.0.0.9")), "{:?}", log.iter().map(|a| a.ip.clone()).collect::<Vec<_>>());
 }
 
@@ -48,7 +48,7 @@ async fn through_the_proxy_the_address_it_appended_is_the_client() {
     // The client's own entries (left) are ignored; the proxy's (right) is used.
     let r = s.send(via_proxy(Req::post("/api/auth/login", login("wrong-pw")), "1.1.1.1, 2.2.2.2, 198.51.100.20")).await;
     assert_eq!(r.status, StatusCode::UNAUTHORIZED);
-    let log = s.state.store.actions(None, 50, false).await.unwrap();
+    let log = s.state.store.actions(None, 50, false, true).await.unwrap();
     assert_eq!(log[0].ip.as_deref(), Some("198.51.100.20"));
 }
 
@@ -74,7 +74,7 @@ async fn a_proxy_request_without_a_usable_address_gets_no_address_bucket() {
     let s = public_site().await;
     let r = s.send(via_proxy(Req::post("/api/auth/login", login("hunter22")), "garbage")).await;
     assert_eq!(r.status, StatusCode::OK);
-    let log = s.state.store.actions(None, 50, false).await.unwrap();
+    let log = s.state.store.actions(None, 50, false, true).await.unwrap();
     assert_eq!(log[0].ip.as_deref(), Some("unknown (proxy)"));
 }
 
@@ -138,6 +138,6 @@ async fn without_a_public_address_nothing_changes() {
     assert_eq!(r.status, StatusCode::OK);
     assert!(r.header("strict-transport-security").is_none());
     assert!(!r.headers.get("set-cookie").unwrap().to_str().unwrap().contains("Secure"));
-    let log = s.state.store.actions(None, 50, false).await.unwrap();
+    let log = s.state.store.actions(None, 50, false, true).await.unwrap();
     assert_eq!(log[0].ip.as_deref(), Some("10.0.0.2"));
 }
