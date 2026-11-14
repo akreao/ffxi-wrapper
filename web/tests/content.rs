@@ -127,7 +127,7 @@ async fn moderators_dont_see_news_or_content_rows_in_the_log() {
 async fn an_answer_read_before_an_edit_is_not_kept_after_it() {
     let s = people().await;
     let owner = who(&s, "steven", "owner-pass").await;
-    let c = &s.state.public_cache;
+    let c = &s.state.news_cache;
     let gen = c.generation();
     // A reader has read the database; an edit clears the cache; the reader then tries to store.
     let r = s.send(with(&owner, Req::put("/api/admin/content/footer", json!({ "body": "x" })))).await;
@@ -280,29 +280,33 @@ async fn publishing_pinning_unpublishing_and_deleting_show_up_at_once() {
     assert_eq!(s.send(put(json!({ "title": "x", "body": "y" }))).await.status, StatusCode::NOT_FOUND);
 }
 
+async fn news_count(s: &Site) -> usize {
+    s.send(Req::get("/api/public/home")).await.json()["news"].as_array().unwrap().len()
+}
+
 #[tokio::test]
-async fn the_public_cache_holds_for_30_seconds_and_any_edit_drops_it() {
+async fn the_news_cache_holds_for_30_seconds_and_any_edit_drops_it() {
     let s = people().await;
     let owner = who(&s, "steven", "owner-pass").await;
-    s.fake.0.lock().unwrap().online = vec![online_row("Torvald", "Ronfaure", 1)];
-    assert_eq!(s.send(Req::get("/api/public/home")).await.json()["online"], 1);
-    // The game changes behind the cache: the old answer stays for 30 seconds.
-    s.fake.0.lock().unwrap().online.clear();
+    assert_eq!(news_count(&s).await, 0);
+    // A change that bypasses the API (so nothing clears the cache): the old answer stays 30 seconds.
+    let f = ffxi_web::store::PostFields { title: "Direct".into(), body: "x".into(), author: "Staff".into(), pinned: false };
+    s.state.store.news_create(&f, true, "test", s.state.now()).await.unwrap();
     s.advance(29);
-    assert_eq!(s.send(Req::get("/api/public/home")).await.json()["online"], 1);
+    assert_eq!(news_count(&s).await, 0);
     s.advance(2);
-    assert_eq!(s.send(Req::get("/api/public/home")).await.json()["online"], 0);
+    assert_eq!(news_count(&s).await, 1);
 
     // An edit drops every cached answer, including the ones for other keys.
     let before = s.send(Req::get("/api/public/content/rules")).await.json();
     assert!(before["html"].as_str().unwrap().contains("hasn't written"));
-    assert!(!s.state.public_cache.is_empty());
-    s.fake.0.lock().unwrap().online = vec![online_row("Torvald", "Ronfaure", 1)];
+    assert!(!s.state.news_cache.is_empty());
+    s.state.store.news_create(&f, true, "test", s.state.now()).await.unwrap();
     let r = s.send(with(&owner, Req::put("/api/admin/content/rules", json!({ "body": "# Be kind" })))).await;
     assert_eq!(r.status, StatusCode::OK);
-    assert!(s.state.public_cache.is_empty());
+    assert!(s.state.news_cache.is_empty());
     assert!(s.send(Req::get("/api/public/content/rules")).await.json()["html"].as_str().unwrap().contains("<h1>Be kind</h1>"));
-    assert_eq!(s.send(Req::get("/api/public/home")).await.json()["online"], 1, "the edit dropped the stale home answer too");
+    assert_eq!(news_count(&s).await, 2, "the edit dropped the stale home answer too");
 }
 
 #[tokio::test]
@@ -312,7 +316,7 @@ async fn unknown_pages_and_ids_cant_fill_the_cache() {
         let _ = s.send(Req::get(&format!("/api/public/news/{}", 1000 + i)).peer(2 + (i % 200) as u8)).await;
         let _ = s.send(Req::get(&format!("/api/public/news?page={}", 5 + i)).peer(2 + (i % 200) as u8)).await;
     }
-    assert!(s.state.public_cache.len() <= 1, "only the empty first page may be kept, found {}", s.state.public_cache.len());
+    assert!(s.state.news_cache.len() <= 1, "only the empty first page may be kept, found {}", s.state.news_cache.len());
 }
 
 #[tokio::test]

@@ -220,7 +220,7 @@
 
   // The public pages and My account: a top bar.
   function siteShell() {
-    const links = [["home", "Home", "/"], ["news", "News", "/news"], ["rules", "Rules", "/rules"]];
+    const links = [["home", "Home", "/"], ["news", "News", "/news"], ["online", "Who's online", "/online"], ["rankings", "Rankings", "/rankings"], ["rules", "Rules", "/rules"]];
     if (me.accid) links.push(["me", "My account", "/me"]);
     const active = page === "me-character" ? "me" : page === "post" ? "news" : page;
     const toggle = h("button", { class: "icon-button menu-toggle", "aria-label": "Menu", "aria-controls": "site-nav", "aria-expanded": "false" }, icon("menu"));
@@ -306,17 +306,19 @@
             : h("a", { class: "btn-link primary", href: me.accid ? "/me" : "/admin" }, me.accid ? "My account" : "Admin panel"))),
       connect));
     const news = info.news || [];
+    const aside = h("aside", { class: "stack" });
     main.append(h("div", { class: "side-grid" },
       h("section", { class: "posts", "aria-label": "News" },
         news.length ? news.map(postCard) : h("section", { class: "card pad" }, h("p", { class: "muted" }, "No news yet.")),
         news.length ? h("div", { class: "pager card" }, h("span", { class: "count" }, "Newer posts first"), h("a", { class: "btn-link", href: "/news" }, "All news")) : null),
-      h("aside", { class: "stack" },
-        h("section", { class: "card pad" },
-          h("h2", {}, "Server"),
-          h("dl", { class: "kv" },
-            h("dt", {}, "Status"), h("dd", {}, info.up ? "Online" : "Offline"),
-            h("dt", {}, "In game"), h("dd", {}, info.online == null ? "–" : `${info.online} ${info.online === 1 ? "player" : "players"}`),
-            h("dt", {}, "Rules"), h("dd", {}, h("a", { href: "/rules" }, "House rules")))))));
+      aside));
+    aside.append(h("section", { class: "card pad" },
+      h("h2", {}, "Server"),
+      h("dl", { class: "kv" },
+        h("dt", {}, "Status"), h("dd", {}, info.up ? "Online" : "Offline"),
+        h("dt", {}, "In game"), h("dd", {}, info.online == null ? "–" : `${info.online} ${info.online === 1 ? "player" : "players"}`),
+        h("dt", {}, "Rules"), h("dd", {}, h("a", { href: "/rules" }, "House rules")))));
+    onlineNow(aside);
   };
 
   pages.news = async function (main) {
@@ -357,6 +359,116 @@
   pages.rules = async function (main) {
     const d = await api("/public/content/rules");
     main.append(h("h2", {}, "House rules"), h("section", { class: "card pad" }, prose(d.html)));
+  };
+
+  // "Online now": the busiest zones, from the same cached list as the online page.
+  async function onlineNow(main) {
+    let j;
+    try { j = await api("/public/online"); } catch { return; }
+    const shown = j.players.filter((p) => p.zone);
+    main.prepend(h("section", { class: "card pad" },
+      h("div", { class: "card-head" }, h("h2", {}, "Online now"), h("a", { class: "muted", href: "/online" }, `${j.count} ${j.count === 1 ? "player" : "players"}`)),
+      shown.length ? zoneBars(shown) : h("p", { class: "muted" }, j.count ? "Everyone in game is anonymous." : "Nobody is in game right now.")));
+  }
+
+  // ---- who is online, rankings ----
+
+  // Zone names arrive as the database spells them ("Valkurm_Dunes", "Riverne-Site_B01").
+  const zoneLabel = (z) => (z ? z.replace(/_/g, " ") : "");
+  const NATION_NAME = (n) => NATIONS[n] || "";
+  const clock = (s) => new Date(s * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+
+  // The same list feeds the home page's zone bars and the online page's table.
+  function zoneBars(players) {
+    const by = new Map();
+    for (const p of players) if (p.zone) by.set(p.zone, (by.get(p.zone) || 0) + 1);
+    const top = [...by].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 6);
+    const max = top.length ? top[0][1] : 1;
+    return h("ul", { class: "bars" }, top.map(([zone, n]) => h("li", {},
+      h("span", {}, zoneLabel(zone)), h("b", {}, n), h("div", { class: "bar" }, h("span", { width: `${Math.round((n / max) * 100)}%` })))));
+  }
+
+  pages.online = async function (main) {
+    const j = await api("/public/online");
+    setOnline(j.count);
+    const rows = j.players.map((p) => h("tr", {},
+      h("td", {}, p.name),
+      p.anonymous
+        ? h("td", { class: "muted", colspan: "2" }, "Anonymous")
+        : [jobCell({ mjob: p.mjob, mlvl: p.mlvl, sjob: p.sjob, slvl: p.slvl }), h("td", {}, zoneLabel(p.zone) || "–")],
+      h("td", { class: "hide-phone" }, NATION_NAME(p.nation))));
+    main.append(h("section", { class: "card table-card" },
+      h("div", { class: "card-head" }, h("h2", {}, "Who's online"),
+        h("span", { class: "muted" }, `${j.count} ${j.count === 1 ? "player" : "players"} · updated ${clock(j.updated)}`)),
+      j.players.length
+        ? h("div", { class: "table-wrap" }, h("table", { class: "data" },
+          h("thead", {}, h("tr", {}, h("th", {}, "Character"), h("th", {}, "Job"), h("th", {}, "Zone"), h("th", { class: "hide-phone" }, "Nation"))),
+          h("tbody", {}, rows)))
+        : h("p", { class: "empty" }, "Nobody is in game right now."),
+      h("div", { class: "pager" }, h("span", { class: "count" }, "Characters set to /anon show only their name and nation, as in the game's search. Game masters are not listed."))));
+  };
+
+  const BOARDS = [["level", "Level"], ["job", "By job"], ["craft", "Crafting"], ["playtime", "Play time"]];
+  const CRAFTS = [[48, "Fishing"], [49, "Woodworking"], [50, "Smithing"], [51, "Goldsmithing"], [52, "Clothcraft"], [53, "Leathercraft"], [54, "Bonecraft"], [55, "Alchemy"], [56, "Cooking"], [57, "Synergy"]];
+  const ORDINAL = ["1st", "2nd", "3rd"];
+
+  pages.rankings = async function (main) {
+    let board = BOARDS.some(([id]) => id === q.get("board")) ? q.get("board") : "level";
+    let job = JOBS.map((j) => j.toLowerCase()).includes(q.get("job")) ? q.get("job") : "war";
+    let skill = CRAFTS.some(([id]) => String(id) === q.get("skill")) ? q.get("skill") : "49";
+    let pageNo = Math.max(1, parseInt(q.get("page"), 10) || 1);
+    const card = h("section", { class: "card table-card" });
+    main.append(card);
+
+    const go = () => {
+      const p = new URLSearchParams({ board });
+      if (board === "job") p.set("job", job);
+      if (board === "craft") p.set("skill", skill);
+      if (pageNo > 1) p.set("page", pageNo);
+      history.replaceState(null, "", "/rankings?" + p);
+      draw();
+    };
+    const select = (label, value, options, onchange) => {
+      const el = h("select", { "aria-label": label, onchange: (e) => onchange(e.target.value) },
+        options.map(([v, text]) => h("option", { value: v, selected: String(v) === String(value) }, text)));
+      return el;
+    };
+
+    async function draw() {
+      const path = `/public/rankings/${board}` + (board === "job" ? `?job=${job}&page=${pageNo}` : board === "craft" ? `?skill=${skill}&page=${pageNo}` : `?page=${pageNo}`);
+      let j;
+      try { j = await api(path); } catch (ex) { card.replaceChildren(errorCard(ex.message)); return; }
+      const valueHead = { level: "Level", job: "Level", craft: "Skill", playtime: "Hours" }[board];
+      const detail = (r) => (r.job ? `${JOB_NAMES[r.job - 1]}` : "");
+      const showJob = board === "level";
+      const tabs = h("div", { class: "segmented", role: "group", "aria-label": "Ranking" },
+        BOARDS.map(([id, label]) => h("button", { type: "button", class: id === board ? "on" : false, "aria-pressed": id === board, onclick: () => { board = id; pageNo = 1; go(); } }, label)));
+      const extra = board === "job"
+        ? select("Job", job, JOB_NAMES.map((n, i) => [JOBS[i].toLowerCase(), n]), (v) => { job = v; pageNo = 1; go(); })
+        : board === "craft" ? select("Craft", skill, CRAFTS, (v) => { skill = v; pageNo = 1; go(); }) : null;
+      const first = pageNo === 1 ? j.rows.slice(0, 3) : [];
+      const rest = pageNo === 1 ? j.rows.slice(3) : j.rows;
+      const podium = first.length ? h("div", { class: "podium" }, first.map((r, i) =>
+        h("div", { class: i === 0 ? "first" : false }, h("span", { class: "place" }, ORDINAL[i]), h("strong", {}, r.name),
+          h("span", {}, board === "level" ? jobLabel(r.job, r.value) : `${r.value}${board === "playtime" ? " h" : ""}`)))) : null;
+      const pager = j.pages > 1 ? h("div", { class: "pages" },
+        h("button", { type: "button", disabled: pageNo <= 1, "aria-label": "Previous page", onclick: () => { pageNo--; go(); } }, "‹"),
+        h("button", { type: "button", class: "on" }, pageNo),
+        h("button", { type: "button", disabled: pageNo >= j.pages, "aria-label": "Next page", onclick: () => { pageNo++; go(); } }, "›")) : null;
+      card.replaceChildren(
+        h("div", { class: "toolbar" }, tabs, h("span", { class: "spacer" }), extra),
+        podium,
+        j.rows.length
+          ? h("div", { class: "table-wrap" }, h("table", { class: "data" },
+            h("thead", {}, h("tr", {}, h("th", { class: "rank" }, "#"), h("th", {}, "Character"), showJob ? h("th", {}, "Highest job") : null, h("th", { class: "num" }, valueHead), h("th", { class: "hide-phone" }, "Nation"))),
+            h("tbody", {}, rest.map((r) => h("tr", {}, h("td", { class: "rank" }, r.rank), h("td", {}, r.name), showJob ? h("td", {}, detail(r)) : null,
+              h("td", { class: "num" }, num(r.value)), h("td", { class: "hide-phone" }, NATION_NAME(r.nation)))))))
+          : h("p", { class: "empty" }, "Nobody is ranked here yet."),
+        h("div", { class: "pager" },
+          h("span", { class: "count" }, `${j.total ? `Top ${j.total}. ` : ""}Game masters, banned accounts and characters set to /anon are left out of the level and job boards. Updated ${clock(j.updated)}.`),
+          pager));
+    }
+    draw();
   };
 
   // `next` may only lead to a page on this site. Browsers read "\\" as "/" and drop tabs and

@@ -59,11 +59,23 @@ sql "UPDATE zone_settings SET zoneip = '$PUBLIC_IP'"
 if [ -n "${DB_ROOT_PASSWORD:-}" ] && [ -n "${WEB_DB_PASSWORD:-}" ]; then
     web_pw="$(printf '%s' "$WEB_DB_PASSWORD" | sed -e 's/\\/\\\\/g' -e "s/'/''/g")"
     db="$XI_NETWORK_SQL_DATABASE"
-    tables="accounts accounts_totp accounts_sessions chars char_stats char_jobs char_exp char_inventory char_flags zone_settings item_basic"
+    tables="accounts accounts_totp accounts_sessions chars char_stats char_jobs char_exp char_skills char_inventory char_flags zone_settings item_basic"
     grants=""
     for t in $tables; do
         grants="$grants GRANT SELECT ON \`$db\`.\`$t\` TO 'xiweb'@'%';"
     done
+    # What the admin pages write (web/src/game.rs): ban, unban, the timed-ban
+    # lifter, two-step reset, password reset, GM level. Column-level where the
+    # code names columns (MariaDB wants UPDATE on every inserted column of an
+    # INSERT ... ON DUPLICATE KEY UPDATE, the key accid too); scripts/test_web_grants.py checks the list against the SQL.
+    admin_grants="
+        GRANT UPDATE (status) ON \`$db\`.\`accounts\` TO 'xiweb'@'%';
+        GRANT SELECT, DELETE ON \`$db\`.\`accounts_totp\` TO 'xiweb'@'%';
+        GRANT SELECT (accid), DELETE ON \`$db\`.\`accounts_trust_tokens\` TO 'xiweb'@'%';
+        GRANT SELECT, DELETE ON \`$db\`.\`accounts_banned\` TO 'xiweb'@'%';
+        GRANT INSERT (accid, timebann, timeunbann, banncomment), UPDATE (accid, timebann, timeunbann, banncomment)
+            ON \`$db\`.\`accounts_banned\` TO 'xiweb'@'%';
+        GRANT UPDATE (gmlevel) ON \`$db\`.\`chars\` TO 'xiweb'@'%';"
     if MYSQL_PWD="$DB_ROOT_PASSWORD" mariadb --skip-ssl-verify-server-cert -h"$XI_NETWORK_SQL_HOST" -P"$XI_NETWORK_SQL_PORT" -uroot -e "
         CREATE USER IF NOT EXISTS 'xiweb'@'%' IDENTIFIED BY '$web_pw';
         ALTER USER 'xiweb'@'%' IDENTIFIED BY '$web_pw';
@@ -71,6 +83,7 @@ if [ -n "${DB_ROOT_PASSWORD:-}" ] && [ -n "${WEB_DB_PASSWORD:-}" ]; then
         $grants
         GRANT UPDATE (password) ON \`$db\`.\`accounts\` TO 'xiweb'@'%';
         GRANT INSERT (id, login, password, timecreate, timelastmodify, status, priv) ON \`$db\`.\`accounts\` TO 'xiweb'@'%';
+        $admin_grants
         FLUSH PRIVILEGES;"; then
         echo "Website database user ready."
     else

@@ -237,6 +237,72 @@ pub const JOBS: [&str; 22] = [
     "drg", "smn", "blu", "cor", "pup", "dnc", "sch", "geo", "run",
 ];
 
+/// The crafting skills a ranking may name: `char_skills.skillid` 48..=57
+/// (`data/enums/skill_type.yaml` in LSB: fishing, woodworking, smithing,
+/// goldsmithing, clothcraft, leathercraft, bonecraft, alchemy, cooking, synergy).
+pub const CRAFTS: [(i64, &str); 10] = [
+    (48, "Fishing"),
+    (49, "Woodworking"),
+    (50, "Smithing"),
+    (51, "Goldsmithing"),
+    (52, "Clothcraft"),
+    (53, "Leathercraft"),
+    (54, "Bonecraft"),
+    (55, "Alchemy"),
+    (56, "Cooking"),
+    (57, "Synergy"),
+];
+
+/// A ranking a visitor may ask for. `Job` holds an index into [`JOBS`], never request text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Board {
+    Level,
+    Job(usize),
+    Craft(i64),
+    Playtime,
+}
+
+impl Board {
+    /// The cache key and a stable name for the board.
+    pub fn key(&self) -> String {
+        match self {
+            Board::Level => "level".into(),
+            Board::Job(j) => format!("job:{}", JOBS[*j]),
+            Board::Craft(s) => format!("craft:{s}"),
+            Board::Playtime => "playtime".into(),
+        }
+    }
+}
+
+/// Every ranking lists at most this many characters.
+pub const RANKING_TOP: usize = 100;
+
+/// One character on the public who-is-online list. Anonymous characters (`/anon`)
+/// carry only their name and nation: no job, level or zone.
+#[derive(Debug, Clone, Serialize)]
+pub struct PublicPlayer {
+    pub name: String,
+    pub nation: i64,
+    pub zone: Option<String>,
+    pub mjob: Option<i64>,
+    pub mlvl: Option<i64>,
+    pub sjob: Option<i64>,
+    pub slvl: Option<i64>,
+    pub anonymous: bool,
+}
+
+/// One line of a ranking. `job` is a job id (1-22) on the level and job boards;
+/// `value` is the level (job board), highest job level (level board), skill
+/// level (craft board) or whole hours played (playtime board).
+#[derive(Debug, Clone, Serialize)]
+pub struct RankRow {
+    pub rank: i64,
+    pub name: String,
+    pub nation: i64,
+    pub job: Option<i64>,
+    pub value: i64,
+}
+
 /// The address LSB stores in `accounts_sessions.client_addr`: network byte
 /// order read as a little-endian `u32`.
 pub fn decode_ip(v: i64) -> std::net::Ipv4Addr {

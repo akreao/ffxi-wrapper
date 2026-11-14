@@ -39,12 +39,13 @@ pub fn app_state(p: Parts) -> Shared {
         store: p.store,
         limiter: limits::Limiter::new(),
         probe: p.probe,
-        public_cache: cache::PublicCache::default(),
+        news_cache: cache::PublicCache::default(),
         clock: p.clock,
         totp_seen: Mutex::new(Default::default()),
         dummy_hash: p.dummy_hash,
         bcrypt_cost: p.bcrypt_cost,
         bcrypt_slots: tokio::sync::Semaphore::new(4),
         account_creation: Mutex::new(None),
+        public_cache: Default::default(),
     })
 }

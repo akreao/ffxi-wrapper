@@ -112,7 +112,7 @@ async fn create(State(state): State<Shared>, Owner(id): Owner, ClientIp(ip): Cli
     let f = clean(&b)?;
     let publish = b.publish == Some(true);
     let new_id = state.store.news_create(&f, publish, &editor(&id), state.now()).await?;
-    state.public_cache.clear();
+    state.news_cache.clear();
     let action = if publish { "news_publish" } else { "news_create" };
     let detail = json!({ "after": { "title": f.title, "body_size": f.body.len(), "published": publish, "pinned": f.pinned } });
     record(&state, act(&id, &ip, action, "news", Some(new_id), &f.title, detail)).await;
@@ -128,7 +128,7 @@ async fn update(State(state): State<Shared>, Owner(id): Owner, ClientIp(ip): Cli
     if !state.store.news_update(post_id, &f, b.publish, &editor(&id), state.now()).await? {
         return Err(ApiError::not_found());
     }
-    state.public_cache.clear();
+    state.news_cache.clear();
     let was_out = before.published.is_some();
     let action = match b.publish {
         Some(true) if !was_out => "news_publish",
@@ -151,7 +151,7 @@ async fn remove(State(state): State<Shared>, Owner(id): Owner, ClientIp(ip): Cli
     if !state.store.news_delete(post_id).await? {
         return Err(ApiError::not_found());
     }
-    state.public_cache.clear();
+    state.news_cache.clear();
     let detail = json!({ "before": { "title": before.title, "body_size": before.body.len(), "published": before.published.is_some(), "pinned": before.pinned } });
     record(&state, act(&id, &ip, "news_delete", "news", Some(post_id), &before.title, detail)).await;
     Ok(Json(json!({ "deleted": post_id })))
@@ -188,7 +188,7 @@ async fn save_block(State(state): State<Shared>, Owner(id): Owner, ClientIp(ip):
     let stored = state.store.content_all().await?;
     let (before, _) = content::effective(block.key, &stored, &state.cfg);
     state.store.content_set(block.key, &text, &editor(&id), state.now()).await?;
-    state.public_cache.clear();
+    state.news_cache.clear();
     let detail = if block.plain {
         json!({ "before": before, "after": text })
     } else {
@@ -203,7 +203,7 @@ async fn reset_block(State(state): State<Shared>, Owner(id): Owner, ClientIp(ip)
     let stored = state.store.content_all().await?;
     let (before, _) = content::effective(block.key, &stored, &state.cfg);
     let had = state.store.content_reset(block.key).await?;
-    state.public_cache.clear();
+    state.news_cache.clear();
     if had {
         let detail = json!({ "before_size": before.len(), "after_size": content::default_body(block.key, &state.cfg).len(), "reset": true });
         record(&state, act(&id, &ip, "content_reset", "content", None, block.label, detail)).await;
