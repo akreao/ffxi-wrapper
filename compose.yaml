@@ -300,7 +300,7 @@ services:
     profiles: [ddns]
     restart: on-failure
     logging: *logging
-    read_only: true
+    # Not read_only: compose can't put an environment secret into a read-only service.
     cap_drop: [all]
     security_opt: ["no-new-privileges:true"]
     user: "1000:1000"

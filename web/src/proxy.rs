@@ -65,7 +65,7 @@ impl Proxies {
 /// resolver being briefly unreachable?
 fn gone(e: &std::io::Error) -> bool {
     let m = e.to_string();
-    m.contains("not known") || m.contains("No address associated") || m.contains("NXDOMAIN") || m.contains("No such host")
+    m.contains("not known") || m.contains("does not resolve") || m.contains("No address associated") || m.contains("NXDOMAIN") || m.contains("No such host")
 }
 
 /// Where a request really came from.
@@ -179,6 +179,15 @@ mod tests {
         assert_eq!(o.ip, "198.51.100.4");
         let o = resolve(Some("::ffff:172.20.0.5".parse().unwrap()), &hm(&["198.51.100.4"]), &proxies());
         assert!(o.via_proxy);
+    }
+
+    #[test]
+    fn a_missing_name_is_told_from_a_resolver_hiccup() {
+        let e = |m: &str| std::io::Error::other(m.to_string());
+        for gone_msg in ["failed to lookup address information: Name or service not known", "failed to lookup address information: Name does not resolve", "No address associated with hostname"] {
+            assert!(gone(&e(gone_msg)), "{gone_msg}");
+        }
+        assert!(!gone(&e("failed to lookup address information: Temporary failure in name resolution")));
     }
 
     #[test]
