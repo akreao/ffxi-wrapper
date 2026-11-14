@@ -44,6 +44,12 @@ pub fn router() -> Router<Shared> {
         .route("/me", get(|s, v| page(s, v, "me.html", Access::SignedIn)))
         .route("/me/characters/{id}", get(|s, v, _p: Path<String>| page(s, v, "me-character.html", Access::SignedIn)))
         .route("/admin", get(|s, v| page(s, v, "admin.html", Access::Staff)))
+        .route("/admin/accounts", get(|s, v| page(s, v, "accounts.html", Access::Staff)))
+        .route("/admin/accounts/{id}", get(|s, v, _p: Path<String>| page(s, v, "account.html", Access::Staff)))
+        .route("/admin/characters", get(|s, v| page(s, v, "characters.html", Access::Staff)))
+        .route("/admin/characters/{id}", get(|s, v, _p: Path<String>| page(s, v, "character.html", Access::Staff)))
+        .route("/admin/bans", get(|s, v| page(s, v, "bans.html", Access::Staff)))
+        .route("/admin/log", get(|s, v| page(s, v, "log.html", Access::Staff)))
         .route("/ui/{*path}", get(asset))
 }
 
