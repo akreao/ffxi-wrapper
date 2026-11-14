@@ -374,3 +374,4 @@ body.signin { align-items: center; justify-content: center; min-height: 100vh; h
 .editor-bar .hint, .editor-bar .error { margin: 0; }
 .kv dd input.switch { min-width: 0; width: 42px; }
 .editor-filter { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--label); cursor: pointer; }
+.toolbar-slot, .toolbar-extra { display: contents; }

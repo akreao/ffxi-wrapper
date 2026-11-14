@@ -23,7 +23,7 @@
       else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
       else el.setAttribute(k, v === true ? "" : v);
     }
-    for (const kid of kids.flat()) {
+    for (const kid of kids.flat(Infinity)) {
       if (kid == null || kid === false) continue;
       el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
     }
@@ -741,7 +741,7 @@
         ? h("button", { class: "primary", type: "button", onclick: () => unbanDialog(a.login, a.id, draw) }, "Unban")
         : h("button", { class: "danger", type: "button", onclick: () => banDialog(a, draw) }, icon("bans"), "Ban account"));
       const ban = a.ban;
-      main.replaceChildren(
+      main.replaceChildren(...[
         h("div", { class: "page-head" },
           h("div", { class: "ident" }, h("span", { class: "avatar" }, a.login[0].toUpperCase()),
             h("div", {}, h("h2", {}, a.login, " ", banned ? h("span", { class: "badge bad" }, "Banned") : h("span", { class: "badge ok" }, "Active"),
@@ -771,7 +771,7 @@
               h("dt", {}, "Created"), h("dd", {}, fmtDT(a.created)),
               h("dt", {}, "Last login"), h("dd", {}, a.last_login ? fmtDT(a.last_login) : "Never"),
               h("dt", {}, "Two-step sign-in"), h("dd", {}, a.has_totp ? "On" : "Off"),
-              h("dt", {}, "Highest GM level"), h("dd", {}, String(a.gm))))));
+              h("dt", {}, "Highest GM level"), h("dd", {}, String(a.gm)))))].filter(Boolean));
     }
     await draw();
   };
@@ -835,8 +835,8 @@
         h("div", { class: "ident" }, h("span", { class: "avatar" }, c.name[0].toUpperCase()),
           h("div", {}, h("h2", {}, c.name, " ", c.online ? h("span", { class: "badge ok" }, "In game") : h("span", { class: "badge off" }, "Offline"), c.gm > 0 ? [" ", gmBadge(c.gm)] : null),
             h("div", { class: "sub" }, "Character ", h("code", {}, c.charid), " · account ", h("a", { href: `/admin/accounts/${c.accid}` }, c.login), ` · ${NATIONS[c.nation] || "Unknown"}`)))),
-      c.online ? h("div", { class: "update-bar lock" }, icon("lock"), h("p", {}, h("strong", {}, `${c.name} is in game, so this page is read-only. `),
-        "The map server holds an online character and writes it back when they log out, which would undo changes made here. Editing opens again when they log out.")) : null,
+      ...(c.online ? [h("div", { class: "update-bar lock" }, icon("lock"), h("p", {}, h("strong", {}, `${c.name} is in game, so this page is read-only. `),
+        "The map server holds an online character and writes it back when they log out, which would undo changes made here. Editing opens again when they log out."))] : []),
       h("nav", { class: "subtabs", role: "tablist", "aria-label": "Character sections" }, tab("overview", "Overview", true), tab("jobs", "Jobs"), tab("inventory", "Inventory"), tab("history", "History")));
 
     main.append(panel("overview", true,
@@ -874,7 +874,7 @@
       search: "Account or character",
       noun: "banned accounts",
       empty: "Nobody is banned.",
-      columns: [{ label: "Account" }, { label: "Characters", cls: "hide-phone" }, { label: "Banned" }, { label: "Ends" }, { label: "Reason" }, { label: "" }],
+      columns: [{ label: "Account" }, { label: "Characters", cls: "hide-phone" }, { label: "Banned", cls: "hide-phone" }, { label: "Ends" }, { label: "Reason" }, { label: "" }],
       row: (b, d) => {
         const rec = b.ban;
         const ends = !rec ? h("span", { class: "muted" }, "Unknown")
@@ -883,7 +883,7 @@
         return h("tr", { class: "is-banned" },
           h("td", {}, h("a", { href: `/admin/accounts/${b.accid}` }, b.login), " ", h("span", { class: "id" }, b.accid)),
           h("td", { class: "hide-phone" }, b.characters.join(", ") || "–"),
-          h("td", {}, rec && rec.banned_at ? fmtDT(rec.banned_at) : h("span", { class: "muted" }, "Unknown")),
+          h("td", { class: "hide-phone" }, rec && rec.banned_at ? fmtDT(rec.banned_at) : h("span", { class: "muted" }, "Unknown")),
           h("td", {}, ends),
           h("td", { class: "wrap" }, rec && rec.reason ? rec.reason : h("span", { class: "muted" }, "No record")),
           h("td", { class: "row-actions" }, h("button", { type: "button", onclick: () => unbanDialog(b.login, b.accid, reload) }, "Unban")));
@@ -938,6 +938,7 @@
     if (body.classList.contains("app")) {
       if (!isAdmin()) { location.replace("/signin?next=" + encodeURIComponent(location.pathname)); return; }
       adminShell();
+      if (page !== "dashboard") api("/public/home").then((i) => setOnline(i.online)).catch(() => setOnline(null));
     } else {
       siteShell();
       api("/public/home").then((i) => setOnline(i.online)).catch(() => setOnline(null));
