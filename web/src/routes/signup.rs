@@ -41,17 +41,6 @@ pub fn valid_signup_login(login: &str) -> bool {
     (LOGIN_MIN..=LOGIN_MAX).contains(&login.len()) && login.bytes().all(|b| b.is_ascii_alphanumeric())
 }
 
-/// An address the proxy rule (plain HTTP is refused) leaves alone: this computer, a home
-/// network, Tailscale. This is the minimal rule; the HTTPS proxy change replaces it with its
-/// own, which also knows about forwarded addresses.
-fn is_private_peer(ip: &str) -> bool {
-    match ip.parse::<std::net::IpAddr>() {
-        Ok(std::net::IpAddr::V4(v4)) => v4.is_loopback() || v4.is_private() || (v4.octets()[0] == 100 && (64..128).contains(&v4.octets()[1])),
-        Ok(std::net::IpAddr::V6(v6)) => v6.is_loopback() || (v6.segments()[0] & 0xfe00) == 0xfc00,
-        Err(_) => false,
-    }
-}
-
 // ---- the public side ----
 
 fn limited(state: &Shared, ip: &str) -> ApiResult<()> {
@@ -89,9 +78,6 @@ async fn create(State(state): State<Shared>, ClientIp(ip): ClientIp, headers: He
     if !state.signup_open().await {
         return Err(ApiError::new(StatusCode::FORBIDDEN, "Sign-up is closed on this server.").with(json!({ "closed": true })));
     }
-    if !state.cfg.public_url.is_empty() && !is_private_peer(&ip) {
-        return Err(ApiError::new(StatusCode::FORBIDDEN, "Create your account on the site's https:// address, not over plain http."));
-    }
     // What can be said about the input alone, before anything is counted or looked up.
     if !valid_signup_login(&body.login) {
         return Err(ApiError::bad_request("The login must be 3 to 16 letters or numbers."));
@@ -103,27 +89,11 @@ async fn create(State(state): State<Shared>, ClientIp(ip): ClientIp, headers: He
         return Err(ApiError::bad_request("Enter an invite code."));
     }
 
-    let now = state.now();
-    if let Err(which) = state.limiter.reserve_signup(&ip, now) {
-        return Err(ApiError::too_many(match which {
-            SignupLimit::Address => "Too many sign-ups from your address. Try again in an hour.",
-            SignupLimit::Day => "Sign-ups are full for today. Try again tomorrow.",
-        }));
-    }
-    // Hash first, whatever the invite code turns out to be, so the answer takes as long either way.
-    let hash = match hash_for_signup(&state, &body.password).await {
-        Ok(h) => h,
-        Err(e) => {
-            state.limiter.signup_undo(&ip);
-            return Err(e);
-        }
-    };
-
-    // From here the work runs to its end even when the visitor closes the page: a half-done
-    // sign-up would leave a spent invite or a held lock behind.
+    // Everything from here runs to its end even when the visitor closes the page: a dropped
+    // request would otherwise leave a counted slot, a spent invite or a held lock behind.
     let ua = headers.get(header::USER_AGENT).and_then(|v| v.to_str().ok()).map(String::from);
     let invite = needs_invite.then(|| store::code_hash(code.as_deref().unwrap_or("")));
-    tokio::spawn(finish(state, ip, body.login, hash, invite, ua)).await.unwrap_or_else(|_| Err(ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "Something went wrong on the server.")))
+    tokio::spawn(finish(state, ip, body.login, body.password, invite, ua)).await.unwrap_or_else(|_| Err(ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "Something went wrong on the server.")))
 }
 
 async fn hash_for_signup(state: &Shared, password: &str) -> ApiResult<String> {
@@ -146,20 +116,42 @@ async fn give_back(state: &Shared, invite_id: Option<i64>) {
     }
 }
 
-/// Takes the invite use, makes the account, signs it in. A use that bought no account goes back.
-async fn finish(state: Shared, ip: String, login: String, hash: String, invite: Option<Vec<u8>>, ua: Option<String>) -> ApiResult<Response> {
+/// Counts the attempt, takes the invite use, hashes, makes the account, signs it in. A use or
+/// day slot that bought no account goes back. The invite is checked before any bcrypt work, so
+/// guessing codes costs the site nothing; a refused code waits as long as a hash would take
+/// (without using the CPU), so the answer doesn't tell a good code from a bad one by speed.
+async fn finish(state: Shared, ip: String, login: String, password: String, invite: Option<Vec<u8>>, ua: Option<String>) -> ApiResult<Response> {
     let now = state.now();
+    if let Err(which) = state.limiter.reserve_signup(&ip, now) {
+        return Err(ApiError::too_many(match which {
+            SignupLimit::Address => "Too many sign-ups from your address. Try again in an hour.",
+            SignupLimit::Day => "Sign-ups are full for today. Try again tomorrow.",
+            SignupLimit::Attempts => "Sign-up is busy. Try again in a while.",
+        }));
+    }
     let mut invite_id = None;
     if let Some(code_hash) = &invite {
-        match state.store.invite_take(code_hash, now).await? {
-            Some(id) => invite_id = Some(id),
-            None => {
+        match state.store.invite_take(code_hash, now).await {
+            Ok(Some(id)) => invite_id = Some(id),
+            other => {
                 state.limiter.signup_not_created();
+                if let Err(e) = other {
+                    return Err(e.into());
+                }
+                tokio::time::sleep(std::time::Duration::from_micros(61u64 << state.bcrypt_cost.min(16))).await;
                 record(&state, NewAction { actor_kind: "visitor", actor_role: "visitor", ip: Some(ip), action: "signup_refused", reason: Some("invite code refused".into()), result: "refused", ..Default::default() }).await;
                 return Err(ApiError::bad_request(BAD_INVITE));
             }
         }
     }
+    let hash = match hash_for_signup(&state, &password).await {
+        Ok(h) => h,
+        Err(e) => {
+            give_back(&state, invite_id).await;
+            state.limiter.signup_undo(&ip);
+            return Err(e);
+        }
+    };
     let accid = match state.game.create_account(&login, &hash).await {
         Ok(crate::model::Created::Account(id)) => id,
         Ok(crate::model::Created::Taken) => {
@@ -356,16 +348,6 @@ mod tests {
         }
         for bad in ["", "ab", "a1b2c3d4e5f6g7h89", "wren!", "wr en", "wrén", "wren\n", "a-b"] {
             assert!(!valid_signup_login(bad), "{bad:?}");
-        }
-    }
-
-    #[test]
-    fn private_addresses_are_this_computer_home_networks_and_tailscale() {
-        for ok in ["127.0.0.1", "::1", "10.1.2.3", "172.16.0.9", "192.168.1.9", "100.64.0.1", "100.127.255.1", "fd00::1"] {
-            assert!(is_private_peer(ok), "{ok}");
-        }
-        for no in ["8.8.8.8", "100.128.0.1", "100.63.0.1", "172.32.0.1", "2001:db8::1", "unknown"] {
-            assert!(!is_private_peer(no), "{no}");
         }
     }
 

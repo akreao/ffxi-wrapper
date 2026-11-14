@@ -127,6 +127,11 @@ pub fn scan(src: &str) -> Result<Option<bool>, ()> {
             _ => {}
         }
     }
+    // An assignment that may not run (inside an `if`, after a `return`) can't be taken as given.
+    const FLOW: [&str; 11] = ["if", "elseif", "else", "return", "function", "while", "for", "repeat", "goto", "do", "break"];
+    if found.is_some() && toks.iter().any(|t| matches!(t, Tok::Ident(w) if FLOW.contains(&w.as_str()))) {
+        return Err(());
+    }
     Ok(found)
 }
 
@@ -179,6 +184,9 @@ mod tests {
     #[test]
     fn anything_but_a_literal_is_unknown() {
         for src in [
+            "if x then xi.settings.login.ACCOUNT_CREATION = false end",
+            "return\nxi.settings.login.ACCOUNT_CREATION = false",
+            "local function f() xi.settings.login.ACCOUNT_CREATION = false end",
             "xi.settings.login.ACCOUNT_CREATION = os.getenv('X') == '1'",
             "xi.settings.login.ACCOUNT_CREATION = enabled",
             "xi.settings.login.ACCOUNT_CREATION = 0",

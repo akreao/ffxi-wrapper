@@ -311,19 +311,36 @@ async fn a_failed_insert_burns_no_use() {
 }
 
 #[tokio::test]
-async fn a_busy_site_answers_the_same_whatever_the_code() {
+async fn a_bad_code_is_refused_before_any_hashing_and_a_busy_site_spends_nothing() {
     let (s, owner) = open_site().await;
     let good = new_invite(&s, &owner, 1).await;
-    // Every bcrypt slot taken: the hashing step, which every sign-up passes, gives up the same way.
+    // Every bcrypt slot taken: a bad code is still answered (it never needs one) ...
     let held = s.state.bcrypt_slots.acquire_many(4).await.unwrap();
-    let a = s.send(signup("one", "correct-horse", &good).peer(3)).await;
     let b = s.send(signup("two", "correct-horse", "NOPE-NOPE-NOPE-NOPE").peer(4)).await;
+    assert_eq!(b.status, StatusCode::BAD_REQUEST);
+    // ... and a good one that can't get a slot gives its use back.
+    let a = s.send(signup("one", "correct-horse", &good).peer(3)).await;
     drop(held);
-    assert_eq!((a.status, &a.bytes), (StatusCode::SERVICE_UNAVAILABLE, &b.bytes));
-    assert_eq!(b.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(a.status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(uses_of(&s, &owner).await, vec![(0, "active".to_string())], "nothing was spent");
-    // The two refused tries counted nothing against the limits either.
-    assert_eq!(s.state.limiter.signups.count("signup:10.0.0.3", 3600, s.state.now()), 0);
+    assert_eq!(s.state.limiter.signups.count("signup:day", 86_400, s.state.now()), 0, "nor the day's count");
+}
+
+#[tokio::test]
+async fn a_visitor_who_hangs_up_leaves_nothing_counted_that_made_no_account() {
+    let (s, owner) = open_site().await;
+    let good = new_invite(&s, &owner, 5).await;
+    // Hang up while the hash waits for a slot; the work carries on without the visitor.
+    let held = s.state.bcrypt_slots.acquire_many(4).await.unwrap();
+    let gone = tokio::time::timeout(std::time::Duration::from_millis(100), s.send(signup("ghost", "correct-horse", &good).peer(3))).await;
+    assert!(gone.is_err(), "the request was dropped");
+    drop(held);
+    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+    let made = account_named(&s, "ghost").is_some();
+    let day = s.state.limiter.signups.count("signup:day", 86_400, s.state.now());
+    let used = uses_of(&s, &owner).await[0].0;
+    assert_eq!((day, used), if made { (1, 1) } else { (0, 0) }, "counts match what exists");
+    assert!(made, "the sign-up finished on its own");
 }
 
 // ---- limits ----
@@ -389,22 +406,6 @@ async fn behind_the_gateway_address_everyone_shares_one_bucket() {
         assert_eq!(s.send(signup(&format!("user{i}"), "correct-horse", "").peer(1)).await.status, StatusCode::CREATED);
     }
     assert_eq!(s.send(signup("user10", "correct-horse", "").peer(1)).await.status, StatusCode::TOO_MANY_REQUESTS);
-}
-
-// ---- plain http ----
-
-#[tokio::test]
-async fn plain_http_from_the_internet_is_refused_when_the_site_has_an_address() {
-    let mut cfg = Config::for_tests();
-    cfg.admin_secret = SECRET.into();
-    cfg.lsb_settings = Some(settings_dir(Some(OPEN)));
-    cfg.public_url = "https://ffxi.example.com".into();
-    let s = site_with(cfg).await;
-    s.state.store.set_setting("signup_needs_invite", "0", "t", 0).await.unwrap();
-    let r = s.send(signup("wren", "correct-horse", "").with_addr([198, 51, 100, 9])).await;
-    assert_eq!(r.status, StatusCode::FORBIDDEN, "{}", r.text());
-    assert!(account_named(&s, "wren").is_none());
-    assert_eq!(s.send(signup("wren", "correct-horse", "").with_addr([192, 168, 1, 9])).await.status, StatusCode::CREATED, "from the home network");
 }
 
 // ---- the owner's page ----

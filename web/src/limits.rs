@@ -80,15 +80,26 @@ const DAY: i64 = 24 * HOUR;
 pub const SIGNUP_ADDR: (usize, i64) = (3, HOUR);
 pub const SIGNUP_PROXIED: (usize, i64) = (10, HOUR);
 pub const SIGNUP_DAY: (usize, i64) = (30, DAY);
+/// Every attempt that gets as far as the invite check, from anywhere: bounds how fast codes can be guessed.
+pub const SIGNUP_ATTEMPTS: (usize, i64) = (60, HOUR);
+const SIGNUP_ATTEMPTS_KEY: &str = "signup:attempts";
 const SIGNUP_DAY_KEY: &str = "signup:day";
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum SignupLimit {
     Address,
     Day,
+    Attempts,
 }
 
 fn signup_addr_key(addr: &str) -> (String, usize) {
+    // An IPv6 customer gets a whole /64: one machine has billions of addresses in it.
+    if let Ok(std::net::IpAddr::V6(v6)) = addr.parse::<std::net::IpAddr>() {
+        if !v6.is_loopback() {
+            let s = v6.segments();
+            return (format!("signup:{:x}:{:x}:{:x}:{:x}::/64", s[0], s[1], s[2], s[3]), SIGNUP_ADDR.0);
+        }
+    }
     if is_proxy_addr(addr) {
         ("signup:proxied".to_string(), SIGNUP_PROXIED.0)
     } else {
@@ -217,10 +228,16 @@ impl Limiter {
     /// at invite codes or names stays slow.
     pub fn reserve_signup(&self, addr: &str, now: i64) -> Result<(), SignupLimit> {
         let (addr_key, addr_limit) = signup_addr_key(addr);
-        if self.signups.reserve(&[(addr_key.as_str(), addr_limit, HOUR), (SIGNUP_DAY_KEY, SIGNUP_DAY.0, DAY)], now) {
+        if self.signups.reserve(&[(addr_key.as_str(), addr_limit, HOUR), (SIGNUP_DAY_KEY, SIGNUP_DAY.0, DAY), (SIGNUP_ATTEMPTS_KEY, SIGNUP_ATTEMPTS.0, SIGNUP_ATTEMPTS.1)], now) {
             return Ok(());
         }
-        Err(if self.signups.count(&addr_key, HOUR, now) >= addr_limit { SignupLimit::Address } else { SignupLimit::Day })
+        Err(if self.signups.count(&addr_key, HOUR, now) >= addr_limit {
+            SignupLimit::Address
+        } else if self.signups.count(SIGNUP_DAY_KEY, DAY, now) >= SIGNUP_DAY.0 {
+            SignupLimit::Day
+        } else {
+            SignupLimit::Attempts
+        })
     }
 
     pub fn signup_not_created(&self) {
@@ -230,6 +247,7 @@ impl Limiter {
     /// Takes back an attempt that did nothing at all (the site was busy): both counts.
     pub fn signup_undo(&self, addr: &str) {
         self.signups.release(&signup_addr_key(addr).0);
+        self.signups.release(SIGNUP_ATTEMPTS_KEY);
         self.signup_not_created();
     }
 }
@@ -377,5 +395,23 @@ mod tests {
         attempt(&l, "1.2.3.4", &Target::Account(1), 0);
         l.sweep(10_000);
         assert_eq!(l.failures.count("addr:1.2.3.4", 3600, 10_000), 0);
+    }
+
+    #[test]
+    fn signup_keys_group_an_ipv6_network_and_keep_ipv4_apart() {
+        assert_eq!(signup_addr_key("2001:db8:1:2:aaaa::1").0, signup_addr_key("2001:db8:1:2:bbbb::9").0);
+        assert_ne!(signup_addr_key("2001:db8:1:2::1").0, signup_addr_key("2001:db8:1:3::1").0);
+        assert_ne!(signup_addr_key("198.51.100.1").0, signup_addr_key("198.51.100.2").0);
+    }
+
+    #[test]
+    fn sixty_signup_attempts_an_hour_from_anywhere() {
+        let l = Limiter::new();
+        for i in 0..60 {
+            assert_eq!(l.reserve_signup(&format!("198.51.{}.{}", i / 200, i % 200 + 2), 0), Ok(()), "{i}");
+            l.signup_not_created(); // refused tries give the day's slot back; the attempt stays counted
+        }
+        assert_eq!(l.reserve_signup("203.0.113.5", 0), Err(SignupLimit::Attempts));
+        assert_eq!(l.reserve_signup("203.0.113.5", 3601), Ok(()));
     }
 }
