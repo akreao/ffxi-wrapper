@@ -3,6 +3,7 @@
 use crate::config::Config;
 use crate::game::Game;
 use crate::limits::Limiter;
+use crate::model::{PublicPlayer, RankRow};
 use crate::status::Probe;
 use crate::store::Store;
 use std::collections::HashMap;
@@ -25,6 +26,17 @@ pub struct AppState {
     pub bcrypt_cost: u32,
     /// At most this many bcrypt checks or hashes run at once; a burst of sign-ins queues.
     pub bcrypt_slots: tokio::sync::Semaphore,
+    pub public_cache: PublicCache,
+}
+
+/// Public answers kept for a short while, so visitors cannot load the database.
+type Cached<T> = (i64, Arc<T>);
+
+#[derive(Default)]
+pub struct PublicCache {
+    pub online: Mutex<Option<Cached<Vec<PublicPlayer>>>>,
+    /// Keyed by [`Board::key`]: at most 1 + 22 + 10 + 1 entries.
+    pub boards: Mutex<HashMap<String, Cached<Vec<RankRow>>>>,
 }
 
 pub type Shared = Arc<AppState>;

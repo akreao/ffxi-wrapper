@@ -43,8 +43,86 @@ pub struct FakeChar {
     pub online: bool,
 }
 
+/// A character as the public pages see the game database: every field a rule looks at.
+#[derive(Clone)]
+pub struct Person {
+    pub name: String,
+    /// 0 is a character without an account.
+    pub accid: i64,
+    pub banned: bool,
+    pub gm: i64,
+    pub gm_hidden: bool,
+    pub anon: bool,
+    pub in_game: bool,
+    pub connecting: bool,
+    pub nation: i64,
+    pub zone: Option<String>,
+    pub mjob: i64,
+    pub mlvl: i64,
+    pub sjob: i64,
+    pub slvl: i64,
+    /// Levels and experience per job, in `JOBS` order.
+    pub jobs: [i64; 22],
+    pub exp: [i64; 22],
+    /// (skill id, value in tenths)
+    pub skills: Vec<(i64, i64)>,
+    pub playtime: i64,
+}
+
+impl Person {
+    pub fn new(name: &str) -> Person {
+        Person { name: name.into(), accid: 1, banned: false, gm: 0, gm_hidden: false, anon: false, in_game: false, connecting: false, nation: 1, zone: None, mjob: 1, mlvl: 1, sjob: 0, slvl: 1, jobs: [1; 22], exp: [0; 22], skills: vec![], playtime: 0 }
+    }
+    /// In game as `job` (1-22) at `lvl`, in `zone`.
+    pub fn online(mut self, job: i64, lvl: i64, zone: &str) -> Person {
+        self.in_game = true;
+        self.zone = Some(zone.into());
+        self.mjob = job;
+        self.mlvl = lvl;
+        self.sjob = 1;
+        self.slvl = lvl / 2;
+        self.jobs[job as usize - 1] = lvl;
+        self
+    }
+    pub fn level(mut self, job: i64, lvl: i64) -> Person {
+        self.jobs[job as usize - 1] = lvl;
+        self
+    }
+    pub fn skill(mut self, id: i64, tenths: i64) -> Person {
+        self.skills.push((id, tenths));
+        self
+    }
+    pub fn played(mut self, secs: i64) -> Person {
+        self.playtime = secs;
+        self
+    }
+    pub fn gm(mut self, level: i64) -> Person {
+        self.gm = level;
+        self
+    }
+    pub fn hidden(mut self) -> Person {
+        self.gm_hidden = true;
+        self
+    }
+    pub fn anon(mut self) -> Person {
+        self.anon = true;
+        self
+    }
+    pub fn banned(mut self) -> Person {
+        self.banned = true;
+        self
+    }
+    pub fn no_account(mut self) -> Person {
+        self.accid = 0;
+        self
+    }
+}
+
 #[derive(Default)]
 pub struct Data {
+    pub people: Vec<Person>,
+    /// How many times the public queries ran, to show the 30 s cache.
+    pub public_reads: usize,
     pub accounts: Vec<FakeAccount>,
     pub chars: Vec<FakeChar>,
     pub online: Vec<OnlineRow>,
@@ -64,6 +142,9 @@ impl Fake {
         let mut d = self.0.lock().unwrap();
         d.accounts.push(FakeAccount { id, login: login.into(), hash, status: 1, totp: None, ban: None, trust_tokens: true });
         d.chars.push(FakeChar { charid: id * 10, accid: id, name: format!("{login}char"), gm, online: false });
+    }
+    pub fn add_person(&self, p: Person) {
+        self.0.lock().unwrap().people.push(p);
     }
     pub fn set_status(&self, id: i64, status: i64) {
         self.0.lock().unwrap().accounts.iter_mut().find(|a| a.id == id).unwrap().status = status;
@@ -180,9 +261,53 @@ impl Game for Fake {
         self.check()?;
         Ok(self.0.lock().unwrap().online.clone())
     }
-    async fn public_online(&self) -> DbResult<i64> {
+    async fn public_online(&self) -> DbResult<Vec<PublicPlayer>> {
         self.check()?;
-        Ok(self.0.lock().unwrap().online.iter().filter(|r| r.gm == 0 && !r.gm_hidden && !r.connecting).count() as i64)
+        let mut d = self.0.lock().unwrap();
+        d.public_reads += 1;
+        let mut out: Vec<PublicPlayer> = d
+            .people
+            .iter()
+            .filter(|p| p.in_game && !p.connecting && p.accid != 0 && p.gm == 0 && !p.gm_hidden)
+            .map(|p| PublicPlayer {
+                name: p.name.clone(),
+                nation: p.nation,
+                zone: if p.anon { None } else { p.zone.as_deref().map(zone_name) },
+                mjob: (!p.anon).then_some(p.mjob),
+                mlvl: (!p.anon).then_some(p.mlvl),
+                sjob: (!p.anon).then_some(p.sjob),
+                slvl: (!p.anon).then_some(p.slvl),
+                anonymous: p.anon,
+            })
+            .collect();
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(out)
+    }
+    async fn public_ranking(&self, board: Board) -> DbResult<Vec<RankRow>> {
+        self.check()?;
+        let mut d = self.0.lock().unwrap();
+        d.public_reads += 1;
+        // (sort key descending, name, row without its rank)
+        let mut rows: Vec<((i64, i64), RankRow)> = Vec::new();
+        for p in d.people.iter().filter(|p| p.accid != 0 && !p.banned && p.gm == 0 && !p.gm_hidden) {
+            let mk = |job: Option<i64>, value: i64| RankRow { rank: 0, name: p.name.clone(), nation: p.nation, job, value };
+            match board {
+                Board::Level if !p.anon => {
+                    let (n, lvl) = p.jobs.iter().enumerate().fold((0, -1), |b, (n, l)| if *l > b.1 { (n, *l) } else { b });
+                    rows.push(((lvl, 0), mk(Some(n as i64 + 1), lvl)));
+                }
+                Board::Job(n) if !p.anon && p.jobs[n] > 1 => rows.push(((p.jobs[n], p.exp[n]), mk(Some(n as i64 + 1), p.jobs[n]))),
+                Board::Craft(id) => {
+                    if let Some((_, v)) = p.skills.iter().find(|(s, v)| *s == id && *v > 0) {
+                        rows.push(((*v, 0), mk(None, v / 10)));
+                    }
+                }
+                Board::Playtime if p.playtime >= 3600 => rows.push(((p.playtime, 0), mk(None, p.playtime / 3600))),
+                _ => {}
+            }
+        }
+        rows.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.name.cmp(&b.1.name)));
+        Ok(rows.into_iter().take(RANKING_TOP).enumerate().map(|(i, (_, mut r))| { r.rank = i as i64 + 1; r }).collect())
     }
 
     async fn admin_accounts(&self, q: &AccountQuery) -> DbResult<Page<AccountRow>> {

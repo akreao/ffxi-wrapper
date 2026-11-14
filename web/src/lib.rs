@@ -40,5 +40,6 @@ pub fn app_state(p: Parts) -> Shared {
         dummy_hash: p.dummy_hash,
         bcrypt_cost: p.bcrypt_cost,
         bcrypt_slots: tokio::sync::Semaphore::new(4),
+        public_cache: Default::default(),
     })
 }
