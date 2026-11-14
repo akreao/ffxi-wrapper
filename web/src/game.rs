@@ -206,7 +206,7 @@ const ACCOUNT_COLS: &str = "CAST(a.id AS SIGNED) AS id, a.login, CAST(a.status A
        CAST(UNIX_TIMESTAMP(NULLIF(a.timecreate, '0000-00-00 00:00:00')) AS SIGNED) AS created,
        CAST(UNIX_TIMESTAMP(NULLIF(a.timelastmodify, '0000-00-00 00:00:00')) AS SIGNED) AS last_login,
        CAST(COALESCE((SELECT MAX(c.gmlevel) FROM chars c WHERE c.accid = a.id), 0) AS SIGNED) AS gm,
-       CAST(COALESCE((SELECT GROUP_CONCAT(c.charname ORDER BY c.charname SEPARATOR CHAR(31 USING utf8mb4))
+       CAST(COALESCE((SELECT GROUP_CONCAT(c.charname ORDER BY c.charname SEPARATOR '\u{1f}')
                       FROM chars c WHERE c.accid = a.id), '') AS CHAR) AS names,
        CAST(EXISTS(SELECT 1 FROM accounts_sessions s WHERE s.accid = a.id) AS SIGNED) AS online";
 
