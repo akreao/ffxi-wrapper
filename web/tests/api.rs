@@ -489,7 +489,7 @@ async fn the_shared_stylesheet_fonts_and_scripts_are_served() {
 #[tokio::test]
 async fn no_page_uses_inline_scripts_or_styles() {
     // The Content-Security-Policy forbids them, so a page that needed one would be broken.
-    for name in ["home", "signin", "me", "me-character", "admin"] {
+    for name in ["home", "signin", "me", "me-character", "admin", "accounts", "account", "characters", "character", "bans", "log"] {
         let html = std::fs::read_to_string(format!("ui/{name}.html")).unwrap();
         assert!(!html.contains(" style="), "{name}.html has an inline style");
         assert!(!html.contains("onclick") && !html.contains("onload"), "{name}.html has an inline handler");

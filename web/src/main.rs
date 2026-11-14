@@ -77,6 +77,7 @@ async fn serve() {
         bcrypt_cost: auth::BCRYPT_COST,
     });
     spawn_housekeeping(state.clone());
+    spawn_ban_lifter(state.clone());
 
     let listener = match tokio::net::TcpListener::bind(&listen).await {
         Ok(l) => l,
@@ -106,6 +107,20 @@ fn spawn_housekeeping(state: ffxi_web::Shared) {
                 tracing::warn!("purge failed: {e}");
             }
             state.limiter.sweep(now);
+        }
+    });
+}
+
+/// Every minute: lift bans whose end has passed (LSB never does).
+fn spawn_ban_lifter(state: ffxi_web::Shared) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(60));
+        loop {
+            tick.tick().await;
+            let n = ffxi_web::routes::admin::lift_expired_bans(&state).await;
+            if n > 0 {
+                tracing::info!("lifted {n} ban(s) that ran out");
+            }
         }
     });
 }

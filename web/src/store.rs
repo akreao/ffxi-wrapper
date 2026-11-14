@@ -46,6 +46,26 @@ CREATE INDEX action_log_at ON action_log (at);
 CREATE INDEX action_log_target ON action_log (target_kind, target_id);
 ";
 
+const ACTION_COLS: &str = "id, at, actor_kind, actor_login, actor_role, ip, action, target_kind, target_id, target_name, reason, detail, result";
+
+fn action_row(r: &sqlx::sqlite::SqliteRow) -> Result<ActionRow, sqlx::Error> {
+    Ok(ActionRow {
+        id: r.try_get("id")?,
+        at: r.try_get("at")?,
+        actor_kind: r.try_get("actor_kind")?,
+        actor_login: r.try_get("actor_login")?,
+        actor_role: r.try_get("actor_role")?,
+        ip: r.try_get("ip")?,
+        action: r.try_get("action")?,
+        target_kind: r.try_get("target_kind")?,
+        target_id: r.try_get("target_id")?,
+        target_name: r.try_get("target_name")?,
+        reason: r.try_get("reason")?,
+        detail: r.try_get("detail")?,
+        result: r.try_get("result")?,
+    })
+}
+
 /// How a session row is found: the cookie holds the id, the table only its SHA-256.
 fn hash_id(id: &str) -> Vec<u8> {
     Sha256::digest(id.as_bytes()).to_vec()
@@ -104,12 +124,28 @@ pub struct ActionRow {
     pub actor_kind: String,
     pub actor_login: Option<String>,
     pub actor_role: String,
+    /// Only owners are sent this.
+    pub ip: Option<String>,
     pub action: String,
     pub target_kind: Option<String>,
     pub target_id: Option<i64>,
     pub target_name: Option<String>,
     pub reason: Option<String>,
+    /// JSON the action wrote (for a ban: its end), never a password.
+    pub detail: Option<String>,
     pub result: String,
+}
+
+/// What the Admin log page asks for. Page numbers start at 1.
+#[derive(Debug, Clone, Default)]
+pub struct LogQuery {
+    pub q: String,
+    pub actor: Option<String>,
+    pub action: Option<String>,
+    /// Only rows at or after this time.
+    pub since: Option<i64>,
+    pub page: i64,
+    pub per: i64,
 }
 
 #[derive(Clone)]
@@ -280,36 +316,68 @@ impl Store {
 
     /// Newest first; `before` is the id of the last row of the previous page.
     pub async fn actions(&self, before: Option<i64>, per: i64, only_admin: bool) -> Result<Vec<ActionRow>, sqlx::Error> {
-        let rows = sqlx::query(
-            "SELECT id, at, actor_kind, actor_login, actor_role, action, target_kind, target_id, target_name, reason, result
-             FROM action_log
+        let rows = sqlx::query(&format!(
+            "SELECT {ACTION_COLS} FROM action_log
              WHERE (? IS NULL OR id < ?)
-               AND (? = 0 OR (actor_role IN ('owner', 'moderator') AND action NOT IN ('sign_in', 'sign_in_failed')))
-             ORDER BY id DESC LIMIT ?",
-        )
+               AND (? = 0 OR (actor_role IN ('owner', 'moderator', 'system') AND action NOT IN ('sign_in', 'sign_in_failed')))
+             ORDER BY id DESC LIMIT ?"
+        ))
         .bind(before)
         .bind(before)
         .bind(only_admin as i64)
         .bind(per)
         .fetch_all(&self.pool)
         .await?;
-        let mut out = Vec::with_capacity(rows.len());
-        for r in &rows {
-            out.push(ActionRow {
-                id: r.try_get("id")?,
-                at: r.try_get("at")?,
-                actor_kind: r.try_get("actor_kind")?,
-                actor_login: r.try_get("actor_login")?,
-                actor_role: r.try_get("actor_role")?,
-                action: r.try_get("action")?,
-                target_kind: r.try_get("target_kind")?,
-                target_id: r.try_get("target_id")?,
-                target_name: r.try_get("target_name")?,
-                reason: r.try_get("reason")?,
-                result: r.try_get("result")?,
-            });
+        rows.iter().map(action_row).collect()
+    }
+
+    /// One page of the log, newest first, with what matched in all.
+    pub async fn log_page(&self, q: &LogQuery) -> Result<(Vec<ActionRow>, i64), sqlx::Error> {
+        let like = format!("%{}%", q.q.replace('|', "||").replace('%', "|%").replace('_', "|_"));
+        let wh = "WHERE (? = '' OR target_name LIKE ? ESCAPE '|' OR reason LIKE ? ESCAPE '|' OR actor_login LIKE ? ESCAPE '|')
+                    AND (? IS NULL OR actor_login = ?) AND (? IS NULL OR action = ?) AND (? IS NULL OR at >= ?)";
+        let total: i64 = sqlx::query(&format!("SELECT COUNT(*) FROM action_log {wh}"))
+            .bind(&q.q).bind(&like).bind(&like).bind(&like)
+            .bind(&q.actor).bind(&q.actor).bind(&q.action).bind(&q.action).bind(q.since).bind(q.since)
+            .fetch_one(&self.pool)
+            .await?
+            .try_get(0)?;
+        let rows = sqlx::query(&format!("SELECT {ACTION_COLS} FROM action_log {wh} ORDER BY id DESC LIMIT ? OFFSET ?"))
+            .bind(&q.q).bind(&like).bind(&like).bind(&like)
+            .bind(&q.actor).bind(&q.actor).bind(&q.action).bind(&q.action).bind(q.since).bind(q.since)
+            .bind(q.per)
+            .bind((q.page - 1) * q.per)
+            .fetch_all(&self.pool)
+            .await?;
+        Ok((rows.iter().map(action_row).collect::<Result<_, _>>()?, total))
+    }
+
+    /// Everyone who has acted and every action done, for the log's filters.
+    pub async fn log_facets(&self) -> Result<(Vec<String>, Vec<String>), sqlx::Error> {
+        let actors = sqlx::query("SELECT DISTINCT actor_login FROM action_log WHERE actor_login IS NOT NULL AND actor_role IN ('owner', 'moderator') ORDER BY actor_login")
+            .fetch_all(&self.pool)
+            .await?;
+        let actions = sqlx::query("SELECT DISTINCT action FROM action_log ORDER BY action").fetch_all(&self.pool).await?;
+        Ok((
+            actors.iter().map(|r| r.try_get(0)).collect::<Result<_, _>>()?,
+            actions.iter().map(|r| r.try_get(0)).collect::<Result<_, _>>()?,
+        ))
+    }
+
+    /// What was done to these targets (`("account", 1001)`), newest first.
+    pub async fn history(&self, targets: &[(&str, i64)], limit: i64) -> Result<Vec<ActionRow>, sqlx::Error> {
+        if targets.is_empty() {
+            return Ok(vec![]);
         }
-        Ok(out)
+        // Placeholders only: the kinds and ids are bound like any other value.
+        let cond = vec!["(target_kind = ? AND target_id = ?)"; targets.len()].join(" OR ");
+        let sql = format!("SELECT {ACTION_COLS} FROM action_log WHERE ({cond}) AND result = 'ok' ORDER BY id DESC LIMIT ?");
+        let mut query = sqlx::query(&sql);
+        for (kind, id) in targets {
+            query = query.bind(*kind).bind(*id);
+        }
+        let rows = query.bind(limit).fetch_all(&self.pool).await?;
+        rows.iter().map(action_row).collect()
     }
 
     pub async fn action_count(&self) -> Result<i64, sqlx::Error> {

@@ -30,6 +30,8 @@ pub struct FakeAccount {
     pub hash: String,
     pub status: i64,
     pub totp: Option<TotpRow>,
+    pub ban: Option<BanRecord>,
+    pub trust_tokens: bool,
 }
 
 #[derive(Clone)]
@@ -38,6 +40,7 @@ pub struct FakeChar {
     pub accid: i64,
     pub name: String,
     pub gm: i64,
+    pub online: bool,
 }
 
 #[derive(Default)]
@@ -59,8 +62,8 @@ impl Fake {
     pub fn add_account(&self, id: i64, login: &str, password: &str, gm: i64) {
         let hash = auth::hash_password(password, 4).unwrap();
         let mut d = self.0.lock().unwrap();
-        d.accounts.push(FakeAccount { id, login: login.into(), hash, status: 1, totp: None });
-        d.chars.push(FakeChar { charid: id * 10, accid: id, name: format!("{login}char"), gm });
+        d.accounts.push(FakeAccount { id, login: login.into(), hash, status: 1, totp: None, ban: None, trust_tokens: true });
+        d.chars.push(FakeChar { charid: id * 10, accid: id, name: format!("{login}char"), gm, online: false });
     }
     pub fn set_status(&self, id: i64, status: i64) {
         self.0.lock().unwrap().accounts.iter_mut().find(|a| a.id == id).unwrap().status = status;
@@ -75,6 +78,25 @@ impl Fake {
     }
     pub fn set_totp(&self, id: i64, secret: &str) {
         self.0.lock().unwrap().accounts.iter_mut().find(|a| a.id == id).unwrap().totp = Some(TotpRow { validated: true, secret: secret.into() });
+    }
+    pub fn set_online(&self, charid: i64, online: bool) {
+        self.0.lock().unwrap().chars.iter_mut().find(|c| c.charid == charid).unwrap().online = online;
+    }
+    pub fn add_char(&self, charid: i64, accid: i64, name: &str, gm: i64) {
+        self.0.lock().unwrap().chars.push(FakeChar { charid, accid, name: name.into(), gm, online: false });
+    }
+    pub fn account(&self, id: i64) -> FakeAccount {
+        self.0.lock().unwrap().accounts.iter().find(|a| a.id == id).unwrap().clone()
+    }
+    pub fn gm_of_char(&self, charid: i64) -> i64 {
+        self.0.lock().unwrap().chars.iter().find(|c| c.charid == charid).unwrap().gm
+    }
+    /// A ban made outside the site: status banned plus a record.
+    pub fn ban_directly(&self, id: i64, record: Option<BanRecord>) {
+        let mut d = self.0.lock().unwrap();
+        let a = d.accounts.iter_mut().find(|a| a.id == id).unwrap();
+        a.status = 2;
+        a.ban = record;
     }
     pub fn hash_of(&self, id: i64) -> String {
         self.0.lock().unwrap().accounts.iter().find(|a| a.id == id).unwrap().hash.clone()
@@ -92,7 +114,7 @@ impl Fake {
 }
 
 fn summary(c: &FakeChar) -> CharSummary {
-    CharSummary { charid: c.charid, name: c.name.clone(), zone_id: 230, zone: Some("Southern San dOria".into()), nation: 0, mjob: Some(1), mlvl: Some(10), sjob: Some(2), slvl: Some(5), playtime: 7200, last_logout: Some(NOW - 100), online: false }
+    CharSummary { charid: c.charid, name: c.name.clone(), zone_id: 230, zone: Some("Southern San dOria".into()), nation: 0, mjob: Some(1), mlvl: Some(10), sjob: Some(2), slvl: Some(5), playtime: 7200, last_logout: Some(NOW - 100), online: c.online }
 }
 
 #[async_trait]
@@ -161,6 +183,199 @@ impl Game for Fake {
     async fn public_online(&self) -> DbResult<i64> {
         self.check()?;
         Ok(self.0.lock().unwrap().online.iter().filter(|r| r.gm == 0 && !r.gm_hidden && !r.connecting).count() as i64)
+    }
+
+    async fn admin_accounts(&self, q: &AccountQuery) -> DbResult<Page<AccountRow>> {
+        self.check()?;
+        let d = self.0.lock().unwrap();
+        let needle = q.q.to_lowercase();
+        let mut rows: Vec<AccountRow> = d
+            .accounts
+            .iter()
+            .map(|a| {
+                let chars: Vec<&FakeChar> = d.chars.iter().filter(|c| c.accid == a.id).collect();
+                AccountRow {
+                    id: a.id,
+                    login: a.login.clone(),
+                    status: a.status,
+                    created: Some(NOW - 1000 * (1000 - a.id)),
+                    last_login: Some(NOW - 10 * a.id),
+                    characters: chars.iter().map(|c| c.name.clone()).collect(),
+                    gm: chars.iter().map(|c| c.gm).max().unwrap_or(0),
+                    online: chars.iter().any(|c| c.online),
+                }
+            })
+            .filter(|r| needle.is_empty() || r.login.to_lowercase().contains(&needle) || r.characters.iter().any(|c| c.to_lowercase().contains(&needle)))
+            .filter(|r| match q.filter {
+                AccountFilter::All => true,
+                AccountFilter::Online => r.online,
+                AccountFilter::Banned => r.status & 1 == 0,
+            })
+            .collect();
+        rows.sort_by(|a, b| match q.sort {
+            AccountSort::Login => a.login.cmp(&b.login),
+            AccountSort::Id => a.id.cmp(&b.id),
+            AccountSort::Created => a.created.cmp(&b.created),
+            AccountSort::LastLogin => a.last_login.cmp(&b.last_login),
+        });
+        if q.desc {
+            rows.reverse();
+        }
+        let total = rows.len() as i64;
+        let items = rows.into_iter().skip(((q.page - 1) * q.per) as usize).take(q.per as usize).collect();
+        Ok(Page { items, total })
+    }
+    async fn admin_account(&self, id: i64) -> DbResult<Option<AdminAccount>> {
+        self.check()?;
+        let d = self.0.lock().unwrap();
+        Ok(d.accounts.iter().find(|a| a.id == id).map(|a| {
+            let chars: Vec<AdminChar> = d.chars.iter().filter(|c| c.accid == id).map(|c| AdminChar { summary: summary(c), accid: id, login: a.login.clone(), gm: c.gm }).collect();
+            AdminAccount {
+                id,
+                login: a.login.clone(),
+                status: a.status,
+                created: Some(NOW - 1000),
+                last_login: Some(NOW - 10),
+                gm: chars.iter().map(|c| c.gm).max().unwrap_or(0),
+                has_totp: a.totp.is_some(),
+                online: chars.iter().any(|c| c.summary.online),
+                ban: if a.status & 1 == 0 { a.ban.clone() } else { None },
+                characters: chars,
+            }
+        }))
+    }
+    async fn admin_characters(&self, q: &CharQuery) -> DbResult<Page<AdminChar>> {
+        self.check()?;
+        let d = self.0.lock().unwrap();
+        let needle = q.q.to_lowercase();
+        let mut rows: Vec<AdminChar> = d
+            .chars
+            .iter()
+            .filter(|c| needle.is_empty() || c.name.to_lowercase().contains(&needle))
+            .filter(|c| !q.online || c.online)
+            .map(|c| AdminChar { summary: summary(c), accid: c.accid, login: d.accounts.iter().find(|a| a.id == c.accid).unwrap().login.clone(), gm: c.gm })
+            .collect();
+        rows.sort_by(|a, b| match q.sort {
+            CharSort::Name => a.summary.name.cmp(&b.summary.name),
+            CharSort::Account => a.login.cmp(&b.login),
+            CharSort::Playtime => a.summary.playtime.cmp(&b.summary.playtime),
+            CharSort::LastLogout => a.summary.last_logout.cmp(&b.summary.last_logout),
+        });
+        if q.desc {
+            rows.reverse();
+        }
+        let total = rows.len() as i64;
+        let items = rows.into_iter().skip(((q.page - 1) * q.per) as usize).take(q.per as usize).collect();
+        Ok(Page { items, total })
+    }
+    async fn admin_character(&self, charid: i64) -> DbResult<Option<AdminCharDetail>> {
+        self.check()?;
+        let d = self.0.lock().unwrap();
+        Ok(d.chars.iter().find(|c| c.charid == charid).map(|c| AdminCharDetail {
+            detail: CharDetail {
+                summary: summary(c),
+                gil: 1234,
+                cap: 50,
+                jobs: JOBS.iter().enumerate().map(|(i, j)| JobLevel { job: j, level: if i < 2 { 10 } else { 0 }, exp: 0 }).collect(),
+            },
+            accid: c.accid,
+            login: d.accounts.iter().find(|a| a.id == c.accid).unwrap().login.clone(),
+            gm: c.gm,
+            created: Some(NOW - 5000),
+        }))
+    }
+    async fn admin_inventory(&self, charid: i64) -> DbResult<Option<Vec<InventoryItem>>> {
+        self.check()?;
+        let d = self.0.lock().unwrap();
+        Ok(d.chars.iter().find(|c| c.charid == charid).map(|_| vec![InventoryItem { location: 0, slot: 1, item_id: 4116, name: Some("Hi-Potion".into()), quantity: 3 }]))
+    }
+    async fn admin_bans(&self, q: &str, page: i64, per: i64) -> DbResult<Page<BanRow>> {
+        self.check()?;
+        let d = self.0.lock().unwrap();
+        let needle = q.to_lowercase();
+        let rows: Vec<BanRow> = d
+            .accounts
+            .iter()
+            .filter(|a| a.status & 1 == 0)
+            .map(|a| BanRow { accid: a.id, login: a.login.clone(), characters: d.chars.iter().filter(|c| c.accid == a.id).map(|c| c.name.clone()).collect(), ban: a.ban.clone() })
+            .filter(|r| needle.is_empty() || r.login.to_lowercase().contains(&needle) || r.characters.iter().any(|c| c.to_lowercase().contains(&needle)))
+            .collect();
+        let total = rows.len() as i64;
+        Ok(Page { items: rows.into_iter().skip(((page - 1) * per) as usize).take(per as usize).collect(), total })
+    }
+    async fn ban_account(&self, id: i64, until: Option<i64>, reason: &str, guard: Option<i64>) -> DbResult<Acted> {
+        self.check()?;
+        let mut d = self.0.lock().unwrap();
+        let gm = d.chars.iter().filter(|c| c.accid == id).map(|c| c.gm).max().unwrap_or(0);
+        let Some(a) = d.accounts.iter_mut().find(|a| a.id == id) else { return Ok(Acted::NotFound) };
+        if guard.is_some_and(|g| gm >= g) {
+            return Ok(Acted::TooHigh);
+        }
+        a.status = 2;
+        a.trust_tokens = false;
+        a.ban = Some(BanRecord { banned_at: Some(NOW), until, reason: Some(reason.into()) });
+        Ok(Acted::Done)
+    }
+    async fn unban_account(&self, id: i64, guard: Option<i64>) -> DbResult<Acted> {
+        self.check()?;
+        let mut d = self.0.lock().unwrap();
+        let gm = d.chars.iter().filter(|c| c.accid == id).map(|c| c.gm).max().unwrap_or(0);
+        let Some(a) = d.accounts.iter_mut().find(|a| a.id == id) else { return Ok(Acted::NotFound) };
+        if guard.is_some_and(|g| gm >= g) {
+            return Ok(Acted::TooHigh);
+        }
+        if a.status & 1 == 1 {
+            return Ok(Acted::NoChange);
+        }
+        a.status = 1;
+        a.ban = None;
+        Ok(Acted::Done)
+    }
+    async fn reset_password(&self, id: i64, hash: &str, guard: Option<i64>) -> DbResult<Acted> {
+        self.check()?;
+        let mut d = self.0.lock().unwrap();
+        let gm = d.chars.iter().filter(|c| c.accid == id).map(|c| c.gm).max().unwrap_or(0);
+        let Some(a) = d.accounts.iter_mut().find(|a| a.id == id) else { return Ok(Acted::NotFound) };
+        if guard.is_some_and(|g| gm >= g) {
+            return Ok(Acted::TooHigh);
+        }
+        a.hash = hash.into();
+        Ok(Acted::Done)
+    }
+    async fn reset_totp(&self, id: i64, guard: Option<i64>) -> DbResult<Acted> {
+        self.check()?;
+        let mut d = self.0.lock().unwrap();
+        let gm = d.chars.iter().filter(|c| c.accid == id).map(|c| c.gm).max().unwrap_or(0);
+        let Some(a) = d.accounts.iter_mut().find(|a| a.id == id) else { return Ok(Acted::NotFound) };
+        if guard.is_some_and(|g| gm >= g) {
+            return Ok(Acted::TooHigh);
+        }
+        a.totp = None;
+        a.trust_tokens = false;
+        Ok(Acted::Done)
+    }
+    async fn set_gm_level(&self, charid: i64, level: i64, guard: Option<i64>) -> DbResult<Acted> {
+        self.check()?;
+        let mut d = self.0.lock().unwrap();
+        let Some(c) = d.chars.iter_mut().find(|c| c.charid == charid && c.accid != 0) else { return Ok(Acted::NotFound) };
+        if guard.is_some_and(|g| c.gm >= g) {
+            return Ok(Acted::TooHigh);
+        }
+        c.gm = level;
+        Ok(Acted::Done)
+    }
+    async fn lift_expired_bans(&self, now: i64) -> DbResult<Vec<(i64, String)>> {
+        self.check()?;
+        let mut d = self.0.lock().unwrap();
+        let mut out = vec![];
+        for a in d.accounts.iter_mut() {
+            if a.status & 1 == 0 && a.ban.as_ref().and_then(|b| b.until).is_some_and(|u| u <= now) {
+                a.status = 1;
+                a.ban = None;
+                out.push((a.id, a.login.clone()));
+            }
+        }
+        Ok(out)
     }
 }
 

@@ -103,6 +103,134 @@ pub struct OnlineRow {
     pub client_addr: i64,
 }
 
+// ---- the admin panel: accounts, characters, bans ----
+
+/// One page of a list, and how many rows there are in all.
+#[derive(Debug, Clone, Serialize)]
+pub struct Page<T> {
+    pub items: Vec<T>,
+    pub total: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountFilter {
+    All,
+    Online,
+    Banned,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountSort {
+    Login,
+    Id,
+    Created,
+    LastLogin,
+}
+
+#[derive(Debug, Clone)]
+pub struct AccountQuery {
+    pub q: String,
+    pub filter: AccountFilter,
+    pub sort: AccountSort,
+    pub desc: bool,
+    pub page: i64,
+    pub per: i64,
+}
+
+/// One row of the account list.
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountRow {
+    pub id: i64,
+    pub login: String,
+    pub status: i64,
+    pub created: Option<i64>,
+    pub last_login: Option<i64>,
+    pub characters: Vec<String>,
+    pub gm: i64,
+    pub online: bool,
+}
+
+/// What `accounts_banned` records about a ban.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct BanRecord {
+    pub banned_at: Option<i64>,
+    /// `None`: until someone lifts it.
+    pub until: Option<i64>,
+    pub reason: Option<String>,
+}
+
+/// A character as the admin panel lists it.
+#[derive(Debug, Clone, Serialize)]
+pub struct AdminChar {
+    #[serde(flatten)]
+    pub summary: CharSummary,
+    pub accid: i64,
+    pub login: String,
+    pub gm: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AdminAccount {
+    pub id: i64,
+    pub login: String,
+    pub status: i64,
+    pub created: Option<i64>,
+    pub last_login: Option<i64>,
+    pub gm: i64,
+    pub has_totp: bool,
+    pub online: bool,
+    pub ban: Option<BanRecord>,
+    pub characters: Vec<AdminChar>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AdminCharDetail {
+    #[serde(flatten)]
+    pub detail: CharDetail,
+    pub accid: i64,
+    pub login: String,
+    pub gm: i64,
+    pub created: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CharSort {
+    Name,
+    Account,
+    Playtime,
+    LastLogout,
+}
+
+#[derive(Debug, Clone)]
+pub struct CharQuery {
+    pub q: String,
+    pub online: bool,
+    pub sort: CharSort,
+    pub desc: bool,
+    pub page: i64,
+    pub per: i64,
+}
+
+/// An account under a ban, for the Bans page.
+#[derive(Debug, Clone, Serialize)]
+pub struct BanRow {
+    pub accid: i64,
+    pub login: String,
+    pub characters: Vec<String>,
+    pub ban: Option<BanRecord>,
+}
+
+/// How a change to an account or character ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Acted {
+    Done,
+    NotFound,
+    /// The target's GM level is not below the guard: nothing changed.
+    TooHigh,
+    /// The change doesn't apply (for instance unbanning someone who isn't banned).
+    NoChange,
+}
+
 /// The job columns of `char_jobs` and `char_exp`, in job id order (1-22).
 pub const JOBS: [&str; 22] = [
     "war", "mnk", "whm", "blm", "rdm", "thf", "pld", "drk", "bst", "brd", "rng", "sam", "nin",
