@@ -34,7 +34,7 @@ impl Config {
         };
         let db_password = get("DB_PASSWORD");
         if db_password.is_empty() {
-            return Err("DB_PASSWORD is not set".into());
+            return Err("the website's database password is not set: add WEB_DB_PASSWORD to .env (any long random string) and run `docker compose up -d` again".into());
         }
         let db_port = or("DB_PORT", "3306")
             .parse::<u16>()

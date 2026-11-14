@@ -104,6 +104,9 @@ pub struct ActionRow {
     pub actor_kind: String,
     pub actor_login: Option<String>,
     pub actor_role: String,
+    /// Kept in the log but not sent to the admin pages.
+    #[serde(skip)]
+    pub ip: Option<String>,
     pub action: String,
     pub target_kind: Option<String>,
     pub target_id: Option<i64>,
@@ -281,7 +284,7 @@ impl Store {
     /// Newest first; `before` is the id of the last row of the previous page.
     pub async fn actions(&self, before: Option<i64>, per: i64, only_admin: bool) -> Result<Vec<ActionRow>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT id, at, actor_kind, actor_login, actor_role, action, target_kind, target_id, target_name, reason, result
+            "SELECT id, at, actor_kind, actor_login, actor_role, ip, action, target_kind, target_id, target_name, reason, result
              FROM action_log
              WHERE (? IS NULL OR id < ?)
                AND (? = 0 OR (actor_role IN ('owner', 'moderator') AND action NOT IN ('sign_in', 'sign_in_failed')))
@@ -301,6 +304,7 @@ impl Store {
                 actor_kind: r.try_get("actor_kind")?,
                 actor_login: r.try_get("actor_login")?,
                 actor_role: r.try_get("actor_role")?,
+                ip: r.try_get("ip")?,
                 action: r.try_get("action")?,
                 target_kind: r.try_get("target_kind")?,
                 target_id: r.try_get("target_id")?,

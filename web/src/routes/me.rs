@@ -1,7 +1,8 @@
 //! My account: the signed-in player's own account and characters. Every query
 //! binds the account id from the session, never from the request.
 
-use crate::auth::{self, HashCheck};
+use crate::auth;
+use crate::limits::{Limiter, Target};
 use crate::http::*;
 use crate::model::*;
 use crate::routes::session::{check_password, record};
@@ -53,18 +54,21 @@ async fn change_password(
 ) -> ApiResult<Json<Value>> {
     let login = id.login().unwrap_or("").to_string();
     let now = state.now();
-    if !state.limiter.sign_in_allowed(&ip, &login, now) {
+    auth::valid_new_password(&body.new).map_err(ApiError::bad_request)?;
+    // Guessing the current password is limited like signing in, and counted before it is checked.
+    let keys = Limiter::sign_in_keys(&ip, &Target::Account(accid));
+    if !state.limiter.reserve_sign_in(&keys, now) {
         return Err(ApiError::too_many("Too many tries. Wait 15 minutes and try again."));
     }
-    auth::valid_new_password(&body.new).map_err(ApiError::bad_request)?;
     let account = state.game.account_by_id(accid).await?.ok_or_else(ApiError::not_found)?;
-    if !auth::valid_password(&body.current) || check_password(&state, Some(&account), &body.current).await != HashCheck::Match {
-        state.limiter.sign_in_failed(&ip, &login, now);
+    if !auth::valid_password(&body.current) || !check_password(&state, Some(&account), &body.current).await? {
         record(&state, NewAction { actor_kind: "account", actor_accid: Some(accid), actor_login: Some(login), actor_role: id.role.as_str(), ip: Some(ip), action: "password_change", result: "refused", ..Default::default() }).await;
         return Err(ApiError::new(axum::http::StatusCode::FORBIDDEN, "Your current password isn't right."));
     }
+    state.limiter.sign_in_succeeded(&keys);
     let new = body.new.clone();
     let cost = state.bcrypt_cost;
+    let _slot = crate::routes::session::bcrypt_slot(&state).await?;
     let hash = tokio::task::spawn_blocking(move || auth::hash_password(&new, cost))
         .await
         .map_err(|_| ApiError::new(axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Something went wrong on the server."))?

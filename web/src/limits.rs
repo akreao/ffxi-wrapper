@@ -24,6 +24,34 @@ impl Windows {
         }
     }
 
+    /// Atomically: when every `(key, limit, window)` is below its limit, records an event on
+    /// each and returns true; otherwise records nothing. Concurrent callers can't both slip in
+    /// under the same limit.
+    pub fn reserve(&self, checks: &[(&str, usize, i64)], now: i64) -> bool {
+        let mut m = self.hits.lock().unwrap();
+        for (key, limit, window) in checks {
+            if let Some(q) = m.get_mut(*key) {
+                while q.front().is_some_and(|t| *t <= now - window) {
+                    q.pop_front();
+                }
+                if q.len() >= *limit {
+                    return false;
+                }
+            }
+        }
+        for (key, _, _) in checks {
+            m.entry((*key).to_string()).or_default().push_back(now);
+        }
+        true
+    }
+
+    /// Takes back the newest event of a key (a reservation that turned out fine).
+    pub fn release(&self, key: &str) {
+        if let Some(q) = self.hits.lock().unwrap().get_mut(key) {
+            q.pop_back();
+        }
+    }
+
     pub fn record(&self, key: &str, now: i64) {
         self.hits.lock().unwrap().entry(key.to_string()).or_default().push_back(now);
     }
@@ -50,6 +78,48 @@ const HOUR: i64 = 60 * MIN;
 pub const FAIL_PAIR: (usize, i64) = (5, 15 * MIN);
 pub const FAIL_LOGIN: (usize, i64) = (20, HOUR);
 pub const FAIL_ADDR: (usize, i64) = (30, HOUR);
+/// Behind the proxy address nobody can be told apart, so logins that match no account share one
+/// high ceiling (a script making up logins hits it; people mistyping a name don't).
+pub const FAIL_UNKNOWN_PROXIED: (usize, i64) = (300, HOUR);
+
+/// Who a sign-in attempt is aimed at: the account when the login matched one (the database
+/// matches case-, accent- and trailing-space-insensitively, so every spelling of a login is the
+/// same account), otherwise the typed login, folded and cut short so keys stay small.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Target {
+    Account(i64),
+    Unknown(String),
+}
+
+impl Target {
+    pub fn unknown(typed: &str) -> Target {
+        Target::Unknown(typed.trim_end().to_lowercase().chars().take(32).collect())
+    }
+    fn key(&self) -> String {
+        match self {
+            Target::Account(id) => format!("acc:{id}"),
+            Target::Unknown(l) => format!("login:{l}"),
+        }
+    }
+}
+
+/// An address that says nothing about who is asking: Docker's userland proxy makes every
+/// connection look like it comes from the bridge gateway (an address ending in .1), and a reverse
+/// proxy or Tailscale Serve from loopback. The per-address limit would lock everyone out together.
+pub fn is_proxy_addr(ip: &str) -> bool {
+    match ip.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(v4)) => v4.is_loopback() || (v4.is_private() && v4.octets()[3] == 1),
+        Ok(std::net::IpAddr::V6(v6)) => v6.is_loopback(),
+        Err(_) => true,
+    }
+}
+
+/// The three sign-in buckets of one attempt (the address one only for a real client address).
+pub struct SignInKeys {
+    pair: String,
+    login: String,
+    addr: Option<(String, usize, i64)>,
+}
 
 pub struct Limiter {
     pub failures: Windows,
@@ -62,29 +132,43 @@ impl Limiter {
         Limiter { failures: Windows::default(), public_gets: Windows::default(), writes: Windows::default() }
     }
 
-    fn keys(addr: &str, login: &str) -> [String; 3] {
-        let login = login.to_lowercase();
-        [format!("pair:{addr}|{login}"), format!("login:{login}"), format!("addr:{addr}")]
-    }
-
-    /// Is this (address, login) allowed to try a sign-in now?
-    pub fn sign_in_allowed(&self, addr: &str, login: &str, now: i64) -> bool {
-        let [pair, by_login, by_addr] = Limiter::keys(addr, login);
-        self.failures.count(&pair, FAIL_PAIR.1, now) < FAIL_PAIR.0
-            && self.failures.count(&by_login, FAIL_LOGIN.1, now) < FAIL_LOGIN.0
-            && self.failures.count(&by_addr, FAIL_ADDR.1, now) < FAIL_ADDR.0
-    }
-
-    /// How many more failures this pair may make before it is locked.
-    pub fn pair_tries_left(&self, addr: &str, login: &str, now: i64) -> usize {
-        let [pair, _, _] = Limiter::keys(addr, login);
-        FAIL_PAIR.0.saturating_sub(self.failures.count(&pair, FAIL_PAIR.1, now))
-    }
-
-    pub fn sign_in_failed(&self, addr: &str, login: &str, now: i64) {
-        for k in Limiter::keys(addr, login) {
-            self.failures.record(&k, now);
+    pub fn sign_in_keys(addr: &str, target: &Target) -> SignInKeys {
+        let t = target.key();
+        SignInKeys {
+            pair: format!("pair:{addr}|{t}"),
+            login: t,
+            addr: if !is_proxy_addr(addr) {
+                Some((format!("addr:{addr}"), FAIL_ADDR.0, FAIL_ADDR.1))
+            } else if matches!(target, Target::Unknown(_)) {
+                Some(("proxied-unknown".to_string(), FAIL_UNKNOWN_PROXIED.0, FAIL_UNKNOWN_PROXIED.1))
+            } else {
+                None
+            },
         }
+    }
+
+    /// Counts an attempt on every bucket, all at once, before the password is checked; false
+    /// (and nothing counted) when any bucket is full. Call [`Limiter::sign_in_succeeded`] to
+    /// take the count back when the password was right.
+    pub fn reserve_sign_in(&self, k: &SignInKeys, now: i64) -> bool {
+        let mut checks = vec![(k.pair.as_str(), FAIL_PAIR.0, FAIL_PAIR.1), (k.login.as_str(), FAIL_LOGIN.0, FAIL_LOGIN.1)];
+        if let Some((a, limit, window)) = &k.addr {
+            checks.push((a.as_str(), *limit, *window));
+        }
+        self.failures.reserve(&checks, now)
+    }
+
+    pub fn sign_in_succeeded(&self, k: &SignInKeys) {
+        self.failures.release(&k.pair);
+        self.failures.release(&k.login);
+        if let Some((a, _, _)) = &k.addr {
+            self.failures.release(a);
+        }
+    }
+
+    /// How many more attempts this pair may make before it is locked.
+    pub fn pair_tries_left(&self, k: &SignInKeys, now: i64) -> usize {
+        FAIL_PAIR.0.saturating_sub(self.failures.count(&k.pair, FAIL_PAIR.1, now))
     }
 
     /// 120 public GETs a minute per address.
@@ -114,41 +198,116 @@ impl Default for Limiter {
 mod tests {
     use super::*;
 
-    #[test]
-    fn five_failures_for_one_pair_lock_it_for_fifteen_minutes() {
-        let l = Limiter::new();
-        for i in 0..5 {
-            assert!(l.sign_in_allowed("1.2.3.4", "Kaelyn", i));
-            l.sign_in_failed("1.2.3.4", "Kaelyn", i);
-        }
-        assert!(!l.sign_in_allowed("1.2.3.4", "kaelyn", 10), "login case doesn't matter");
-        // Another address, or another login, is unaffected.
-        assert!(l.sign_in_allowed("5.6.7.8", "kaelyn", 10));
-        assert!(l.sign_in_allowed("1.2.3.4", "someone", 10));
-        // The window ends 15 minutes after the failures.
-        assert!(!l.sign_in_allowed("1.2.3.4", "kaelyn", 15 * 60 - 1));
-        assert!(l.sign_in_allowed("1.2.3.4", "kaelyn", 15 * 60 + 5));
+    fn attempt(l: &Limiter, addr: &str, t: &Target, now: i64) -> bool {
+        l.reserve_sign_in(&Limiter::sign_in_keys(addr, t), now)
     }
 
     #[test]
-    fn a_login_is_locked_after_twenty_failures_from_any_addresses() {
+    fn five_attempts_for_one_pair_lock_it_for_fifteen_minutes() {
+        let l = Limiter::new();
+        let t = Target::Account(7);
+        for i in 0..5 {
+            assert!(attempt(&l, "1.2.3.4", &t, i));
+        }
+        assert!(!attempt(&l, "1.2.3.4", &t, 10));
+        // Another address, or another account, is unaffected.
+        assert!(attempt(&l, "5.6.7.8", &t, 10));
+        assert!(attempt(&l, "1.2.3.4", &Target::Account(8), 10));
+        // The window ends 15 minutes after the attempts.
+        assert!(!attempt(&l, "1.2.3.4", &t, 15 * 60 - 1));
+        assert!(attempt(&l, "1.2.3.4", &t, 15 * 65));
+    }
+
+    #[test]
+    fn a_refused_attempt_counts_nothing() {
+        let l = Limiter::new();
+        let t = Target::Account(1);
+        for i in 0..5 {
+            assert!(attempt(&l, "1.2.3.4", &t, i));
+        }
+        for _ in 0..50 {
+            assert!(!attempt(&l, "1.2.3.4", &t, 20));
+        }
+        // Only the five real attempts are on the login and address buckets.
+        assert_eq!(l.failures.count("acc:1", HOUR, 20), 5);
+        assert_eq!(l.failures.count("addr:1.2.3.4", HOUR, 20), 5);
+    }
+
+    #[test]
+    fn a_burst_of_simultaneous_attempts_gets_only_five_through() {
+        let l = std::sync::Arc::new(Limiter::new());
+        let handles: Vec<_> = (0..64)
+            .map(|_| {
+                let l = l.clone();
+                std::thread::spawn(move || attempt(&l, "1.2.3.4", &Target::Account(7), 0))
+            })
+            .collect();
+        let allowed = handles.into_iter().map(|h| h.join().unwrap()).filter(|ok| *ok).count();
+        assert_eq!(allowed, 5);
+    }
+
+    #[test]
+    fn a_right_password_gives_its_attempt_back() {
+        let l = Limiter::new();
+        let t = Target::Account(3);
+        for _ in 0..4 {
+            assert!(attempt(&l, "1.2.3.4", &t, 0));
+        }
+        let k = Limiter::sign_in_keys("1.2.3.4", &t);
+        assert!(l.reserve_sign_in(&k, 1));
+        l.sign_in_succeeded(&k);
+        assert_eq!(l.pair_tries_left(&k, 2), 1);
+        assert!(attempt(&l, "1.2.3.4", &t, 2));
+        assert!(!attempt(&l, "1.2.3.4", &t, 3));
+    }
+
+    #[test]
+    fn an_account_is_locked_after_twenty_attempts_from_any_addresses() {
         let l = Limiter::new();
         for i in 0..20 {
-            l.sign_in_failed(&format!("10.0.0.{i}"), "victim", i);
+            assert!(attempt(&l, &format!("10.0.5.{}", i + 2), &Target::Account(9), i));
         }
-        assert!(!l.sign_in_allowed("10.9.9.9", "victim", 100));
-        assert!(l.sign_in_allowed("10.9.9.9", "other", 100));
-        assert!(l.sign_in_allowed("10.9.9.9", "victim", 3601 + 20));
+        assert!(!attempt(&l, "10.9.9.9", &Target::Account(9), 100));
+        assert!(attempt(&l, "10.9.9.9", &Target::Account(10), 100));
+        assert!(attempt(&l, "10.9.9.9", &Target::Account(9), 3601 + 20));
     }
 
     #[test]
-    fn an_address_is_locked_after_thirty_failures_on_any_logins() {
+    fn an_address_is_locked_after_thirty_attempts_on_any_logins() {
         let l = Limiter::new();
         for i in 0..30 {
-            l.sign_in_failed("9.9.9.9", &format!("user{i}"), i);
+            assert!(attempt(&l, "9.9.9.9", &Target::Account(100 + i), i));
         }
-        assert!(!l.sign_in_allowed("9.9.9.9", "fresh", 100));
-        assert!(l.sign_in_allowed("8.8.8.8", "fresh", 100));
+        assert!(!attempt(&l, "9.9.9.9", &Target::Account(1), 100));
+        assert!(attempt(&l, "8.8.8.8", &Target::Account(1), 100));
+    }
+
+    #[test]
+    fn the_proxys_address_gets_no_address_bucket() {
+        // Every visitor looks like the Docker gateway: strangers must not be able to lock
+        // everyone out together. The account's own buckets still apply.
+        for gw in ["172.19.0.1", "192.168.64.1", "10.0.0.1", "127.0.0.1", "::1", "unknown"] {
+            assert!(is_proxy_addr(gw), "{gw}");
+            let l = Limiter::new();
+            for i in 0..100 {
+                assert!(attempt(&l, gw, &Target::Account(1000 + i), i), "{gw} {i}");
+            }
+            // Made-up logins share one high ceiling instead, so a script can't fan out for free.
+            let l = Limiter::new();
+            let allowed = (0..400).filter(|i| attempt(&l, gw, &Target::unknown(&format!("fake{i}")), *i)).count();
+            assert_eq!(allowed, FAIL_UNKNOWN_PROXIED.0, "{gw}");
+            // Real accounts are not held up by it.
+            assert!(attempt(&l, gw, &Target::Account(5), 401));
+        }
+        assert!(!is_proxy_addr("192.168.0.50") && !is_proxy_addr("203.0.113.9") && !is_proxy_addr("172.19.0.2"));
+    }
+
+    #[test]
+    fn unknown_logins_are_folded_and_kept_short() {
+        assert_eq!(Target::unknown("Claude "), Target::unknown("claude"));
+        let long = "x".repeat(10_000);
+        let Target::Unknown(k) = Target::unknown(&long) else { panic!() };
+        assert_eq!(k.len(), 32);
     }
 
     #[test]
@@ -169,8 +328,8 @@ mod tests {
     #[test]
     fn sweeping_forgets_quiet_keys() {
         let l = Limiter::new();
-        l.sign_in_failed("a", "b", 0);
+        attempt(&l, "1.2.3.4", &Target::Account(1), 0);
         l.sweep(10_000);
-        assert_eq!(l.failures.count("addr:a", 3600, 10_000), 0);
+        assert_eq!(l.failures.count("addr:1.2.3.4", 3600, 10_000), 0);
     }
 }

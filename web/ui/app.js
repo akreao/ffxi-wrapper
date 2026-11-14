@@ -172,7 +172,7 @@
         items.map(([id, label, href]) => href
           ? h("a", { class: "nav-item" + (current === id ? " active" : ""), href, title: label, "aria-current": current === id ? "page" : false }, icon(id), h("span", {}, label))
           : h("a", { class: "nav-item soon", "aria-disabled": "true", title: `${label}: later` }, icon(id), h("span", {}, label), h("em", {}, "Later"))))),
-      h("div", { class: "sidebar-foot" }, "LandSandBoat", h("br"), "Site 0.1.0"));
+      h("div", { class: "sidebar-foot" }, "LandSandBoat", h("br"), "Site 0.1.2"));
     const scrim = h("div", { class: "scrim" });
     const toggle = h("button", { class: "icon-button menu-toggle", "aria-label": "Menu", "aria-controls": "sidebar", "aria-expanded": "false" }, icon("menu"));
     const theme = h("button", { class: "icon-button theme-toggle", "aria-label": "Switch theme", title: "Switch between Light and Dark" });
@@ -251,6 +251,16 @@
             : h("a", { class: "btn-link primary", href: me.accid ? "/me" : "/admin" }, me.accid ? "My account" : "Admin panel")))));
   };
 
+  // `next` may only lead to a page on this site. Browsers read "\\" as "/" and drop tabs and
+  // newlines, so "/\\evil.example" would otherwise leave the site: let the URL parser decide.
+  function safeNext(next) {
+    if (!next) return null;
+    try {
+      const u = new URL(next, location.origin);
+      return u.origin === location.origin ? u.pathname + u.search + u.hash : null;
+    } catch { return null; }
+  }
+
   pages.signin = async function () {
     document.getElementById("server-name").textContent = me.server_name;
     themeButton(document.querySelector(".theme-toggle"));
@@ -268,11 +278,9 @@
       try {
         const out = await api("/auth/login", {
           method: "POST",
-          body: { login: form.login.value, password: form.password.value, otp: otpRow.hidden ? undefined : form.otp.value },
+          body: { login: form.login.value, password: form.password.value, otp: form.otp.value || undefined },
         });
-        const next = q.get("next");
-        // Only a path on this site: never "//host" or "http://…".
-        location.href = next && /^\/(?!\/)/.test(next) ? next : out.next || "/me";
+        location.href = safeNext(q.get("next")) || out.next || "/me";
       } catch (ex) {
         if (ex.data && ex.data.need_otp) { otpRow.hidden = false; form.otp.focus(); }
         let m = ex.message;
