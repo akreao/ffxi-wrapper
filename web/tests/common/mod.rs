@@ -262,13 +262,14 @@ impl Game for Fake {
         Ok(self.0.lock().unwrap().online.clone())
     }
     async fn public_online(&self) -> DbResult<Vec<PublicPlayer>> {
+        tokio::task::yield_now().await; // a real query takes time, so requests overlap
         self.check()?;
         let mut d = self.0.lock().unwrap();
         d.public_reads += 1;
         let mut out: Vec<PublicPlayer> = d
             .people
             .iter()
-            .filter(|p| p.in_game && !p.connecting && p.accid != 0 && p.gm == 0 && !p.gm_hidden)
+            .filter(|p| p.in_game && !p.connecting && !p.banned && p.accid != 0 && p.gm == 0 && !p.gm_hidden)
             .map(|p| PublicPlayer {
                 name: p.name.clone(),
                 nation: p.nation,
@@ -284,6 +285,7 @@ impl Game for Fake {
         Ok(out)
     }
     async fn public_ranking(&self, board: Board) -> DbResult<Vec<RankRow>> {
+        tokio::task::yield_now().await;
         self.check()?;
         let mut d = self.0.lock().unwrap();
         d.public_reads += 1;

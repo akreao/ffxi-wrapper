@@ -53,7 +53,8 @@ pub trait Game: Send + Sync {
 
     async fn counts(&self) -> DbResult<Counts>;
     async fn online(&self) -> DbResult<Vec<OnlineRow>>;
-    /// Characters a visitor may be told are in game: no GMs, no GM-hidden ones,
+    /// Characters a visitor may be told are in game: no GMs, no GM-hidden ones, no banned
+    /// accounts (the boards leave them out, so listing them online would show who is banned),
     /// nobody still connecting. Anonymous ones come back without job, level or zone.
     /// The home page's count is this list's length, so the two always agree.
     async fn public_online(&self) -> DbResult<Vec<PublicPlayer>>;
@@ -483,6 +484,7 @@ impl Game for MariaDb {
                     CAST(st.sjob AS SIGNED) AS sjob, CAST(st.slvl AS SIGNED) AS slvl
              FROM accounts_sessions x
              JOIN chars c ON c.charid = x.charid
+             JOIN accounts a ON a.id = c.accid AND (a.status & 1) = 1
              LEFT JOIN char_stats st ON st.charid = c.charid
              LEFT JOIN zone_settings z ON z.zoneid = c.pos_zone
              LEFT JOIN char_flags f ON f.charid = c.charid

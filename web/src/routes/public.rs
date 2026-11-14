@@ -42,29 +42,40 @@ fn limited(state: &Shared, ip: &str) -> ApiResult<()> {
 }
 
 /// The who-is-online list, at most [`CACHE_SECS`] old, with the time it was read.
+/// Only one request refreshes it; the rest wait for that answer.
 async fn online_list(state: &Shared) -> ApiResult<(i64, Arc<Vec<PublicPlayer>>)> {
-    let now = state.now();
-    if let Some((at, list)) = state.public_cache.online.lock().unwrap().as_ref() {
-        if now - at < CACHE_SECS {
-            return Ok((*at, list.clone()));
-        }
+    let fresh = |now: i64| state.public_cache.online.lock().unwrap().as_ref().filter(|(at, _)| now - at < CACHE_SECS).cloned();
+    if let Some(hit) = fresh(state.now()) {
+        return Ok(hit);
     }
+    let gate = state.public_cache.gate("online");
+    let _turn = gate.lock().await;
+    if let Some(hit) = fresh(state.now()) {
+        return Ok(hit);
+    }
+    let _slot = state.public_cache.slots.acquire().await.map_err(|_| ApiError::not_found())?;
     let list = Arc::new(state.game.public_online().await?);
+    let now = state.now();
     *state.public_cache.online.lock().unwrap() = Some((now, list.clone()));
     Ok((now, list))
 }
 
 async fn board_rows(state: &Shared, board: Board) -> ApiResult<(i64, Arc<Vec<RankRow>>)> {
-    let now = state.now();
     let key = board.key();
-    if let Some((at, rows)) = state.public_cache.boards.lock().unwrap().get(&key) {
-        if now - at < CACHE_SECS {
-            return Ok((*at, rows.clone()));
-        }
+    let fresh = |now: i64| state.public_cache.boards.lock().unwrap().get(&key).filter(|(at, _)| now - at < CACHE_SECS).cloned();
+    if let Some(hit) = fresh(state.now()) {
+        return Ok(hit);
     }
+    let gate = state.public_cache.gate(&key);
+    let _turn = gate.lock().await;
+    if let Some(hit) = fresh(state.now()) {
+        return Ok(hit);
+    }
+    let _slot = state.public_cache.slots.acquire().await.map_err(|_| ApiError::not_found())?;
     let mut rows = state.game.public_ranking(board).await?;
     rows.truncate(RANKING_TOP);
     let rows = Arc::new(rows);
+    let now = state.now();
     state.public_cache.boards.lock().unwrap().insert(key, (now, rows.clone()));
     Ok((now, rows))
 }

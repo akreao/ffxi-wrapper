@@ -45,10 +45,10 @@ async fn crowd() -> Site {
 async fn the_online_list_leaves_out_staff_hidden_staff_and_unfinished_logins() {
     let s = crowd().await;
     let j = s.send(Req::get("/api/public/online")).await.json();
-    assert_eq!(names(&j, "players"), ["Brannoc", "Pipiru", "Torvald", "Yrsa"], "banned players are still in game, so they are listed; GMs, hidden GMs, accid 0 and connecting ones are not");
-    assert_eq!(j["count"], 4);
+    assert_eq!(names(&j, "players"), ["Pipiru", "Torvald", "Yrsa"], "GMs, hidden GMs, banned accounts, accid 0 and connecting ones are not listed (a banned one would show who is banned, as the boards omit them)");
+    assert_eq!(j["count"], 3);
     let text = j.to_string();
-    for hidden in ["Halvard", "Ghost", "Orphan", "Linking", "Offline"] {
+    for hidden in ["Halvard", "Ghost", "Brannoc", "Orphan", "Linking", "Offline"] {
         assert!(!text.contains(hidden), "{hidden} must not be listed");
     }
 }
@@ -198,9 +198,9 @@ async fn answers_are_cached_for_30_seconds() {
     assert_eq!(s.fake.0.lock().unwrap().public_reads, 2, "one online read, one level-board read");
     s.fake.add_person(Person::new("Newcomer").online(1, 5, "Bastok_Mines"));
     s.clock.fetch_add(29, Ordering::SeqCst);
-    assert_eq!(s.send(Req::get("/api/public/online")).await.json()["count"], 4);
+    assert_eq!(s.send(Req::get("/api/public/online")).await.json()["count"], 3);
     s.clock.fetch_add(2, Ordering::SeqCst);
-    assert_eq!(s.send(Req::get("/api/public/online")).await.json()["count"], 5);
+    assert_eq!(s.send(Req::get("/api/public/online")).await.json()["count"], 4);
     s.send(Req::get("/api/public/rankings/job?job=war")).await;
     s.send(Req::get("/api/public/rankings/job?job=mnk")).await;
     assert_eq!(s.fake.0.lock().unwrap().public_reads, 2 + 1 + 2, "each board has its own entry");
@@ -232,4 +232,43 @@ async fn the_new_pages_are_public_and_have_no_inline_script() {
         assert_eq!(r.status, StatusCode::OK, "{path}");
         assert!(!r.text().contains("/admin"), "{path} must not link the admin panel");
     }
+}
+
+/// Many visitors on a cold cache cost one query, not one each.
+#[tokio::test]
+async fn a_cold_cache_is_filled_by_one_query() {
+    let s = crowd().await;
+    let mut jobs = Vec::new();
+    for _ in 0..40 {
+        jobs.push(s.send(Req::get("/api/public/rankings/level")));
+        jobs.push(s.send(Req::get("/api/public/online")));
+    }
+    for r in futures_util_join(jobs).await {
+        assert_eq!(r, StatusCode::OK);
+    }
+    assert_eq!(s.fake.0.lock().unwrap().public_reads, 2, "one read per cache key");
+}
+
+/// Polls every request together so they overlap, like real visitors.
+async fn futures_util_join<F: std::future::Future<Output = Resp>>(jobs: Vec<F>) -> Vec<StatusCode> {
+    use std::task::Poll;
+    let mut jobs: Vec<Option<std::pin::Pin<Box<F>>>> = jobs.into_iter().map(|j| Some(Box::pin(j))).collect();
+    let mut out: Vec<Option<StatusCode>> = vec![None; jobs.len()];
+    std::future::poll_fn(|cx| {
+        let mut pending = false;
+        for (i, slot) in jobs.iter_mut().enumerate() {
+            if let Some(f) = slot {
+                match f.as_mut().poll(cx) {
+                    Poll::Ready(r) => {
+                        out[i] = Some(r.status);
+                        *slot = None;
+                    }
+                    Poll::Pending => pending = true,
+                }
+            }
+        }
+        if pending { Poll::Pending } else { Poll::Ready(()) }
+    })
+    .await;
+    out.into_iter().map(|s| s.unwrap()).collect()
 }

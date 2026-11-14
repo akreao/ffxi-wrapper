@@ -34,8 +34,8 @@ async fn who_is_online_follows_the_rules() {
     let who: Vec<&str> = list.iter().map(|p| p.name.as_str()).collect();
     // GM (Halvard), hidden GM (Ghost), a hidden non-GM (Sneaky), a character without an
     // account (Orphan), one still connecting (Linking) and one offline are not listed.
-    // A banned account (Brannoc) is in game, so it is.
-    assert_eq!(who, ["Awayfox", "Brannoc", "Eaglet", "Pipiru", "Torvald", "Yrsa"]);
+    // A banned account (Brannoc) is in game but not listed: the boards omit it, so listing it would show who is banned.
+    assert_eq!(who, ["Awayfox", "Eaglet", "Pipiru", "Torvald", "Yrsa"]);
     let get = |n: &str| list.iter().find(|p| p.name == n).unwrap();
     for anon in ["Yrsa", "Eaglet"] {
         let p = get(anon);
