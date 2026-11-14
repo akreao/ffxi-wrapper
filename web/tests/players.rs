@@ -344,7 +344,6 @@ async fn only_an_owner_changes_gm_levels_within_the_rules() {
 async fn the_log_filters_by_text_actor_action_and_age_and_pages() {
     let s = site_with_people().await;
     let m = moderator(&s).await;
-    let o = owner(&s).await;
     s.send(post(&m, "/api/admin/accounts/1/ban", json!({ "reason": "Spamming shouts" }))).await;
     s.advance(86400 * 3);
     let o = owner(&s).await;
