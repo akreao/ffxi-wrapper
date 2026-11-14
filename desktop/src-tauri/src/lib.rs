@@ -171,6 +171,7 @@ fn write_env(dir: &Path, path: &Path, public_ip: Option<String>, server_name: &s
     let mut env = EnvFile::parse(stack::ENV_EXAMPLE).at(path);
     env.set("DB_PASSWORD", &envfile::random_password(24)?);
     env.set("DB_ROOT_PASSWORD", &envfile::random_password(24)?);
+    env.set("WEB_DB_PASSWORD", &envfile::random_password(24)?);
     env.set("DB_DATA", stack::db_location(dir));
     env.set("SERVER_NAME", server_name);
     // Empty follows the client main pins (or this app version's, offline),
@@ -818,7 +819,10 @@ mod tests {
         let env = EnvFile::load(&path).unwrap();
         let db = env.get("DB_PASSWORD").unwrap();
         assert_eq!(db.len(), 24);
-        assert_ne!(Some(db), env.get("DB_ROOT_PASSWORD"));
+        assert_ne!(Some(db.clone()), env.get("DB_ROOT_PASSWORD"));
+        // The website's own database password is generated too, and differs from xiadmin's.
+        assert_eq!(env.get("WEB_DB_PASSWORD").map(|p| p.len()), Some(24));
+        assert_ne!(Some(db.clone()), env.get("WEB_DB_PASSWORD"));
         assert_eq!(env.get("PUBLIC_IP").as_deref(), Some("192.168.1.50"));
         assert_eq!(env.get("PUBLIC_IP_AUTO").as_deref(), Some("no"));
         assert_eq!(env.get("SERVER_NAME").as_deref(), Some("Home"));

@@ -61,14 +61,14 @@ async fn change_password(
         return Err(ApiError::too_many("Too many tries. Wait 15 minutes and try again."));
     }
     let account = state.game.account_by_id(accid).await?.ok_or_else(ApiError::not_found)?;
-    if !auth::valid_password(&body.current) || !check_password(&state, Some(&account), &body.current).await {
+    if !auth::valid_password(&body.current) || !check_password(&state, Some(&account), &body.current).await? {
         record(&state, NewAction { actor_kind: "account", actor_accid: Some(accid), actor_login: Some(login), actor_role: id.role.as_str(), ip: Some(ip), action: "password_change", result: "refused", ..Default::default() }).await;
         return Err(ApiError::new(axum::http::StatusCode::FORBIDDEN, "Your current password isn't right."));
     }
     state.limiter.sign_in_succeeded(&keys);
     let new = body.new.clone();
     let cost = state.bcrypt_cost;
-    let _slot = state.bcrypt_slots.acquire().await;
+    let _slot = crate::routes::session::bcrypt_slot(&state).await?;
     let hash = tokio::task::spawn_blocking(move || auth::hash_password(&new, cost))
         .await
         .map_err(|_| ApiError::new(axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Something went wrong on the server."))?

@@ -78,6 +78,9 @@ const HOUR: i64 = 60 * MIN;
 pub const FAIL_PAIR: (usize, i64) = (5, 15 * MIN);
 pub const FAIL_LOGIN: (usize, i64) = (20, HOUR);
 pub const FAIL_ADDR: (usize, i64) = (30, HOUR);
+/// Behind the proxy address nobody can be told apart, so logins that match no account share one
+/// high ceiling (a script making up logins hits it; people mistyping a name don't).
+pub const FAIL_UNKNOWN_PROXIED: (usize, i64) = (300, HOUR);
 
 /// Who a sign-in attempt is aimed at: the account when the login matched one (the database
 /// matches case-, accent- and trailing-space-insensitively, so every spelling of a login is the
@@ -115,7 +118,7 @@ pub fn is_proxy_addr(ip: &str) -> bool {
 pub struct SignInKeys {
     pair: String,
     login: String,
-    addr: Option<String>,
+    addr: Option<(String, usize, i64)>,
 }
 
 pub struct Limiter {
@@ -134,7 +137,13 @@ impl Limiter {
         SignInKeys {
             pair: format!("pair:{addr}|{t}"),
             login: t,
-            addr: (!is_proxy_addr(addr)).then(|| format!("addr:{addr}")),
+            addr: if !is_proxy_addr(addr) {
+                Some((format!("addr:{addr}"), FAIL_ADDR.0, FAIL_ADDR.1))
+            } else if matches!(target, Target::Unknown(_)) {
+                Some(("proxied-unknown".to_string(), FAIL_UNKNOWN_PROXIED.0, FAIL_UNKNOWN_PROXIED.1))
+            } else {
+                None
+            },
         }
     }
 
@@ -143,8 +152,8 @@ impl Limiter {
     /// take the count back when the password was right.
     pub fn reserve_sign_in(&self, k: &SignInKeys, now: i64) -> bool {
         let mut checks = vec![(k.pair.as_str(), FAIL_PAIR.0, FAIL_PAIR.1), (k.login.as_str(), FAIL_LOGIN.0, FAIL_LOGIN.1)];
-        if let Some(a) = &k.addr {
-            checks.push((a.as_str(), FAIL_ADDR.0, FAIL_ADDR.1));
+        if let Some((a, limit, window)) = &k.addr {
+            checks.push((a.as_str(), *limit, *window));
         }
         self.failures.reserve(&checks, now)
     }
@@ -152,7 +161,7 @@ impl Limiter {
     pub fn sign_in_succeeded(&self, k: &SignInKeys) {
         self.failures.release(&k.pair);
         self.failures.release(&k.login);
-        if let Some(a) = &k.addr {
+        if let Some((a, _, _)) = &k.addr {
             self.failures.release(a);
         }
     }
@@ -283,6 +292,12 @@ mod tests {
             for i in 0..100 {
                 assert!(attempt(&l, gw, &Target::Account(1000 + i), i), "{gw} {i}");
             }
+            // Made-up logins share one high ceiling instead, so a script can't fan out for free.
+            let l = Limiter::new();
+            let allowed = (0..400).filter(|i| attempt(&l, gw, &Target::unknown(&format!("fake{i}")), *i)).count();
+            assert_eq!(allowed, FAIL_UNKNOWN_PROXIED.0, "{gw}");
+            // Real accounts are not held up by it.
+            assert!(attempt(&l, gw, &Target::Account(5), 401));
         }
         assert!(!is_proxy_addr("192.168.0.50") && !is_proxy_addr("203.0.113.9") && !is_proxy_addr("172.19.0.2"));
     }

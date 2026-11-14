@@ -52,17 +52,26 @@ pub fn role_name(r: Role) -> &'static str {
     r.as_str()
 }
 
+/// Waits for one of the bcrypt slots, but not for long: a site that is swamped says so
+/// instead of leaving the browser waiting.
+pub async fn bcrypt_slot(state: &Shared) -> ApiResult<tokio::sync::SemaphorePermit<'_>> {
+    match tokio::time::timeout(std::time::Duration::from_secs(5), state.bcrypt_slots.acquire()).await {
+        Ok(Ok(permit)) => Ok(permit),
+        _ => Err(ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "The site is busy. Try again in a moment.")),
+    }
+}
+
 /// Checks a password against an account's hash. An account that doesn't exist, or whose hash is
 /// one the site can't verify (an old `PASSWORD()` hash), is checked against the dummy hash, so
 /// the answer and the time are the same as for a wrong password.
-pub async fn check_password(state: &Shared, account: Option<&AccountAuth>, password: &str) -> bool {
+pub async fn check_password(state: &Shared, account: Option<&AccountAuth>, password: &str) -> ApiResult<bool> {
     let real = account.filter(|a| auth::is_supported_hash(&a.password));
     let hash = real.map(|a| a.password.clone()).unwrap_or_else(|| state.dummy_hash.clone());
     let pw = password.to_string();
     // Cost 12 takes about 250 ms: keep it off the async threads, and a few at a time.
-    let Ok(_slot) = state.bcrypt_slots.acquire().await else { return false };
+    let _slot = bcrypt_slot(state).await?;
     let out = tokio::task::spawn_blocking(move || auth::check_password(&pw, &hash)).await.unwrap_or(HashCheck::Mismatch);
-    real.is_some() && out == HashCheck::Match
+    Ok(real.is_some() && out == HashCheck::Match)
 }
 
 /// The failed-attempt answer. The attempt was already counted when it was reserved. The log gets
@@ -117,7 +126,7 @@ async fn login(
     if !state.limiter.reserve_sign_in(&keys, now) {
         return Err(fail(&state, &ip, account.as_ref(), &keys, "locked out", true).await);
     }
-    if !check_password(&state, account.as_ref(), &body.password).await {
+    if !check_password(&state, account.as_ref(), &body.password).await? {
         return Err(fail(&state, &ip, account.as_ref(), &keys, "wrong password", false).await);
     }
     let account = account.expect("a matching hash means the account exists");
