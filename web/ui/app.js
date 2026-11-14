@@ -202,7 +202,7 @@
         items.map(([id, label, href]) => href
           ? h("a", { class: "nav-item" + (current === id ? " active" : ""), href, title: label, "aria-current": current === id ? "page" : false }, icon(id), h("span", {}, label))
           : h("a", { class: "nav-item soon", "aria-disabled": "true", title: `${label}: later` }, icon(id), h("span", {}, label), h("em", {}, "Later"))))),
-      h("div", { class: "sidebar-foot" }, "LandSandBoat", h("br"), "Site 0.4.0"));
+      h("div", { class: "sidebar-foot" }, "LandSandBoat", h("br"), "Site 0.6.0"));
     const scrim = h("div", { class: "scrim" });
     const toggle = h("button", { class: "icon-button menu-toggle", "aria-label": "Menu", "aria-controls": "sidebar", "aria-expanded": "false" }, icon("menu"));
     const theme = h("button", { class: "icon-button theme-toggle", "aria-label": "Switch theme", title: "Switch between Light and Dark" });
