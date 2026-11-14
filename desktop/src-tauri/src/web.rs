@@ -3,7 +3,8 @@
 //! `COMPOSE_PROFILES` names it. The app turns it on and off, picks who can
 //! reach it, and signs the owner in with a one-minute link.
 //!
-//! `.env` lines: `WEB_BIND_IP` (empty: this computer only), `WEB_PORT`
+//! `.env` lines: `WEB_DB_PASSWORD` (the site's own database user's password,
+//! made when the site is turned on without one), `WEB_BIND_IP` (empty: this computer only), `WEB_PORT`
 //! (default 54080) and `ADMIN_SECRET`, the 64 hex characters that sign
 //! owner links (see `wrapper_core::owner_link`).
 
@@ -64,7 +65,13 @@ pub fn save(env: &mut EnvFile, new: &Choice) -> Result<bool, String> {
     if new.enabled && !before.owner_link_ready {
         env.set("ADMIN_SECRET", &new_secret()?);
     }
-    Ok(load(env) != before)
+    // The site's own database user, which db-init creates with this password.
+    let mut made_password = false;
+    if new.enabled && env.get("WEB_DB_PASSWORD").is_none_or(|p| p.is_empty() || p == "change-me-web") {
+        env.set("WEB_DB_PASSWORD", &envfile::random_password(24)?);
+        made_password = true;
+    }
+    Ok(made_password || load(env) != before)
 }
 
 /// The address to store for what the screen sent: loopback and empty both
@@ -135,9 +142,12 @@ mod tests {
         let key = env.get("ADMIN_SECRET").unwrap();
         assert_eq!(key.len(), 64);
         assert!(load(&env).owner_link_ready);
-        // Saving the same choice again changes nothing, and keeps the key.
+        let db = env.get("WEB_DB_PASSWORD").unwrap();
+        assert_eq!(db.len(), 24);
+        // Saving the same choice again changes nothing, and keeps both.
         assert!(!save(&mut env, &choice(true, "")).unwrap());
         assert_eq!(env.get("ADMIN_SECRET").unwrap(), key);
+        assert_eq!(env.get("WEB_DB_PASSWORD").unwrap(), db);
         // Off again: the key stays for the next time.
         assert!(save(&mut env, &choice(false, "")).unwrap());
         assert_eq!(env.get("COMPOSE_PROFILES").as_deref(), Some("ahbot"));
@@ -156,6 +166,16 @@ mod tests {
         let mut off = EnvFile::parse("");
         save(&mut off, &choice(false, "")).unwrap();
         assert_eq!(off.get("ADMIN_SECRET"), None);
+        assert_eq!(off.get("WEB_DB_PASSWORD"), None);
+        // The template's placeholder and an empty value are not passwords.
+        for old in ["WEB_DB_PASSWORD=change-me-web", "WEB_DB_PASSWORD="] {
+            let mut env = EnvFile::parse(old);
+            assert!(save(&mut env, &choice(true, "")).unwrap());
+            assert_eq!(env.get("WEB_DB_PASSWORD").unwrap().len(), 24);
+        }
+        let mut own = EnvFile::parse("WEB_DB_PASSWORD=mine");
+        save(&mut own, &choice(true, "")).unwrap();
+        assert_eq!(own.get("WEB_DB_PASSWORD").as_deref(), Some("mine"));
     }
 
     #[test]

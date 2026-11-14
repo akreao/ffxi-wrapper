@@ -454,8 +454,12 @@ fn start_task(handle: &AppHandle, app: &App, kind: String, file: Option<String>)
         // program may hold it.
         "web-apply" => {
             if web_on {
+                // db-init makes the site's database user from WEB_DB_PASSWORD;
+                // the game servers aren't recreated.
+                let mut init = stack::compose(&dir);
+                init.args(["--progress", "plain", "up", "--detach", "--no-deps", "--force-recreate", "db-init"]);
                 cmd.args(["up", "--detach", "--no-deps", "--force-recreate", web::SERVICE]);
-                vec![Step::Ports, Step::Run(cmd)]
+                vec![Step::Ports, Step::Run(init), Step::Run(cmd)]
             } else {
                 cmd.args(["rm", "--stop", "--force", web::SERVICE]);
                 vec![Step::Run(cmd)]
