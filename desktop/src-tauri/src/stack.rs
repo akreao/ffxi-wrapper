@@ -291,7 +291,7 @@ struct Publisher {
 }
 
 /// The order services start in, which the app lists them in.
-const ORDER: [&str; 8] = ["db", "db-init", "meshes", "world", "connect", "search", "map", "ahbot"];
+const ORDER: [&str; 9] = ["db", "db-init", "meshes", "world", "connect", "search", "map", "ahbot", "web"];
 
 /// Every service in compose.yaml with its container's state.
 pub fn status(dir: &Path) -> Result<Vec<ServiceStatus>, String> {
@@ -539,6 +539,15 @@ mod tests {
             {"target":54001,"published":"54001"}]},"map":{"ports":[{"target":54230,"published":"54230","protocol":"udp"}]},"db":{}}}"#;
         assert_eq!(parse_published(config), vec![54001, 54231]);
         assert!(parse_published("not json").is_empty());
+    }
+
+    #[test]
+    fn the_website_s_port_is_checked_when_it_is_on() {
+        // Compose gives a service's port a host address and a number; a
+        // profile that's off leaves the service out of the config.
+        let on = r#"{"services":{"web":{"ports":[{"mode":"ingress","host_ip":"127.0.0.1","target":8080,"published":"54080","protocol":"tcp"}]}}}"#;
+        assert_eq!(parse_published(on), vec![54080]);
+        assert!(parse_published(r#"{"services":{"db":{}}}"#).is_empty());
     }
 
     #[cfg(target_os = "linux")]

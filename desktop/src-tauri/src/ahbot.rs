@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::envfile::EnvFile;
+use crate::envfile::{self, EnvFile};
 
 pub const SERVICE: &str = "ahbot";
 const PROFILE: &str = "ahbot";
@@ -34,7 +34,7 @@ pub fn load(env: &EnvFile) -> Settings {
     let number = |key: &str, default: u32| get(key).and_then(|v| v.parse().ok()).filter(|n| *n > 0).unwrap_or(default);
     let yes = |key: &str| get(key).is_none_or(|v| v != "no");
     Settings {
-        enabled: profiles(env).any(|p| p == PROFILE),
+        enabled: envfile::profiles(env).iter().any(|p| p == PROFILE),
         name: get("AHBOT_NAME").unwrap_or_else(|| "M.H.M.U.".to_owned()),
         tick: number("AHBOT_TICK", 30),
         restock: number("AHBOT_RESTOCK", 3600),
@@ -42,11 +42,6 @@ pub fn load(env: &EnvFile) -> Settings {
         sell: yes("AHBOT_SELL"),
         items: get("AHBOT_ITEMS").filter(|v| ITEM_LISTS.contains(&v.as_str())).unwrap_or_else(|| "items75".to_owned()),
     }
-}
-
-fn profiles(env: &EnvFile) -> impl Iterator<Item = String> {
-    let list = env.get("COMPOSE_PROFILES").unwrap_or_default();
-    list.split(',').map(|p| p.trim().to_owned()).filter(|p| !p.is_empty()).collect::<Vec<_>>().into_iter()
 }
 
 /// Checks `new` and writes it into `env`. Returns whether anything changed.
@@ -64,11 +59,7 @@ pub fn save(env: &mut EnvFile, new: &Settings) -> Result<bool, String> {
     }
     let before = load(env);
 
-    let mut profiles: Vec<String> = profiles(env).filter(|p| p != PROFILE).collect();
-    if new.enabled {
-        profiles.push(PROFILE.to_owned());
-    }
-    env.set("COMPOSE_PROFILES", &profiles.join(","));
+    envfile::set_profile(env, PROFILE, new.enabled);
     let yes_no = |on: bool| if on { "yes" } else { "no" };
     env.set("AHBOT_NAME", name);
     env.set("AHBOT_TICK", &new.tick.to_string());

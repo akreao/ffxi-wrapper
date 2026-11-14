@@ -13,6 +13,7 @@ mod tailscale;
 mod task;
 mod tray;
 mod update;
+mod web;
 
 use std::path::{Path, PathBuf};
 use std::process::Child;
@@ -394,7 +395,7 @@ enum Step {
 }
 
 /// Runs `start`, `restart` (the LSB servers, to apply settings), `stop`,
-/// `build`, for the auction house bot `ahbot-apply`, `ahbot-refill` or
+/// `build`, for the website `web-apply`, for the auction house bot `ahbot-apply`, `ahbot-refill` or
 /// `ahbot-clear`, or for the game client `client-download`, `client-install`
 /// (from the installer `file`) or `client-update`, streaming its output as
 /// `task-line` events.
@@ -410,6 +411,7 @@ fn start_task(handle: &AppHandle, app: &App, kind: String, file: Option<String>)
         return Err("Start the server first: the auction house bot needs the database running.".into());
     }
     let ahbot_on = app.env().is_some_and(|env| ahbot::load(&env).enabled);
+    let web_on = app.env().is_some_and(|env| web::load(&env).enabled);
     let mut slot = app.task.lock().unwrap();
     if let Some(running) = slot.as_ref() {
         return Err(format!("Wait for the current {} to finish.", running.kind));
@@ -447,6 +449,17 @@ fn start_task(handle: &AppHandle, app: &App, kind: String, file: Option<String>)
                 cmd.args(["rm", "--stop", "--force", ahbot::SERVICE]);
             }
             vec![Step::Run(cmd)]
+        }
+        // The same for the website. Its port is checked first: another
+        // program may hold it.
+        "web-apply" => {
+            if web_on {
+                cmd.args(["up", "--detach", "--no-deps", "--force-recreate", web::SERVICE]);
+                vec![Step::Ports, Step::Run(cmd)]
+            } else {
+                cmd.args(["rm", "--stop", "--force", web::SERVICE]);
+                vec![Step::Run(cmd)]
+            }
         }
         // Stocks the auction house now, or takes the bot's listings down.
         "ahbot-refill" | "ahbot-clear" => {
@@ -691,6 +704,68 @@ fn open_ahbot_dir(app: State<App>) -> Result<(), String> {
     host::open(folder.as_os_str())
 }
 
+#[derive(Serialize)]
+struct Website {
+    #[serde(flatten)]
+    settings: web::Settings,
+    /// This computer's addresses, for the "who can reach it" choice.
+    addresses: Vec<net::Address>,
+    /// The `web` container, when Docker answers.
+    service: Option<stack::ServiceStatus>,
+}
+
+/// The website's settings from `.env`, and whether it's running.
+#[tauri::command]
+async fn website(handle: AppHandle) -> Result<Website, String> {
+    off_main(handle, |_, app| {
+        let settings = web::load(&app.env().ok_or("Finish setup first.")?);
+        let service = stack::status(&app.dir()?)
+            .ok()
+            .and_then(|all| all.into_iter().find(|s| s.service == web::SERVICE));
+        Ok(Website { settings, addresses: net::lan_addresses(), service })
+    })
+    .await?
+}
+
+/// Saves the website's settings. Returns whether the running server needs the
+/// website started, restarted or removed (the `web-apply` task) to match.
+#[tauri::command]
+async fn set_website(handle: AppHandle, values: web::Choice) -> Result<bool, String> {
+    off_main(handle, move |_, app| {
+        let changed = app.edit_env(|env| web::save(env, &values))?;
+        Ok(changed && running(app))
+    })
+    .await?
+}
+
+/// Opens the website's admin panel in the default browser, signed in as the
+/// owner with a one-minute link.
+#[tauri::command]
+async fn open_admin_panel(handle: AppHandle) -> Result<(), String> {
+    off_main(handle, |_, app| {
+        let env = app.env().ok_or("Finish setup first.")?;
+        let up = stack::status(&app.dir()?)?
+            .iter()
+            .any(|s| s.service == web::SERVICE && s.state == "running");
+        if !up {
+            return Err("The website isn't running. Start the server, or restart the website, first.".into());
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| e.to_string())?
+            .as_secs();
+        host::open(std::ffi::OsStr::new(&web::owner_url(&env, now)?))
+    })
+    .await?
+}
+
+/// Opens the website (its home page) in the default browser.
+#[tauri::command]
+fn open_website(app: State<App>) -> Result<(), String> {
+    let settings = web::load(&app.env().ok_or("Finish setup first.")?);
+    host::open(std::ffi::OsStr::new(&settings.url))
+}
+
 #[tauri::command]
 fn open_backups(app: State<App>) -> Result<(), String> {
     let folder = backup::folder(&app.dir()?);
@@ -784,6 +859,10 @@ pub fn run() {
             ahbot_settings,
             set_ahbot_settings,
             open_ahbot_dir,
+            website,
+            set_website,
+            open_admin_panel,
+            open_website,
             open_stack_dir,
             friends,
             wan_ip,

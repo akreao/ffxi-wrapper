@@ -8,6 +8,7 @@ on:
     paths: &paths
       - '.github/workflows/desktop.yml'
       - 'desktop/**'
+      - 'core/**'
       - 'compose.yaml'
       - 'docker/**'
       - '.env.example'
