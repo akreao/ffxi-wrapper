@@ -46,6 +46,7 @@ pub fn router() -> Router<Shared> {
         .route("/news/{id}", get(|s, v, _p: Path<String>| page(s, v, "post.html", Access::Anyone)))
         .route("/rules", get(|s, v| page(s, v, "rules.html", Access::Anyone)))
         .route("/signin", get(|s, v| page(s, v, "signin.html", Access::Anyone)))
+        .route("/signup", get(|s, v| page(s, v, "signup.html", Access::Anyone)))
         .route("/me", get(|s, v| page(s, v, "me.html", Access::SignedIn)))
         .route("/me/characters/{id}", get(|s, v, _p: Path<String>| page(s, v, "me-character.html", Access::SignedIn)))
         .route("/admin", get(|s, v| page(s, v, "admin.html", Access::Staff)))
@@ -58,6 +59,7 @@ pub fn router() -> Router<Shared> {
         .route("/admin/news", get(|s, v| page(s, v, "admin-news.html", Access::Owner)))
         .route("/admin/news/{id}", get(|s, v, _p: Path<String>| page(s, v, "admin-news.html", Access::Owner)))
         .route("/admin/content", get(|s, v| page(s, v, "admin-content.html", Access::Owner)))
+        .route("/admin/invites", get(|s, v| page(s, v, "admin-invites.html", Access::Owner)))
         .route("/ui/{*path}", get(asset))
 }
 

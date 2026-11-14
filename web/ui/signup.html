@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Create an account</title>
+  <script src="/ui/theme.js"></script>
+  <link rel="stylesheet" href="/ui/tokens.css">
+  <link rel="stylesheet" href="/ui/web.css">
+  <script src="/ui/app.js" defer></script>
+</head>
+<body class="signin" data-page="signup">
+<form class="card signin-card" id="form" novalidate>
+  <div class="brand">
+    <div class="logo"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg></div>
+    <div><div class="brand-name" id="server-name"></div><div class="brand-sub">Final Fantasy XI · LandSandBoat</div></div>
+  </div>
+  <h2 class="flush">Create an account</h2>
+  <p class="muted flush" id="closed" hidden>Sign-up is closed on this server right now.</p>
+  <div id="fields">
+    <p class="muted">One account holds your characters. You make the characters in the game.</p>
+    <label for="login">Login</label>
+    <input id="login" name="login" type="text" autocomplete="username" spellcheck="false" maxlength="16" required>
+    <p class="hint">3 to 16 letters or numbers. You type it in the game too.</p>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="new-password" maxlength="32" required>
+    <p class="hint">8 to 32 characters.</p>
+    <label for="password2">Password again</label>
+    <input id="password2" name="password2" type="password" autocomplete="new-password" maxlength="32" required>
+    <div id="invite-row">
+      <label for="invite">Invite code</label>
+      <input id="invite" name="invite" type="text" spellcheck="false" autocomplete="off" maxlength="40">
+      <p class="hint">This server asks for one. Get it from the person who runs it.</p>
+    </div>
+    <p class="error" id="err" role="alert" hidden><span id="err-text"></span></p>
+    <button class="primary" type="submit" id="go">Create account</button>
+  </div>
+</form>
+<div class="signin-foot">Already have one? <a href="/signin">Sign in</a> · <a href="/">Back to the site</a> · <button class="icon-button small theme-toggle" type="button" aria-label="Switch theme"></button></div>
+</body>
+</html>

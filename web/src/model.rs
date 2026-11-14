@@ -295,3 +295,12 @@ mod tests {
         assert_eq!(decode_ip(0xFFFF_FFFF).to_string(), "255.255.255.255");
     }
 }
+
+/// What making a game account came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Created {
+    /// The new account's id.
+    Account(i64),
+    /// Someone has the login already.
+    Taken,
+}

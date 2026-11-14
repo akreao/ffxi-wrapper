@@ -78,8 +78,7 @@ async fn home(State(state): State<Shared>, ClientIp(ip): ClientIp) -> ApiResult<
         "server_name": state.cfg.server_name,
         "up": online.is_some(),
         "online": online,
-        // The later sign-up PR turns this on.
-        "signup_open": false,
+        "signup_open": state.signup_open().await,
         "title": text("home_title"),
         "description_html": markdown::render(&text("home_description")),
         "connect_html": markdown::render(&text("connect")),

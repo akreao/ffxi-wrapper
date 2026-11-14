@@ -73,6 +73,28 @@ impl Windows {
 
 const MIN: i64 = 60;
 const HOUR: i64 = 60 * MIN;
+const DAY: i64 = 24 * HOUR;
+
+/// Sign-up: 3 an hour from one address, 30 a day for the whole server. Behind the proxy
+/// address nobody can be told apart, so those attempts share one bucket.
+pub const SIGNUP_ADDR: (usize, i64) = (3, HOUR);
+pub const SIGNUP_PROXIED: (usize, i64) = (10, HOUR);
+pub const SIGNUP_DAY: (usize, i64) = (30, DAY);
+const SIGNUP_DAY_KEY: &str = "signup:day";
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum SignupLimit {
+    Address,
+    Day,
+}
+
+fn signup_addr_key(addr: &str) -> (String, usize) {
+    if is_proxy_addr(addr) {
+        ("signup:proxied".to_string(), SIGNUP_PROXIED.0)
+    } else {
+        (format!("signup:{addr}"), SIGNUP_ADDR.0)
+    }
+}
 
 /// What sign-in is limited by (see the spec's rate-limit table).
 pub const FAIL_PAIR: (usize, i64) = (5, 15 * MIN);
@@ -125,11 +147,12 @@ pub struct Limiter {
     pub failures: Windows,
     pub public_gets: Windows,
     pub writes: Windows,
+    pub signups: Windows,
 }
 
 impl Limiter {
     pub fn new() -> Limiter {
-        Limiter { failures: Windows::default(), public_gets: Windows::default(), writes: Windows::default() }
+        Limiter { failures: Windows::default(), public_gets: Windows::default(), writes: Windows::default(), signups: Windows::default() }
     }
 
     pub fn sign_in_keys(addr: &str, target: &Target) -> SignInKeys {
@@ -185,6 +208,29 @@ impl Limiter {
         self.failures.sweep(HOUR, now);
         self.public_gets.sweep(MIN, now);
         self.writes.sweep(MIN, now);
+        self.signups.sweep(DAY, now);
+    }
+
+    /// Counts a sign-up attempt against its address and against the day's total at once;
+    /// false (nothing counted) when either is full. [`Limiter::signup_not_created`] takes the
+    /// day's count back when no account came of it; the address keeps its count, so guessing
+    /// at invite codes or names stays slow.
+    pub fn reserve_signup(&self, addr: &str, now: i64) -> Result<(), SignupLimit> {
+        let (addr_key, addr_limit) = signup_addr_key(addr);
+        if self.signups.reserve(&[(addr_key.as_str(), addr_limit, HOUR), (SIGNUP_DAY_KEY, SIGNUP_DAY.0, DAY)], now) {
+            return Ok(());
+        }
+        Err(if self.signups.count(&addr_key, HOUR, now) >= addr_limit { SignupLimit::Address } else { SignupLimit::Day })
+    }
+
+    pub fn signup_not_created(&self) {
+        self.signups.release(SIGNUP_DAY_KEY);
+    }
+
+    /// Takes back an attempt that did nothing at all (the site was busy): both counts.
+    pub fn signup_undo(&self, addr: &str) {
+        self.signups.release(&signup_addr_key(addr).0);
+        self.signup_not_created();
     }
 }
 

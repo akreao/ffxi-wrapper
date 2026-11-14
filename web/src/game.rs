@@ -15,6 +15,8 @@ use std::time::Duration;
 pub enum DbError {
     /// LSB's tables are missing: db-init hasn't finished, or failed.
     NotReady,
+    /// Another sign-up holds the lock and didn't let go in time.
+    Busy,
     Failed(String),
 }
 
@@ -50,6 +52,9 @@ pub trait Game: Send + Sync {
     /// `None` when the character isn't on this account (or doesn't exist).
     async fn my_inventory(&self, accid: i64, charid: i64) -> DbResult<Option<Vec<InventoryItem>>>;
     async fn set_password(&self, accid: i64, hash: &str) -> DbResult<()>;
+    /// Makes an account exactly as LSB's login server does (`LOGIN_CREATE`): the login must be
+    /// unused, the id is `MAX(id) + 1` but at least 1000, status NORMAL, privilege USER.
+    async fn create_account(&self, login: &str, hash: &str) -> DbResult<Created>;
 
     async fn counts(&self) -> DbResult<Counts>;
     async fn online(&self) -> DbResult<Vec<OnlineRow>>;
@@ -411,6 +416,20 @@ impl Game for MariaDb {
         Ok(())
     }
 
+    async fn create_account(&self, login: &str, hash: &str) -> DbResult<Created> {
+        let mut conn = self.pool.acquire().await?;
+        // One sign-up at a time, so two of them can't be handed the same id. (LSB's own creation
+        // takes no such lock; the retry below covers a race with it.)
+        let got: Option<i64> = sqlx::query("SELECT CAST(GET_LOCK('ffxi_web_signup', 5) AS SIGNED) AS got").fetch_one(&mut *conn).await?.try_get("got")?;
+        if got != Some(1) {
+            return Err(DbError::Busy);
+        }
+        let out = insert_account(&mut conn, login, hash).await;
+        // A failed release can only mean the connection is gone, and the lock goes with it.
+        let _ = sqlx::query("SELECT RELEASE_LOCK('ffxi_web_signup')").execute(&mut *conn).await;
+        out
+    }
+
     async fn counts(&self) -> DbResult<Counts> {
         let r = sqlx::query(
             "SELECT CAST((SELECT COUNT(*) FROM accounts) AS SIGNED) AS accounts,
@@ -755,6 +774,34 @@ impl Game for MariaDb {
         tx.commit().await?;
         Ok(out)
     }
+}
+
+/// The body of [`MariaDb::create_account`], run with the lock held. The statements are LSB's
+/// (`auth_session.cpp`, `LOGIN_CREATE`): `timecreate` is local time as a `DATETIME`, and
+/// `timelastmodify` is given `NULL`, which this TIMESTAMP column turns into the current time.
+async fn insert_account(conn: &mut sqlx::MySqlConnection, login: &str, hash: &str) -> DbResult<Created> {
+    for attempt in 0..2 {
+        if sqlx::query("SELECT id FROM accounts WHERE login = ?").bind(login).fetch_optional(&mut *conn).await?.is_some() {
+            return Ok(Created::Taken);
+        }
+        let max: i64 = sqlx::query("SELECT CAST(COALESCE(MAX(id), 0) AS SIGNED) AS max_id FROM accounts").fetch_one(&mut *conn).await?.try_get("max_id")?;
+        let id = (max + 1).max(1000);
+        let done = sqlx::query(
+            "INSERT INTO accounts (id, login, password, timecreate, timelastmodify, status, priv) VALUES (?, ?, ?, NOW(), NULL, 1, 1)",
+        )
+        .bind(id)
+        .bind(login)
+        .bind(hash)
+        .execute(&mut *conn)
+        .await;
+        match done {
+            Ok(_) => return Ok(Created::Account(id)),
+            // 1062: the id is taken, by an account LSB's login server made in between. Look again once.
+            Err(sqlx::Error::Database(d)) if attempt == 0 && d.try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>().is_some_and(|m| m.number() == 1062) => continue,
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Err(DbError::Failed("the account id was taken twice".into()))
 }
 
 enum Locked {

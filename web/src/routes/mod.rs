@@ -8,6 +8,7 @@ pub mod me;
 pub mod pages;
 pub mod public;
 pub mod session;
+pub mod signup;
 
 use crate::http;
 use crate::state::Shared;
@@ -23,6 +24,7 @@ pub fn router(state: Shared) -> Router {
         .merge(admin::api())
         .merge(cms::api())
         .merge(public::api())
+        .merge(signup::api())
         .route_layer(middleware::from_fn_with_state(state.clone(), http::guard_changes))
         // Every body here is a few short fields.
         .layer(DefaultBodyLimit::max(8 * 1024));

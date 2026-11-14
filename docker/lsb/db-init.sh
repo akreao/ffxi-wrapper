@@ -53,8 +53,8 @@ fi
 sql "UPDATE zone_settings SET zoneip = '$PUBLIC_IP'"
 
 # The website's own database user (compose.yaml's web service): it may read
-# the tables its pages show and change only a password, not everything xiadmin
-# can. Created here because only root may create users; DB_ROOT_PASSWORD and
+# the tables its pages show, change a password and add an account (sign-up), not
+# everything xiadmin can. Created here because only root may create users; DB_ROOT_PASSWORD and
 # WEB_DB_PASSWORD (its own password) are the ones from .env. The grants grow with the site's phases.
 if [ -n "${DB_ROOT_PASSWORD:-}" ] && [ -n "${WEB_DB_PASSWORD:-}" ]; then
     web_pw="$(printf '%s' "$WEB_DB_PASSWORD" | sed -e 's/\\/\\\\/g' -e "s/'/''/g")"
@@ -70,6 +70,7 @@ if [ -n "${DB_ROOT_PASSWORD:-}" ] && [ -n "${WEB_DB_PASSWORD:-}" ]; then
         REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'xiweb'@'%';
         $grants
         GRANT UPDATE (password) ON \`$db\`.\`accounts\` TO 'xiweb'@'%';
+        GRANT INSERT (id, login, password, timecreate, timelastmodify, status, priv) ON \`$db\`.\`accounts\` TO 'xiweb'@'%';
         FLUSH PRIVILEGES;"; then
         echo "Website database user ready."
     else

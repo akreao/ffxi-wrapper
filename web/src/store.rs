@@ -67,6 +67,64 @@ CREATE TABLE site_content (
 );
 ";
 
+const SCHEMA_V3: &str = "
+CREATE TABLE settings (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  updated    INTEGER NOT NULL,
+  updated_by TEXT
+);
+CREATE TABLE invites (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  code_hash  BLOB NOT NULL UNIQUE,
+  hint       TEXT NOT NULL,
+  note       TEXT NOT NULL DEFAULT '',
+  max_uses   INTEGER NOT NULL,
+  uses       INTEGER NOT NULL DEFAULT 0,
+  expires    INTEGER,
+  created    INTEGER NOT NULL,
+  created_by TEXT NOT NULL,
+  revoked    INTEGER NOT NULL DEFAULT 0
+);
+";
+
+/// An invite code as the owner's list shows it. The code itself is never stored: only its
+/// SHA-256, and the last four characters (`hint`) so the list tells codes apart.
+#[derive(Debug, Clone, Serialize)]
+pub struct Invite {
+    pub id: i64,
+    pub hint: String,
+    pub note: String,
+    pub max_uses: i64,
+    pub uses: i64,
+    pub expires: Option<i64>,
+    pub created: i64,
+    pub created_by: String,
+    pub revoked: bool,
+}
+
+/// What a new invite is made with.
+pub struct NewInvite<'a> {
+    pub code_hash: Vec<u8>,
+    pub hint: &'a str,
+    pub note: &'a str,
+    pub max_uses: i64,
+    pub expires: Option<i64>,
+    pub by: &'a str,
+    pub now: i64,
+}
+
+/// The code as typed -> what is hashed: letters and digits only, upper case, so spaces, dashes
+/// and case don't matter. `None` when nothing usable is left or it is absurdly long.
+pub fn normalize_code(raw: &str) -> Option<String> {
+    let c: String = raw.chars().filter(|c| c.is_ascii_alphanumeric()).map(|c| c.to_ascii_uppercase()).collect();
+    (!c.is_empty() && c.len() <= 40).then_some(c)
+}
+
+pub fn code_hash(normalized: &str) -> Vec<u8> {
+    Sha256::digest(normalized.as_bytes()).to_vec()
+}
+
 const ACTION_COLS: &str = "id, at, actor_kind, actor_login, actor_role, ip, action, target_kind, target_id, target_name, reason, detail, result";
 
 fn action_row(r: &sqlx::sqlite::SqliteRow) -> Result<ActionRow, sqlx::Error> {
@@ -274,6 +332,14 @@ impl Store {
             sqlx::query("PRAGMA user_version = 2").execute(&mut *tx).await?;
             tx.commit().await?;
         }
+        if v < 3 {
+            let mut tx = self.pool.begin().await?;
+            for stmt in SCHEMA_V3.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+                sqlx::query(stmt).execute(&mut *tx).await?;
+            }
+            sqlx::query("PRAGMA user_version = 3").execute(&mut *tx).await?;
+            tx.commit().await?;
+        }
         Ok(())
     }
 
@@ -400,7 +466,7 @@ impl Store {
             "SELECT {ACTION_COLS} FROM action_log
              WHERE (? IS NULL OR id < ?)
                AND (? = 0 OR (actor_role IN ('owner', 'moderator', 'system') AND action NOT IN ('sign_in', 'sign_in_failed')))
-               AND (? = 1 OR target_kind IS NULL OR target_kind NOT IN ('news', 'content'))
+               AND (? = 1 OR target_kind IS NULL OR target_kind NOT IN ('news', 'content', 'invite', 'setting'))
              ORDER BY id DESC LIMIT ?"
         ))
         .bind(before)
@@ -418,7 +484,7 @@ impl Store {
         let like = format!("%{}%", q.q.replace('|', "||").replace('%', "|%").replace('_', "|_"));
         let wh = "WHERE (? = '' OR target_name LIKE ? ESCAPE '|' OR reason LIKE ? ESCAPE '|' OR actor_login LIKE ? ESCAPE '|')
                     AND (? IS NULL OR actor_login = ?) AND (? IS NULL OR action = ?) AND (? IS NULL OR at >= ?)
-                    AND (? = 1 OR target_kind IS NULL OR target_kind NOT IN ('news', 'content'))";
+                    AND (? = 1 OR target_kind IS NULL OR target_kind NOT IN ('news', 'content', 'invite', 'setting'))";
         let total: i64 = sqlx::query(&format!("SELECT COUNT(*) FROM action_log {wh}"))
             .bind(&q.q).bind(&like).bind(&like).bind(&like)
             .bind(&q.actor).bind(&q.actor).bind(&q.action).bind(&q.action).bind(q.since).bind(q.since).bind(q.owner as i64)
@@ -440,7 +506,7 @@ impl Store {
         let actors = sqlx::query("SELECT DISTINCT actor_login FROM action_log WHERE actor_login IS NOT NULL AND actor_role IN ('owner', 'moderator') ORDER BY actor_login")
             .fetch_all(&self.pool)
             .await?;
-        let actions = sqlx::query("SELECT DISTINCT action FROM action_log WHERE ? = 1 OR target_kind IS NULL OR target_kind NOT IN ('news', 'content') ORDER BY action").bind(owner as i64).fetch_all(&self.pool).await?;
+        let actions = sqlx::query("SELECT DISTINCT action FROM action_log WHERE ? = 1 OR target_kind IS NULL OR target_kind NOT IN ('news', 'content', 'invite', 'setting') ORDER BY action").bind(owner as i64).fetch_all(&self.pool).await?;
         Ok((
             actors.iter().map(|r| r.try_get(0)).collect::<Result<_, _>>()?,
             actions.iter().map(|r| r.try_get(0)).collect::<Result<_, _>>()?,
@@ -571,6 +637,96 @@ impl Store {
     /// Back to the default: the stored row goes. False when there was none.
     pub async fn content_reset(&self, key: &str) -> Result<bool, sqlx::Error> {
         Ok(sqlx::query("DELETE FROM site_content WHERE key = ?").bind(key).execute(&self.pool).await?.rows_affected() == 1)
+    }
+
+    // ---- settings and sign-up invites ----
+
+    pub async fn setting(&self, key: &str) -> Result<Option<String>, sqlx::Error> {
+        sqlx::query("SELECT value FROM settings WHERE key = ?").bind(key).fetch_optional(&self.pool).await?.map(|r| r.try_get("value")).transpose()
+    }
+
+    pub async fn set_setting(&self, key: &str, value: &str, by: &str, now: i64) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO settings (key, value, updated, updated_by) VALUES (?, ?, ?, ?)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated = excluded.updated, updated_by = excluded.updated_by",
+        )
+        .bind(key)
+        .bind(value)
+        .bind(now)
+        .bind(by)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Does sign-up need an invite code? On unless the owner switched it off.
+    pub async fn invite_required(&self) -> Result<bool, sqlx::Error> {
+        Ok(self.setting("signup_needs_invite").await?.as_deref() != Some("0"))
+    }
+
+    pub async fn invite_create(&self, n: NewInvite<'_>) -> Result<i64, sqlx::Error> {
+        let r = sqlx::query("INSERT INTO invites (code_hash, hint, note, max_uses, expires, created, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)")
+            .bind(n.code_hash)
+            .bind(n.hint)
+            .bind(n.note)
+            .bind(n.max_uses)
+            .bind(n.expires)
+            .bind(n.now)
+            .bind(n.by)
+            .execute(&self.pool)
+            .await?;
+        Ok(r.last_insert_rowid())
+    }
+
+    pub async fn invites(&self) -> Result<Vec<Invite>, sqlx::Error> {
+        let rows = sqlx::query("SELECT id, hint, note, max_uses, uses, expires, created, created_by, revoked FROM invites ORDER BY id DESC").fetch_all(&self.pool).await?;
+        rows.iter()
+            .map(|r| {
+                Ok(Invite {
+                    id: r.try_get("id")?,
+                    hint: r.try_get("hint")?,
+                    note: r.try_get("note")?,
+                    max_uses: r.try_get("max_uses")?,
+                    uses: r.try_get("uses")?,
+                    expires: r.try_get("expires")?,
+                    created: r.try_get("created")?,
+                    created_by: r.try_get("created_by")?,
+                    revoked: r.try_get::<i64, _>("revoked")? != 0,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn invite(&self, id: i64) -> Result<Option<Invite>, sqlx::Error> {
+        Ok(self.invites().await?.into_iter().find(|i| i.id == id))
+    }
+
+    /// Stops a code working. False when there is no such invite.
+    pub async fn invite_revoke(&self, id: i64) -> Result<bool, sqlx::Error> {
+        Ok(sqlx::query("UPDATE invites SET revoked = 1 WHERE id = ?").bind(id).execute(&self.pool).await?.rows_affected() == 1)
+    }
+
+    /// Spends one use of a code, in one statement, so two sign-ups can't both take the last use.
+    /// `None` for a code that doesn't exist, is used up, has expired or was revoked: the caller
+    /// can't tell which, and neither can anyone it answers.
+    pub async fn invite_take(&self, code_hash: &[u8], now: i64) -> Result<Option<i64>, sqlx::Error> {
+        sqlx::query(
+            "UPDATE invites SET uses = uses + 1
+             WHERE code_hash = ? AND revoked = 0 AND uses < max_uses AND (expires IS NULL OR expires > ?)
+             RETURNING id",
+        )
+        .bind(code_hash)
+        .bind(now)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(|r| r.try_get("id"))
+        .transpose()
+    }
+
+    /// Gives back a use taken for a sign-up that didn't make an account.
+    pub async fn invite_return(&self, id: i64) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE invites SET uses = uses - 1 WHERE id = ? AND uses > 0").bind(id).execute(&self.pool).await?;
+        Ok(())
     }
 
     // ---- housekeeping ----
