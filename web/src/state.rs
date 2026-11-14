@@ -4,6 +4,7 @@ use crate::config::Config;
 use crate::game::Game;
 use crate::limits::Limiter;
 use crate::model::{PublicPlayer, RankRow};
+use crate::proxy::Proxies;
 use crate::status::Probe;
 use crate::store::Store;
 use std::collections::HashMap;
@@ -16,6 +17,8 @@ pub struct AppState {
     pub game: Arc<dyn Game>,
     pub store: Store,
     pub limiter: Limiter,
+    /// The proxy container whose forwarded client address is believed.
+    pub proxies: Proxies,
     pub probe: Arc<dyn Probe>,
     /// The rendered news and site content, kept 30 seconds and dropped on any edit.
     pub news_cache: crate::cache::PublicCache,

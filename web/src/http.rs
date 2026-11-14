@@ -4,6 +4,7 @@
 
 use crate::auth::{self, Role};
 use crate::game::DbError;
+use crate::proxy::{self, Source};
 use crate::state::Shared;
 use crate::store::{Session, SessionKind};
 use axum::body::Body;
@@ -82,22 +83,23 @@ pub type ApiResult<T> = Result<T, ApiError>;
 
 // ---- who is asking ----
 
-/// The address of the TCP peer. (Phase 4 teaches this about the proxy.)
+/// The client's address: the TCP peer's, or, behind the proxy container, the one the proxy
+/// wrote (see `proxy`). Worked out once per request by `edge`.
 pub struct ClientIp(pub String);
 
 impl FromRequestParts<Shared> for ClientIp {
     type Rejection = std::convert::Infallible;
-    async fn from_request_parts(parts: &mut Parts, _: &Shared) -> Result<Self, Self::Rejection> {
-        Ok(ClientIp(client_ip(parts)))
+    async fn from_request_parts(parts: &mut Parts, state: &Shared) -> Result<Self, Self::Rejection> {
+        Ok(ClientIp(source(parts, state).ip))
     }
 }
 
-pub fn client_ip(parts: &Parts) -> String {
-    parts
-        .extensions
-        .get::<ConnectInfo<SocketAddr>>()
-        .map(|c| c.0.ip().to_string())
-        .unwrap_or_else(|| "unknown".to_string())
+pub fn source(parts: &Parts, state: &Shared) -> Source {
+    if let Some(s) = parts.extensions.get::<Source>() {
+        return s.clone();
+    }
+    let peer = parts.extensions.get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip());
+    proxy::resolve(peer, &parts.headers, &state.proxies)
 }
 
 /// A signed-in request, with the role worked out afresh from the database.
@@ -138,9 +140,9 @@ pub fn cookie_value(headers: &HeaderMap) -> Option<String> {
     None
 }
 
-pub fn set_cookie(state: &Shared, value: &str, max_age: i64) -> HeaderValue {
-    let secure = if state.cfg.secure_cookies() { "; Secure" } else { "" };
-    HeaderValue::from_str(&format!("{COOKIE}={value}; HttpOnly; SameSite=Strict; Path=/; Max-Age={max_age}{secure}"))
+pub fn set_cookie(_state: &Shared, value: &str, max_age: i64) -> HeaderValue {
+    // `Secure` is added by `edge`, only on answers that went over HTTPS.
+    HeaderValue::from_str(&format!("{COOKIE}={value}; HttpOnly; SameSite=Strict; Path=/; Max-Age={max_age}"))
         .expect("cookie values are base64url")
 }
 
@@ -253,7 +255,7 @@ fn is_json(headers: &HeaderMap) -> bool {
 
 /// Paths that change things without a session yet: they get the Origin check only.
 fn needs_no_csrf(path: &str) -> bool {
-    matches!(path, "/api/auth/login" | "/api/public/signup")
+    needs_tls(path)
 }
 
 /// Every `POST`, `PUT`, `DELETE` and `PATCH` needs a JSON body, a matching Origin and,
@@ -263,6 +265,15 @@ pub async fn guard_changes(State(state): State<Shared>, req: Request, next: Next
         return next.run(req).await;
     }
     let h = req.headers();
+    if let Some(src) = req.extensions().get::<Source>() {
+        if refuse_plain_http(&state.cfg, src, req.extensions().get::<axum::extract::OriginalUri>().map_or(req.uri().path(), |u| u.0.path())) {
+            return ApiError::new(
+                StatusCode::FORBIDDEN,
+                format!("Sign in over {} so your password isn't sent in the clear.", state.cfg.public_url),
+            )
+            .into_response();
+        }
+    }
     if !origin_matches(h) {
         return ApiError::forbidden().into_response();
     }
@@ -297,13 +308,87 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-/// Headers every response carries.
-pub async fn secure_headers(req: Request, next: Next) -> Response<Body> {
+/// While the site has a public address, a password isn't taken over plain HTTP from the
+/// internet: only the proxy (which ended TLS) and private addresses (this computer, the LAN,
+/// Tailscale) may use the direct port.
+fn refuse_plain_http(cfg: &crate::config::Config, src: &Source, path: &str) -> bool {
+    !cfg.public_url.is_empty() && !src.via_proxy && needs_tls(path) && !proxy::is_private_client(&src.ip)
+}
+
+fn needs_tls(path: &str) -> bool {
+    matches!(path, "/api/auth/login" | "/api/public/signup")
+}
+
+/// Runs first on every request: works out who is asking and whether TLS ended at the proxy, refuses
+/// a request that reaches the proxy under another name than the site's, and adds the headers
+/// every response carries (HSTS only on answers that went over HTTPS).
+pub async fn edge(State(state): State<Shared>, mut req: Request, next: Next) -> Response<Body> {
+    let peer = req.extensions().get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip());
+    let src = proxy::resolve(peer, req.headers(), &state.proxies);
+    let https = src.via_proxy && state.cfg.secure_cookies();
+    if src.via_proxy {
+        if let Some(want) = proxy::public_host(&state.cfg.public_url) {
+            if proxy::host_of(req.headers()).as_deref() != Some(want.as_str()) {
+                let mut res = (StatusCode::MISDIRECTED_REQUEST, "This isn't the site's address.").into_response();
+                add_security_headers(res.headers_mut(), https);
+                return res;
+            }
+        }
+    }
+    req.extensions_mut().insert(src);
     let mut res = next.run(req).await;
-    let h = res.headers_mut();
+    add_security_headers(res.headers_mut(), https);
+    if https {
+        mark_secure(res.headers_mut());
+    }
+    res
+}
+
+/// A session cookie is `Secure` only when it travels over HTTPS (through the proxy). On the direct
+/// port (LAN, Tailscale, the owner link) the page is plain HTTP and browsers drop a Secure cookie.
+fn mark_secure(h: &mut HeaderMap) {
+    let cookies: Vec<HeaderValue> = h.get_all(header::SET_COOKIE).iter().cloned().collect();
+    h.remove(header::SET_COOKIE);
+    for c in cookies {
+        let s = c.to_str().unwrap_or("");
+        let v = if s.starts_with(&format!("{COOKIE}=")) && !s.contains("; Secure") { HeaderValue::from_str(&format!("{s}; Secure")).unwrap_or(c) } else { c };
+        h.append(header::SET_COOKIE, v);
+    }
+}
+
+fn add_security_headers(h: &mut HeaderMap, https: bool) {
     h.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(CSP));
     h.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
     h.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
-    res
+    if https {
+        h.insert(header::STRICT_TRANSPORT_SECURITY, HeaderValue::from_static("max-age=31536000"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg(url: &str) -> crate::config::Config {
+        let mut c = crate::config::Config::for_tests();
+        c.public_url = url.into();
+        c
+    }
+    fn src(ip: &str, via_proxy: bool) -> Source {
+        Source { ip: ip.into(), via_proxy }
+    }
+
+    #[test]
+    fn passwords_need_https_from_public_addresses_when_the_site_has_an_address() {
+        let on = cfg("https://ffxi.example.com");
+        for path in ["/api/auth/login", "/api/public/signup"] {
+            assert!(refuse_plain_http(&on, &src("198.51.100.9", false), path));
+            assert!(refuse_plain_http(&on, &src("unknown", false), path));
+            assert!(!refuse_plain_http(&on, &src("198.51.100.9", true), path));
+            assert!(!refuse_plain_http(&on, &src("192.168.1.9", false), path));
+            assert!(!refuse_plain_http(&cfg(""), &src("198.51.100.9", false), path));
+        }
+        assert!(!refuse_plain_http(&on, &src("198.51.100.9", false), "/api/me"));
+    }
 }
