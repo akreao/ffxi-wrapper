@@ -810,6 +810,11 @@ pub fn run() {
                             if let Err(e) = envfile::edit(&env, |env| Ok(stack::follow_lsb_pin(env))) {
                                 eprintln!("Couldn't update LSB_COMMIT in {}: {e}", env.display());
                             }
+                            // compose.yaml reads the website's database password for every
+                            // service, so an install from before it gets one now.
+                            if let Err(e) = envfile::edit(&env, web::ensure_db_password) {
+                                eprintln!("Couldn't add WEB_DB_PASSWORD to {}: {e}", env.display());
+                            }
                         }
                     }
                     dir

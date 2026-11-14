@@ -65,13 +65,19 @@ pub fn save(env: &mut EnvFile, new: &Choice) -> Result<bool, String> {
     if new.enabled && !before.owner_link_ready {
         env.set("ADMIN_SECRET", &new_secret()?);
     }
-    // The site's own database user, which db-init creates with this password.
-    let mut made_password = false;
-    if new.enabled && env.get("WEB_DB_PASSWORD").is_none_or(|p| p.is_empty() || p == "change-me-web") {
-        env.set("WEB_DB_PASSWORD", &envfile::random_password(24)?);
-        made_password = true;
-    }
+    let made_password = if new.enabled { ensure_db_password(env)? } else { false };
     Ok(made_password || load(env) != before)
+}
+
+/// Gives the site's own database user (made by db-init) a password in `.env`
+/// when there's none, which compose.yaml reads for every service. Returns
+/// whether it made one. The app does this at startup for existing installs.
+pub fn ensure_db_password(env: &mut EnvFile) -> Result<bool, String> {
+    if env.get("WEB_DB_PASSWORD").is_some_and(|p| !p.is_empty() && p != "change-me-web") {
+        return Ok(false);
+    }
+    env.set("WEB_DB_PASSWORD", &envfile::random_password(24)?);
+    Ok(true)
 }
 
 /// The address to store for what the screen sent: loopback and empty both
@@ -152,6 +158,19 @@ mod tests {
         assert!(save(&mut env, &choice(false, "")).unwrap());
         assert_eq!(env.get("COMPOSE_PROFILES").as_deref(), Some("ahbot"));
         assert_eq!(env.get("ADMIN_SECRET").unwrap(), key);
+    }
+
+    #[test]
+    fn an_existing_env_gets_a_database_password_once() {
+        let mut env = EnvFile::parse("DB_PASSWORD=x\nCOMPOSE_PROFILES=\n");
+        assert!(ensure_db_password(&mut env).unwrap());
+        let made = env.get("WEB_DB_PASSWORD").unwrap();
+        assert_eq!(made.len(), 24);
+        assert_ne!(Some(made.clone()), env.get("DB_PASSWORD"));
+        assert!(!ensure_db_password(&mut env).unwrap());
+        assert_eq!(env.get("WEB_DB_PASSWORD").unwrap(), made);
+        // Nothing else changes, and the site stays off.
+        assert!(!load(&env).enabled);
     }
 
     #[test]
