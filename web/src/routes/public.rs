@@ -51,8 +51,8 @@ fn cached(state: &Shared, key: &str) -> Option<Json<Value>> {
     state.public_cache.get(key, state.now()).map(Json)
 }
 
-fn remember(cache: &PublicCache, key: &str, v: &Value, now: i64) {
-    cache.put(key, v, now);
+fn remember(cache: &PublicCache, key: &str, v: &Value, now: i64, gen: u64) {
+    cache.put(key, v, now, gen);
 }
 
 fn summary(p: &NewsPost) -> Value {
@@ -65,6 +65,7 @@ fn summary(p: &NewsPost) -> Value {
 
 async fn home(State(state): State<Shared>, ClientIp(ip): ClientIp) -> ApiResult<Json<Value>> {
     limited(&state, &ip)?;
+    let gen = state.public_cache.generation();
     if let Some(hit) = cached(&state, "home") {
         return Ok(hit);
     }
@@ -86,7 +87,7 @@ async fn home(State(state): State<Shared>, ClientIp(ip): ClientIp) -> ApiResult<
         "footer_html": markdown::render(&text("footer")),
         "news": posts.iter().map(summary).collect::<Vec<_>>(),
     });
-    remember(&state.public_cache, "home", &out, state.now());
+    remember(&state.public_cache, "home", &out, state.now(), gen);
     Ok(Json(out))
 }
 
@@ -97,6 +98,7 @@ struct NewsParams {
 
 async fn news(State(state): State<Shared>, ClientIp(ip): ClientIp, Query(p): Query<NewsParams>) -> ApiResult<Json<Value>> {
     limited(&state, &ip)?;
+    let gen = state.public_cache.generation();
     let page = p.page.unwrap_or(1).clamp(1, MAX_PAGE);
     let key = format!("news:{page}");
     if let Some(hit) = cached(&state, &key) {
@@ -106,13 +108,14 @@ async fn news(State(state): State<Shared>, ClientIp(ip): ClientIp, Query(p): Que
     let out = json!({ "items": posts.iter().map(summary).collect::<Vec<_>>(), "page": page, "per": NEWS_PER_PAGE, "total": total });
     // An empty page past the end isn't kept: it would let a crawler fill the cache.
     if !posts.is_empty() || page == 1 {
-        remember(&state.public_cache, &key, &out, state.now());
+        remember(&state.public_cache, &key, &out, state.now(), gen);
     }
     Ok(Json(out))
 }
 
 async fn post(State(state): State<Shared>, ClientIp(ip): ClientIp, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
     limited(&state, &ip)?;
+    let gen = state.public_cache.generation();
     let key = format!("post:{id}");
     if let Some(hit) = cached(&state, &key) {
         return Ok(hit);
@@ -122,13 +125,14 @@ async fn post(State(state): State<Shared>, ClientIp(ip): ClientIp, Path(id): Pat
         "id": p.id, "title": p.title, "author": p.author, "published": p.published, "pinned": p.pinned,
         "body_html": markdown::render(&p.body),
     });
-    remember(&state.public_cache, &key, &out, state.now());
+    remember(&state.public_cache, &key, &out, state.now(), gen);
     Ok(Json(out))
 }
 
 /// Only the rules are served by name; the other blocks travel with `/api/public/home`.
 async fn content_block(State(state): State<Shared>, ClientIp(ip): ClientIp, Path(key): Path<String>) -> ApiResult<Json<Value>> {
     limited(&state, &ip)?;
+    let gen = state.public_cache.generation();
     if key != "rules" {
         return Err(ApiError::not_found());
     }
@@ -138,6 +142,6 @@ async fn content_block(State(state): State<Shared>, ClientIp(ip): ClientIp, Path
     }
     let stored = state.store.content_all().await?;
     let out = json!({ "html": markdown::render(&content::effective(&key, &stored, &state.cfg).0) });
-    remember(&state.public_cache, &ck, &out, state.now());
+    remember(&state.public_cache, &ck, &out, state.now(), gen);
     Ok(Json(out))
 }

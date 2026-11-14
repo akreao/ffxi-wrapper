@@ -3,6 +3,7 @@
 
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 pub const TTL: i64 = 30;
@@ -12,6 +13,8 @@ pub const TTL: i64 = 30;
 #[derive(Default)]
 pub struct PublicCache {
     entries: Mutex<HashMap<String, (i64, Value)>>,
+    /// Bumped by every `clear`, so an answer computed before an edit can't be stored after it.
+    generation: AtomicU64,
 }
 
 impl PublicCache {
@@ -20,8 +23,17 @@ impl PublicCache {
         map.get(key).filter(|(at, _)| now - at < TTL).map(|(_, v)| v.clone())
     }
 
-    pub fn put(&self, key: &str, value: &Value, now: i64) {
+    /// Read this before reading the database, and hand it to `put`.
+    pub fn generation(&self) -> u64 {
+        self.generation.load(Ordering::SeqCst)
+    }
+
+    /// Keeps an answer, unless an edit cleared the cache since `generation` was read.
+    pub fn put(&self, key: &str, value: &Value, now: i64, generation: u64) {
         let mut map = self.entries.lock().unwrap();
+        if generation != self.generation.load(Ordering::SeqCst) {
+            return;
+        }
         // Old entries would otherwise stay until the next edit.
         map.retain(|_, (at, _)| now - *at < TTL);
         map.insert(key.to_string(), (now, value.clone()));
@@ -29,7 +41,9 @@ impl PublicCache {
 
     /// Called after every edit of news or site content.
     pub fn clear(&self) {
-        self.entries.lock().unwrap().clear();
+        let mut map = self.entries.lock().unwrap();
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        map.clear();
     }
 
     pub fn len(&self) -> usize {

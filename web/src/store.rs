@@ -166,6 +166,8 @@ pub struct LogQuery {
     pub action: Option<String>,
     /// Only rows at or after this time.
     pub since: Option<i64>,
+    /// News and site content rows are the owner's: others don't see them.
+    pub owner: bool,
     pub page: i64,
     pub per: i64,
 }
@@ -393,16 +395,18 @@ impl Store {
     }
 
     /// Newest first; `before` is the id of the last row of the previous page.
-    pub async fn actions(&self, before: Option<i64>, per: i64, only_admin: bool) -> Result<Vec<ActionRow>, sqlx::Error> {
+    pub async fn actions(&self, before: Option<i64>, per: i64, only_admin: bool, owner: bool) -> Result<Vec<ActionRow>, sqlx::Error> {
         let rows = sqlx::query(&format!(
             "SELECT {ACTION_COLS} FROM action_log
              WHERE (? IS NULL OR id < ?)
                AND (? = 0 OR (actor_role IN ('owner', 'moderator', 'system') AND action NOT IN ('sign_in', 'sign_in_failed')))
+               AND (? = 1 OR target_kind IS NULL OR target_kind NOT IN ('news', 'content'))
              ORDER BY id DESC LIMIT ?"
         ))
         .bind(before)
         .bind(before)
         .bind(only_admin as i64)
+        .bind(owner as i64)
         .bind(per)
         .fetch_all(&self.pool)
         .await?;
@@ -413,16 +417,17 @@ impl Store {
     pub async fn log_page(&self, q: &LogQuery) -> Result<(Vec<ActionRow>, i64), sqlx::Error> {
         let like = format!("%{}%", q.q.replace('|', "||").replace('%', "|%").replace('_', "|_"));
         let wh = "WHERE (? = '' OR target_name LIKE ? ESCAPE '|' OR reason LIKE ? ESCAPE '|' OR actor_login LIKE ? ESCAPE '|')
-                    AND (? IS NULL OR actor_login = ?) AND (? IS NULL OR action = ?) AND (? IS NULL OR at >= ?)";
+                    AND (? IS NULL OR actor_login = ?) AND (? IS NULL OR action = ?) AND (? IS NULL OR at >= ?)
+                    AND (? = 1 OR target_kind IS NULL OR target_kind NOT IN ('news', 'content'))";
         let total: i64 = sqlx::query(&format!("SELECT COUNT(*) FROM action_log {wh}"))
             .bind(&q.q).bind(&like).bind(&like).bind(&like)
-            .bind(&q.actor).bind(&q.actor).bind(&q.action).bind(&q.action).bind(q.since).bind(q.since)
+            .bind(&q.actor).bind(&q.actor).bind(&q.action).bind(&q.action).bind(q.since).bind(q.since).bind(q.owner as i64)
             .fetch_one(&self.pool)
             .await?
             .try_get(0)?;
         let rows = sqlx::query(&format!("SELECT {ACTION_COLS} FROM action_log {wh} ORDER BY id DESC LIMIT ? OFFSET ?"))
             .bind(&q.q).bind(&like).bind(&like).bind(&like)
-            .bind(&q.actor).bind(&q.actor).bind(&q.action).bind(&q.action).bind(q.since).bind(q.since)
+            .bind(&q.actor).bind(&q.actor).bind(&q.action).bind(&q.action).bind(q.since).bind(q.since).bind(q.owner as i64)
             .bind(q.per)
             .bind((q.page - 1) * q.per)
             .fetch_all(&self.pool)
@@ -431,11 +436,11 @@ impl Store {
     }
 
     /// Everyone who has acted and every action done, for the log's filters.
-    pub async fn log_facets(&self) -> Result<(Vec<String>, Vec<String>), sqlx::Error> {
+    pub async fn log_facets(&self, owner: bool) -> Result<(Vec<String>, Vec<String>), sqlx::Error> {
         let actors = sqlx::query("SELECT DISTINCT actor_login FROM action_log WHERE actor_login IS NOT NULL AND actor_role IN ('owner', 'moderator') ORDER BY actor_login")
             .fetch_all(&self.pool)
             .await?;
-        let actions = sqlx::query("SELECT DISTINCT action FROM action_log ORDER BY action").fetch_all(&self.pool).await?;
+        let actions = sqlx::query("SELECT DISTINCT action FROM action_log WHERE ? = 1 OR target_kind IS NULL OR target_kind NOT IN ('news', 'content') ORDER BY action").bind(owner as i64).fetch_all(&self.pool).await?;
         Ok((
             actors.iter().map(|r| r.try_get(0)).collect::<Result<_, _>>()?,
             actions.iter().map(|r| r.try_get(0)).collect::<Result<_, _>>()?,
@@ -629,11 +634,11 @@ mod tests {
         for i in 0..5 {
             s.log(NewAction { actor_kind: "account", actor_role: "owner", action: if i == 0 { "sign_in" } else { "ban" }, result: "ok", ..Default::default() }, 100 + i).await.unwrap();
         }
-        let page = s.actions(None, 2, false).await.unwrap();
+        let page = s.actions(None, 2, false, true).await.unwrap();
         assert_eq!(page.iter().map(|r| r.id).collect::<Vec<_>>(), vec![5, 4]);
-        let next = s.actions(Some(4), 10, false).await.unwrap();
+        let next = s.actions(Some(4), 10, false, true).await.unwrap();
         assert_eq!(next.len(), 3);
         // The dashboard's list leaves sign-ins out.
-        assert_eq!(s.actions(None, 10, true).await.unwrap().len(), 4);
+        assert_eq!(s.actions(None, 10, true, true).await.unwrap().len(), 4);
     }
 }

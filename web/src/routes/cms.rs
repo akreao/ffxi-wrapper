@@ -218,8 +218,8 @@ struct PreviewBody {
     markdown: String,
 }
 
-/// The same renderer visitors get, for Write/Preview. Staff only.
-async fn preview(State(_state): State<Shared>, Staff(_): Staff, Json(b): Json<PreviewBody>) -> ApiResult<Json<Value>> {
+/// The same renderer visitors get, for Write/Preview. Owner only, like the editors it serves.
+async fn preview(State(_state): State<Shared>, Owner(_): Owner, Json(b): Json<PreviewBody>) -> ApiResult<Json<Value>> {
     if b.markdown.len() > MAX_BODY {
         return Err(ApiError::bad_request("The text is too long."));
     }

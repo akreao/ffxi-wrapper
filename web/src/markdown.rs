@@ -5,7 +5,7 @@
 //! their alt text, and links keep only `http`, `https`, `mailto` and same-site paths. The
 //! same function serves the admin preview, so Write/Preview shows exactly what visitors see.
 
-use pulldown_cmark::{CowStr, Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{CowStr, Event, LinkType, Options, Parser, Tag, TagEnd};
 
 /// The longest text the renderer will take; callers enforce their own, smaller limits.
 pub const MAX_INPUT: usize = 40_000;
@@ -62,7 +62,9 @@ pub fn render(src: &str) -> String {
             image_depth = image_depth.saturating_sub(1);
             None
         }
-        Event::Start(Tag::Link { dest_url, .. }) => {
+        Event::Start(Tag::Link { dest_url, link_type, .. }) => {
+            // <me@example.org> arrives without its scheme.
+            let dest_url = if link_type == LinkType::Email { CowStr::from(format!("mailto:{dest_url}")) } else { dest_url };
             let ok = safe_url(&dest_url);
             open_links.push(ok);
             if !ok {
@@ -201,6 +203,12 @@ mod tests {
         assert!(!h.contains("\"onmouseover"), "{h}");
         let h = render("[x](<https://example.org/a\"b'c>)");
         assert!(h.contains("&quot;") && h.contains("&#39;"), "{h}");
+    }
+
+    #[test]
+    fn email_autolinks_keep_their_link() {
+        let h = render("write <me@example.org> now");
+        assert!(h.contains("<a href=\"mailto:me@example.org\""), "{h}");
     }
 
     #[test]

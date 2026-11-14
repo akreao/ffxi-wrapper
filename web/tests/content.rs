@@ -91,20 +91,51 @@ async fn only_the_owner_writes_news_and_content() {
 }
 
 #[tokio::test]
-async fn the_preview_is_for_staff_only() {
+async fn the_preview_is_the_owners_alone() {
     let s = people().await;
     let moderator = who(&s, "halvard", "gm-password").await;
     let player = who(&s, "kaelyn", "hunter22").await;
     let owner = who(&s, "steven", "owner-pass").await;
-    let req = || Req::post("/api/admin/preview", json!({ "markdown": "**hi** <script>x</script>" }));
+    let req = || Req::post("/api/admin/preview", json!({ "markdown": "**hi** <script>x</script> <me@example.org>" }));
     assert_eq!(s.send(req()).await.status, StatusCode::UNAUTHORIZED);
     assert_eq!(s.send(with(&player, req())).await.status, StatusCode::FORBIDDEN);
-    for w in [&moderator, &owner] {
-        let r = s.send(with(w, req())).await;
-        assert_eq!(r.status, StatusCode::OK);
-        let html = r.json()["html"].as_str().unwrap().to_string();
-        assert!(html.contains("<strong>hi</strong>") && !html.contains("<script"), "{html}");
+    assert_eq!(s.send(with(&moderator, req())).await.status, StatusCode::FORBIDDEN);
+    let r = s.send(with(&owner, req())).await;
+    assert_eq!(r.status, StatusCode::OK);
+    let html = r.json()["html"].as_str().unwrap().to_string();
+    assert!(html.contains("<strong>hi</strong>") && !html.contains("<script") && html.contains("mailto:me@example.org"), "{html}");
+}
+
+#[tokio::test]
+async fn moderators_dont_see_news_or_content_rows_in_the_log() {
+    let s = people().await;
+    let owner = who(&s, "steven", "owner-pass").await;
+    let moderator = who(&s, "halvard", "gm-password").await;
+    new_post(&s, &owner, "Secret draft title", "x", false, false).await;
+    s.send(with(&owner, Req::put("/api/admin/content/footer", json!({ "body": "x" })))).await;
+    for path in ["/api/admin/log?days=0&per=100", "/api/admin/dashboard"] {
+        let m = s.send(Req::get(path).cookie(&moderator.cookie)).await.text();
+        assert!(!m.contains("Secret draft title") && !m.contains("news_create") && !m.contains("content_edit"), "{path}: {m}");
+        let o = s.send(Req::get(path).cookie(&owner.cookie)).await.text();
+        assert!(o.contains("Secret draft title"), "{path}");
     }
+    let facets = s.send(Req::get("/api/admin/log").cookie(&moderator.cookie)).await.json();
+    assert!(!facets["actions"].to_string().contains("news"));
+}
+
+#[tokio::test]
+async fn an_answer_read_before_an_edit_is_not_kept_after_it() {
+    let s = people().await;
+    let owner = who(&s, "steven", "owner-pass").await;
+    let c = &s.state.public_cache;
+    let gen = c.generation();
+    // A reader has read the database; an edit clears the cache; the reader then tries to store.
+    let r = s.send(with(&owner, Req::put("/api/admin/content/footer", json!({ "body": "x" })))).await;
+    assert_eq!(r.status, StatusCode::OK);
+    c.put("home", &json!({ "stale": true }), s.state.now(), gen);
+    assert!(c.get("home", s.state.now()).is_none(), "a stale answer must not be stored");
+    c.put("home", &json!({ "fresh": true }), s.state.now(), c.generation());
+    assert!(c.get("home", s.state.now()).is_some());
 }
 
 #[tokio::test]

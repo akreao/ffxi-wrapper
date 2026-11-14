@@ -92,7 +92,7 @@ async fn five_failures_lock_the_pair_for_fifteen_minutes() {
     let again = s.send(Req::post("/api/auth/login", json!({ "login": "kaelyn", "password": "hunter22" }))).await;
     assert_eq!(again.status, StatusCode::OK);
     // The action log shows the failures and the refusal.
-    let log = s.state.store.actions(None, 50, false).await.unwrap();
+    let log = s.state.store.actions(None, 50, false, true).await.unwrap();
     assert!(log.iter().any(|a| a.action == "sign_in_failed" && a.result == "refused"));
     assert!(log.iter().filter(|a| a.action == "sign_in_failed").all(|a| a.reason.as_deref() != Some("hunter22")));
 }
@@ -352,7 +352,7 @@ async fn changing_your_password_checks_the_old_one_and_ends_other_sign_ins() {
     assert_eq!(s.send(Req::post("/api/auth/login", json!({ "login": "kaelyn", "password": "hunter22" }))).await.status, StatusCode::UNAUTHORIZED);
     s.sign_in("kaelyn", "a-new-password").await;
     // The log records the change, with no password in it.
-    let log = s.state.store.actions(None, 50, false).await.unwrap();
+    let log = s.state.store.actions(None, 50, false, true).await.unwrap();
     let change = log.iter().find(|a| a.action == "password_change" && a.result == "ok").expect("logged");
     assert_eq!(change.actor_login.as_deref(), Some("kaelyn"));
     assert!(change.reason.is_none());
@@ -592,7 +592,7 @@ async fn a_burst_of_simultaneous_sign_ins_is_counted_before_the_passwords_are_ch
     let refused = results.iter().filter(|r| r.status == StatusCode::TOO_MANY_REQUESTS).count();
     assert!(refused >= 55, "only {refused} of 60 were refused");
     // At most five passwords were really tried: the log has at most five error rows.
-    let log = s.state.store.actions(None, 200, false).await.unwrap();
+    let log = s.state.store.actions(None, 200, false, true).await.unwrap();
     let tried = log.iter().filter(|a| a.action == "sign_in_failed" && a.result == "error").count();
     assert!(tried <= 5, "{tried} passwords were checked");
 }
@@ -627,7 +627,7 @@ async fn behind_the_docker_gateway_strangers_cannot_lock_everyone_out() {
     }
     let r = s.send(Req::post("/api/auth/login", json!({ "login": "steven", "password": "owner-pass" })).peer(1)).await;
     assert_eq!(r.status, StatusCode::OK);
-    let log = s.state.store.actions(None, 200, false).await.unwrap();
+    let log = s.state.store.actions(None, 200, false, true).await.unwrap();
     assert!(log.iter().any(|a| a.ip.as_deref() == Some("10.0.0.1 (proxy)")));
 }
 
