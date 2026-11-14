@@ -254,6 +254,16 @@
             : h("a", { class: "btn-link primary", href: me.accid ? "/me" : "/admin" }, me.accid ? "My account" : "Admin panel")))));
   };
 
+  // `next` may only lead to a page on this site. Browsers read "\\" as "/" and drop tabs and
+  // newlines, so "/\\evil.example" would otherwise leave the site: let the URL parser decide.
+  function safeNext(next) {
+    if (!next) return null;
+    try {
+      const u = new URL(next, location.origin);
+      return u.origin === location.origin ? u.pathname + u.search + u.hash : null;
+    } catch { return null; }
+  }
+
   pages.signin = async function () {
     document.getElementById("server-name").textContent = me.server_name;
     themeButton(document.querySelector(".theme-toggle"));
@@ -271,11 +281,9 @@
       try {
         const out = await api("/auth/login", {
           method: "POST",
-          body: { login: form.login.value, password: form.password.value, otp: otpRow.hidden ? undefined : form.otp.value },
+          body: { login: form.login.value, password: form.password.value, otp: form.otp.value || undefined },
         });
-        const next = q.get("next");
-        // Only a path on this site: never "//host" or "http://…".
-        location.href = next && /^\/(?!\/)/.test(next) ? next : out.next || "/me";
+        location.href = safeNext(q.get("next")) || out.next || "/me";
       } catch (ex) {
         if (ex.data && ex.data.need_otp) { otpRow.hidden = false; form.otp.focus(); }
         let m = ex.message;
@@ -904,7 +912,7 @@
       search: "Account, character or reason",
       noun: "entries",
       empty: "No entries match.",
-      columns: [{ label: "When" }, { label: "Who" }, { label: "Action" }, { label: "Target" }, { label: "Details" }, { label: "From", cls: "hide-phone" }],
+      columns: [{ label: "When" }, { label: "Who" }, { label: "Action" }, { label: "Target" }, { label: "Details" }],
       toolbar: (ctx, d) => {
         const sel = (label, key, opts) => h("select", { "aria-label": label, onchange: (e) => ctx.set(key, e.target.value) },
           opts.map(([v, t]) => h("option", { value: v, selected: v === ctx.st[key] }, t)));
@@ -921,8 +929,7 @@
         return h("tr", {},
           h("td", {}, when(a.at)), h("td", {}, a.action === "sign_in_failed" ? h("span", { class: "muted" }, "Unknown") : actorName(a)),
           h("td", {}, h("span", { class: "badge " + (ACTION_TONE[a.action] || "info") }, ACTION_LABEL[a.action] || a.action)),
-          h("td", {}, target), h("td", { class: "wrap" }, a.action === "sign_in" ? (a.actor_kind === "owner" ? "Owner link" : "Game account") : detail),
-          h("td", { class: "hide-phone" }, a.ip ? h("code", {}, a.ip) : h("span", { class: "muted" }, "–")));
+          h("td", {}, target), h("td", { class: "wrap" }, a.action === "sign_in" ? (a.actor_kind === "owner" ? "Owner link" : "Game account") : detail));
       },
     });
     void facetsDone;

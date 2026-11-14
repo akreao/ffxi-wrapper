@@ -21,10 +21,11 @@
   <input id="login" name="login" type="text" autocomplete="username" spellcheck="false" maxlength="16" required>
   <label for="password">Password</label>
   <input id="password" name="password" type="password" autocomplete="current-password" maxlength="32" required>
-  <div id="otp-row" hidden>
-    <label for="otp">Code from your authenticator app</label>
+  <div id="otp-row">
+    <label for="otp">Code from your authenticator app <span class="muted">(only if you use one)</span></label>
     <input id="otp" name="otp" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}">
   </div>
+  <p class="hint">If you haven't logged in to the game for a long time, log in there once first.</p>
   <p class="error" id="err" role="alert" hidden><span id="err-text"></span></p>
   <button class="primary" type="submit" id="go">Sign in</button>
 </form>

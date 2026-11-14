@@ -9,7 +9,7 @@ use crate::http::*;
 use crate::model::*;
 use crate::routes::session::record;
 use crate::state::Shared;
-use crate::store::{ActionRow, LogQuery, NewAction};
+use crate::store::{LogQuery, NewAction};
 use axum::extract::{Path, Query, State};
 use axum::http::{header, StatusCode};
 use axum::routing::{get, post};
@@ -61,7 +61,7 @@ async fn dashboard(State(state): State<Shared>, Staff(id): Staff) -> ApiResult<J
     let zones = busiest_zones(&online);
     let services = state.probe.services(true).await;
     let owner = id.role == Role::Owner;
-    let actions = redact(state.store.actions(None, 8, true).await?, owner);
+    let actions = state.store.actions(None, 8, true).await?;
     let online: Vec<OnlineOut> = online
         .into_iter()
         .map(|row| {
@@ -92,15 +92,6 @@ fn search(q: &Option<String>) -> String {
     q.as_deref().unwrap_or("").trim().chars().take(64).collect()
 }
 
-fn redact(mut rows: Vec<ActionRow>, owner: bool) -> Vec<ActionRow> {
-    if !owner {
-        for r in &mut rows {
-            r.ip = None;
-        }
-    }
-    rows
-}
-
 #[derive(Deserialize)]
 struct LogParams {
     q: Option<String>,
@@ -112,7 +103,7 @@ struct LogParams {
     per: Option<i64>,
 }
 
-async fn log(State(state): State<Shared>, Staff(id): Staff, Query(p): Query<LogParams>) -> ApiResult<Json<Value>> {
+async fn log(State(state): State<Shared>, Staff(_): Staff, Query(p): Query<LogParams>) -> ApiResult<Json<Value>> {
     let (page, per) = paging(p.page, p.per);
     let nonempty = |s: Option<String>| s.filter(|s| !s.is_empty());
     let q = LogQuery {
@@ -126,7 +117,7 @@ async fn log(State(state): State<Shared>, Staff(id): Staff, Query(p): Query<LogP
     let (items, total) = state.store.log_page(&q).await?;
     let (actors, actions) = state.store.log_facets().await?;
     Ok(Json(json!({
-        "items": redact(items, id.role == Role::Owner),
+        "items": items,
         "total": total, "page": page, "per": per,
         "actors": actors, "actions": actions,
     })))
@@ -218,14 +209,14 @@ async fn account(State(state): State<Shared>, Staff(id): Staff, Path(accid): Pat
     let acct = state.game.admin_account(accid).await?.ok_or_else(ApiError::not_found)?;
     let mut targets = vec![("account", accid)];
     targets.extend(acct.characters.iter().map(|c| ("character", c.summary.charid)));
-    let history = redact(state.store.history(&targets, 50).await?, id.role == Role::Owner);
+    let history = state.store.history(&targets, 50).await?;
     let can_act = auth::can_act_on(id.actor(), acct.gm);
     Ok(Json(json!({ "account": acct, "history": history, "can_act": can_act })))
 }
 
 async fn character(State(state): State<Shared>, Staff(id): Staff, Path(charid): Path<i64>) -> ApiResult<Json<Value>> {
     let c = state.game.admin_character(charid).await?.ok_or_else(ApiError::not_found)?;
-    let history = redact(state.store.history(&[("character", charid), ("account", c.accid)], 50).await?, id.role == Role::Owner);
+    let history = state.store.history(&[("character", charid), ("account", c.accid)], 50).await?;
     let can_act = auth::can_act_on(id.actor(), c.gm);
     Ok(Json(json!({ "character": c, "history": history, "can_act": can_act })))
 }

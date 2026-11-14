@@ -88,6 +88,9 @@ services:
     environment:
       <<: *lsb-env
       PUBLIC_IP: ${PUBLIC_IP:-127.0.0.1}
+      # Only to create the website's database user (see db-init.sh).
+      DB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-}
+      WEB_DB_PASSWORD: ${WEB_DB_PASSWORD:-}
     volumes:
       - ./docker/lsb:/wrapper:ro
       - ./overrides:/overrides:ro
@@ -229,8 +232,13 @@ services:
       DB_HOST: db
       DB_PORT: "3306"
       DB_NAME: xidb
-      DB_USER: xiadmin
-      DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+      # Its own user and password (db-init creates the user): read access to what the
+      # pages show, and no more than the password column to write. xiadmin's
+      # DB_PASSWORD is not passed to this container. Not `:?` here: compose
+      # checks the whole file whatever the profile, and an older .env has no
+      # WEB_DB_PASSWORD; the site itself refuses to start without it.
+      DB_USER: xiweb
+      DB_PASSWORD: ${WEB_DB_PASSWORD:-}
       ADMIN_SECRET: ${ADMIN_SECRET:-}
       SERVER_NAME: ${SERVER_NAME:-}
       # Phase 4: the address players use, and the proxy it may trust.

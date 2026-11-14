@@ -162,7 +162,7 @@ async fn a_moderator_can_ban_and_unban_a_player_and_it_is_logged() {
     let row = log["items"].as_array().unwrap().iter().find(|a| a["action"] == "ban").unwrap();
     assert_eq!(row["reason"], "Spamming shouts");
     assert_eq!(row["target_name"], "kaelyn");
-    assert!(row["ip"].is_null(), "a moderator is not shown addresses");
+    assert!(row.get("ip").is_none(), "addresses are never sent to the admin pages");
 }
 
 #[tokio::test]
@@ -214,7 +214,7 @@ async fn the_owner_link_may_act_on_anyone() {
     let row = log["items"].as_array().unwrap().iter().find(|a| a["action"] == "ban").unwrap();
     assert_eq!(row["actor_kind"], "owner");
     assert!(row["actor_login"].is_null());
-    assert!(row["ip"].is_string(), "the owner sees addresses");
+    assert!(row.get("ip").is_none(), "not even to the owner");
 }
 
 #[tokio::test]

@@ -122,7 +122,7 @@ impl Game for Fake {
     async fn ping(&self) -> DbResult<()> { self.check() }
     async fn account_by_login(&self, login: &str) -> DbResult<Option<AccountAuth>> {
         self.check()?;
-        Ok(self.0.lock().unwrap().accounts.iter().find(|a| a.login.eq_ignore_ascii_case(login)).map(|a| AccountAuth { id: a.id, login: a.login.clone(), status: a.status, password: a.hash.clone() }))
+        Ok(self.0.lock().unwrap().accounts.iter().find(|a| a.login.eq_ignore_ascii_case(login.trim_end())).map(|a| AccountAuth { id: a.id, login: a.login.clone(), status: a.status, password: a.hash.clone() }))
     }
     async fn account_by_id(&self, id: i64) -> DbResult<Option<AccountAuth>> {
         self.check()?;

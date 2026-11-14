@@ -10,6 +10,7 @@ pub mod session;
 
 use crate::http;
 use crate::state::Shared;
+use axum::extract::DefaultBodyLimit;
 use axum::middleware;
 use axum::Router;
 
@@ -20,7 +21,9 @@ pub fn router(state: Shared) -> Router {
         .merge(me::api())
         .merge(admin::api())
         .merge(public::api())
-        .route_layer(middleware::from_fn_with_state(state.clone(), http::guard_changes));
+        .route_layer(middleware::from_fn_with_state(state.clone(), http::guard_changes))
+        // Every body here is a few short fields.
+        .layer(DefaultBodyLimit::max(8 * 1024));
 
     Router::new()
         .merge(pages::router())

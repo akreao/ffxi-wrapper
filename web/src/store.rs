@@ -124,7 +124,8 @@ pub struct ActionRow {
     pub actor_kind: String,
     pub actor_login: Option<String>,
     pub actor_role: String,
-    /// Only owners are sent this.
+    /// Kept in the log but not sent to the admin pages.
+    #[serde(skip)]
     pub ip: Option<String>,
     pub action: String,
     pub target_kind: Option<String>,
