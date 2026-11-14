@@ -2,6 +2,7 @@
 
 use crate::auth::{self, HashCheck, Role};
 use crate::http::*;
+use crate::limits::{self, Limiter, Target};
 use crate::model::AccountAuth;
 use crate::state::Shared;
 use crate::store::{NewAction, NewSession, SessionKind};
@@ -34,8 +35,14 @@ pub struct LoginBody {
     otp: Option<String>,
 }
 
-/// Logs a sign-in outcome; a failure to write the log never fails the request.
-pub async fn record(state: &Shared, a: NewAction) {
+/// Logs a sign-in outcome; a failure to write the log never fails the request. An address that is
+/// the proxy's (Docker's gateway, loopback) is marked, since it names no one.
+pub async fn record(state: &Shared, mut a: NewAction) {
+    if let Some(ip) = &a.ip {
+        if limits::is_proxy_addr(ip) {
+            a.ip = Some(format!("{ip} (proxy)"));
+        }
+    }
     if let Err(e) = state.store.log(a, state.now()).await {
         tracing::warn!("couldn't write the action log: {e}");
     }
@@ -45,36 +52,40 @@ pub fn role_name(r: Role) -> &'static str {
     r.as_str()
 }
 
-/// Outcome of checking a password against an account (or against the dummy hash).
-pub async fn check_password(state: &Shared, account: Option<&AccountAuth>, password: &str) -> HashCheck {
-    let hash = account.map(|a| a.password.clone()).unwrap_or_else(|| state.dummy_hash.clone());
-    let exists = account.is_some();
+/// Checks a password against an account's hash. An account that doesn't exist, or whose hash is
+/// one the site can't verify (an old `PASSWORD()` hash), is checked against the dummy hash, so
+/// the answer and the time are the same as for a wrong password.
+pub async fn check_password(state: &Shared, account: Option<&AccountAuth>, password: &str) -> bool {
+    let real = account.filter(|a| auth::is_supported_hash(&a.password));
+    let hash = real.map(|a| a.password.clone()).unwrap_or_else(|| state.dummy_hash.clone());
     let pw = password.to_string();
-    // Cost 12 takes about 250 ms: keep it off the async threads.
+    // Cost 12 takes about 250 ms: keep it off the async threads, and a few at a time.
+    let Ok(_slot) = state.bcrypt_slots.acquire().await else { return false };
     let out = tokio::task::spawn_blocking(move || auth::check_password(&pw, &hash)).await.unwrap_or(HashCheck::Mismatch);
-    if exists { out } else { HashCheck::Mismatch }
+    real.is_some() && out == HashCheck::Match
 }
 
-async fn fail(state: &Shared, ip: &str, login: &str, why: &str, locked: bool) -> ApiError {
+/// The failed-attempt answer. The attempt was already counted when it was reserved. The log gets
+/// the account when the login matched one, never the text typed into the login box (people type
+/// their password there).
+async fn fail(state: &Shared, ip: &str, account: Option<&AccountAuth>, keys: &limits::SignInKeys, why: &str, locked: bool) -> ApiError {
     let now = state.now();
-    if !locked {
-        state.limiter.sign_in_failed(ip, login, now);
-    }
     record(
         state,
         NewAction {
             actor_kind: "visitor",
-            actor_login: Some(login.chars().take(16).collect()),
+            actor_accid: account.map(|a| a.id),
+            actor_login: account.map(|a| a.login.clone()),
             actor_role: "visitor",
             ip: Some(ip.to_string()),
             action: "sign_in_failed",
-            reason: Some(why.to_string()),
+            reason: Some(if account.is_some() { why } else { "unknown login" }.to_string()),
             result: if locked { "refused" } else { "error" },
             ..Default::default()
         },
     )
     .await;
-    let left = state.limiter.pair_tries_left(ip, login, now);
+    let left = state.limiter.pair_tries_left(keys, now);
     if locked || left == 0 {
         return ApiError::too_many("Too many tries. Wait 15 minutes and try again.");
     }
@@ -88,31 +99,35 @@ async fn login(
     Json(body): Json<LoginBody>,
 ) -> ApiResult<Response> {
     let now = state.now();
-    if !state.limiter.sign_in_allowed(&ip, &body.login, now) {
-        return Err(fail(&state, &ip, &body.login, "locked out", true).await);
-    }
     if !auth::valid_login(&body.login) || !auth::valid_password(&body.password) {
-        return Err(fail(&state, &ip, &body.login, "malformed", false).await);
+        let keys = Limiter::sign_in_keys(&ip, &Target::unknown(""));
+        if !state.limiter.reserve_sign_in(&keys, now) {
+            return Err(fail(&state, &ip, None, &keys, "locked out", true).await);
+        }
+        return Err(fail(&state, &ip, None, &keys, "malformed", false).await);
     }
     let account = state.game.account_by_login(&body.login).await?;
-    match check_password(&state, account.as_ref(), &body.password).await {
-        HashCheck::Match => {}
-        HashCheck::Unsupported => {
-            // An old hash LSB upgrades at the next game login; the site can't check it.
-            let mut e = fail(&state, &ip, &body.login, "old password hash", false).await;
-            if e.status == StatusCode::UNAUTHORIZED {
-                e.message = "Log in to the game once, then try again.".into();
-            }
-            return Err(e);
-        }
-        HashCheck::Mismatch => return Err(fail(&state, &ip, &body.login, "wrong password", false).await),
+    // The attempt is counted before the password is looked at, all buckets at once, so a burst
+    // of simultaneous tries can't all pass the check.
+    let target = match &account {
+        Some(a) => Target::Account(a.id),
+        None => Target::unknown(&body.login),
+    };
+    let keys = Limiter::sign_in_keys(&ip, &target);
+    if !state.limiter.reserve_sign_in(&keys, now) {
+        return Err(fail(&state, &ip, account.as_ref(), &keys, "locked out", true).await);
+    }
+    if !check_password(&state, account.as_ref(), &body.password).await {
+        return Err(fail(&state, &ip, account.as_ref(), &keys, "wrong password", false).await);
     }
     let account = account.expect("a matching hash means the account exists");
     if account.status & 1 == 0 {
-        return Err(fail(&state, &ip, &body.login, "account can't sign in", false).await.with_message("This account can't sign in."));
+        return Err(fail(&state, &ip, Some(&account), &keys, "account can't sign in", false).await.with_message("This account can't sign in."));
     }
 
-    // Two-step sign-in, when the account has it switched on.
+    // Two-step sign-in, when the account has it switched on. Asking for the code counts as an
+    // attempt (it already told the caller the password was right), so a password can't be tried
+    // without paying for it.
     if let Some(t) = state.game.totp(account.id).await?.filter(|t| t.validated) {
         let Some(code) = body.otp.as_deref().filter(|c| !c.trim().is_empty()) else {
             return Err(ApiError::new(StatusCode::UNAUTHORIZED, "Enter the code from your authenticator app.").with(json!({ "need_otp": true })));
@@ -130,7 +145,7 @@ async fn login(
             None => false,
         };
         if !fresh {
-            let e = fail(&state, &ip, &body.login, "wrong code", false).await;
+            let e = fail(&state, &ip, Some(&account), &keys, "wrong code", false).await;
             return Err(if e.status == StatusCode::UNAUTHORIZED {
                 ApiError::new(StatusCode::UNAUTHORIZED, "That code didn't work. Try the next one.").with(json!({ "need_otp": true }))
             } else {
@@ -139,6 +154,7 @@ async fn login(
         }
     }
 
+    state.limiter.sign_in_succeeded(&keys);
     let gm = state.game.standing(account.id).await?.map(|s| s.gm).unwrap_or(0);
     let role = auth::role_for_gm(gm);
     let ua = headers.get(header::USER_AGENT).and_then(|v| v.to_str().ok());

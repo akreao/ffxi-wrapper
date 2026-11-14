@@ -23,6 +23,8 @@ pub struct AppState {
     pub dummy_hash: String,
     /// bcrypt cost for new hashes: 12 like LSB; tests use less.
     pub bcrypt_cost: u32,
+    /// At most this many bcrypt checks or hashes run at once; a burst of sign-ins queues.
+    pub bcrypt_slots: tokio::sync::Semaphore,
 }
 
 pub type Shared = Arc<AppState>;

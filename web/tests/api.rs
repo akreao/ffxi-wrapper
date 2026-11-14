@@ -67,8 +67,8 @@ async fn a_wrong_password_and_an_unknown_login_look_the_same() {
 #[tokio::test]
 async fn malformed_logins_and_passwords_are_refused_without_a_lookup() {
     let s = with_players().await;
-    for (login, pw) in [("", "x"), ("a".repeat(17).as_str(), "x"), ("kaelyn", ""), ("kaelyn", "p".repeat(33).as_str()), ("bad\u{1f}", "x")] {
-        let r = s.send(Req::post("/api/auth/login", json!({ "login": login, "password": pw }))).await;
+    for (i, (login, pw)) in [("", "x"), ("a".repeat(17).as_str(), "x"), ("kaelyn", ""), ("kaelyn", "p".repeat(33).as_str()), ("bad\u{1f}", "x")].into_iter().enumerate() {
+        let r = s.send(Req::post("/api/auth/login", json!({ "login": login, "password": pw })).peer(20 + i as u8)).await;
         assert_eq!(r.status, StatusCode::UNAUTHORIZED, "{login:?}/{pw:?}");
     }
 }
@@ -104,10 +104,15 @@ async fn banned_accounts_and_old_hashes_cannot_sign_in() {
     let r = s.send(Req::post("/api/auth/login", json!({ "login": "ravenna", "password": "secret-pw-2" }))).await;
     assert_eq!(r.status, StatusCode::UNAUTHORIZED);
     assert_eq!(r.json()["error"], "This account can't sign in.");
+    // An old PASSWORD() hash can't be checked: the answer is the same as for a wrong password,
+    // whatever was typed, so it doesn't tell a stranger the login exists.
     s.fake.set_hash(2, "*6BB4837EB74329105EE4568DDA7DC67ED2CA2AD9");
     s.fake.set_status(2, 1);
-    let r = s.send(Req::post("/api/auth/login", json!({ "login": "ravenna", "password": "secret-pw-2" }))).await;
-    assert_eq!(r.json()["error"], "Log in to the game once, then try again.");
+    let old = s.send(Req::post("/api/auth/login", json!({ "login": "ravenna", "password": "secret-pw-2" }))).await;
+    let unknown = s.send(Req::post("/api/auth/login", json!({ "login": "nobody", "password": "secret-pw-2" })).peer(9)).await;
+    assert_eq!(old.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(old.json()["error"], unknown.json()["error"]);
+    assert_eq!(old.json()["error"], "Wrong login or password.");
 }
 
 #[tokio::test]
@@ -573,4 +578,78 @@ async fn the_dashboard_lists_recent_admin_actions_but_not_sign_ins() {
     assert_eq!(actions[0]["target_name"], "yashka");
     let log = s.send(Req::get("/api/admin/log").cookie(&owner)).await.json();
     assert!(log["items"].as_array().unwrap().iter().any(|a| a["action"] == "sign_in"));
+}
+
+// ---- the sign-in limits hold up under bursts and tricks ----
+
+#[tokio::test]
+async fn a_burst_of_simultaneous_sign_ins_is_counted_before_the_passwords_are_checked() {
+    let s = with_players().await;
+    let attempts: Vec<_> = (0..60)
+        .map(|i| s.send(Req::post("/api/auth/login", json!({ "login": "kaelyn", "password": if i == 59 { "hunter22".to_string() } else { format!("guess-{i}-pw") } }))))
+        .collect();
+    let results = futures_join_all(attempts).await;
+    let refused = results.iter().filter(|r| r.status == StatusCode::TOO_MANY_REQUESTS).count();
+    assert!(refused >= 55, "only {refused} of 60 were refused");
+    // At most five passwords were really tried: the log has at most five error rows.
+    let log = s.state.store.actions(None, 200, false).await.unwrap();
+    let tried = log.iter().filter(|a| a.action == "sign_in_failed" && a.result == "error").count();
+    assert!(tried <= 5, "{tried} passwords were checked");
+}
+
+async fn futures_join_all<F: std::future::Future<Output = Resp>>(futs: Vec<F>) -> Vec<Resp> {
+    let mut out = Vec::new();
+    // The router is driven one request at a time here, in order; the limiter's reservation is
+    // what stops a real burst (see limits.rs's thread test).
+    for f in futs {
+        out.push(f.await);
+    }
+    out
+}
+
+#[tokio::test]
+async fn other_spellings_of_a_login_share_one_account_lockout() {
+    let s = with_players().await;
+    // The database matches "KAELYN" and "kaelyn   " as the same account.
+    for spelling in ["kaelyn", "KAELYN", "kaelyn ", "Kaelyn  ", "kaelyn"] {
+        s.send(Req::post("/api/auth/login", json!({ "login": spelling, "password": "wrong-pw" }))).await;
+    }
+    let r = s.send(Req::post("/api/auth/login", json!({ "login": "kaelyn   ", "password": "hunter22" }))).await;
+    assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn behind_the_docker_gateway_strangers_cannot_lock_everyone_out() {
+    let s = with_players().await;
+    // peer 1 is 10.0.0.1: the kind of address Docker's proxy shows for every visitor.
+    for i in 0..40 {
+        s.send(Req::post("/api/auth/login", json!({ "login": format!("made-up-{i}"), "password": "wrong-pw" })).peer(1)).await;
+    }
+    let r = s.send(Req::post("/api/auth/login", json!({ "login": "steven", "password": "owner-pass" })).peer(1)).await;
+    assert_eq!(r.status, StatusCode::OK);
+    let log = s.state.store.actions(None, 200, false).await.unwrap();
+    assert!(log.iter().any(|a| a.ip.as_deref() == Some("10.0.0.1 (proxy)")));
+}
+
+#[tokio::test]
+async fn the_log_never_holds_what_was_typed_into_the_login_box() {
+    let s = with_players().await;
+    s.send(Req::post("/api/auth/login", json!({ "login": "my-secret-pw", "password": "x" }))).await;
+    s.send(Req::post("/api/auth/login", json!({ "login": "kaelyn", "password": "wrong-pw" }))).await;
+    s.send(Req::post("/api/auth/login", json!({ "login": "bad\u{1f}login", "password": "x" })).peer(9)).await;
+    let (moderator, _) = s.sign_in("halvard", "gm-password").await;
+    let log = s.send(Req::get("/api/admin/log").cookie(&moderator)).await;
+    let text = log.text();
+    assert!(!text.contains("my-secret-pw") && !text.contains("bad"), "{text}");
+    // The attempt on a real account is logged against it.
+    assert!(text.contains("\"actor_login\":\"kaelyn\""));
+    assert!(text.contains("unknown login"));
+}
+
+#[tokio::test]
+async fn request_bodies_are_capped() {
+    let s = with_players().await;
+    let big = "x".repeat(100_000);
+    let r = s.send(Req::post("/api/auth/login", json!({ "login": big, "password": "x" }))).await;
+    assert_eq!(r.status, StatusCode::PAYLOAD_TOO_LARGE);
 }

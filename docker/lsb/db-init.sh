@@ -51,4 +51,32 @@ fi
 
 # Clients are sent this address for the map server.
 sql "UPDATE zone_settings SET zoneip = '$PUBLIC_IP'"
+
+# The website's own database user (compose.yaml's web service): it may read
+# the tables its pages show and change only a password, not everything xiadmin
+# can. Created here because only root may create users; DB_ROOT_PASSWORD is the
+# one from .env. The grants grow with the site's phases.
+if [ -n "${DB_ROOT_PASSWORD:-}" ]; then
+    web_pw="$(printf '%s' "$XI_NETWORK_SQL_PASSWORD" | sed -e 's/\\/\\\\/g' -e "s/'/''/g")"
+    db="$XI_NETWORK_SQL_DATABASE"
+    tables="accounts accounts_totp accounts_sessions chars char_stats char_jobs char_exp char_inventory char_flags zone_settings item_basic"
+    grants=""
+    for t in $tables; do
+        grants="$grants GRANT SELECT ON \`$db\`.\`$t\` TO 'xiweb'@'%';"
+    done
+    if MYSQL_PWD="$DB_ROOT_PASSWORD" mariadb --skip-ssl-verify-server-cert -h"$XI_NETWORK_SQL_HOST" -P"$XI_NETWORK_SQL_PORT" -uroot -e "
+        CREATE USER IF NOT EXISTS 'xiweb'@'%' IDENTIFIED BY '$web_pw';
+        ALTER USER 'xiweb'@'%' IDENTIFIED BY '$web_pw';
+        REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'xiweb'@'%';
+        $grants
+        GRANT UPDATE (password) ON \`$db\`.\`accounts\` TO 'xiweb'@'%';
+        FLUSH PRIVILEGES;"; then
+        echo "Website database user ready."
+    else
+        echo "Could not set up the website's database user (xiweb); the website won't be able to sign anyone in." >&2
+    fi
+else
+    echo "DB_ROOT_PASSWORD isn't set: skipping the website's database user (xiweb)." >&2
+fi
+
 echo "Database ready. Players are sent to $PUBLIC_IP."

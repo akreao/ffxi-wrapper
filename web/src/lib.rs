@@ -39,5 +39,6 @@ pub fn app_state(p: Parts) -> Shared {
         totp_seen: Mutex::new(Default::default()),
         dummy_hash: p.dummy_hash,
         bcrypt_cost: p.bcrypt_cost,
+        bcrypt_slots: tokio::sync::Semaphore::new(4),
     })
 }

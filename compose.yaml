@@ -88,6 +88,8 @@ services:
     environment:
       <<: *lsb-env
       PUBLIC_IP: ${PUBLIC_IP:-127.0.0.1}
+      # Only to create the website's database user (see db-init.sh).
+      DB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-}
     volumes:
       - ./docker/lsb:/wrapper:ro
       - ./overrides:/overrides:ro
@@ -216,11 +218,11 @@ services:
   # Off unless .env's COMPOSE_PROFILES includes web. Listens on this
   # computer only unless WEB_BIND_IP names another of its addresses.
   web:
-    image: ${WEB_IMAGE:-ghcr.io/akreao/ffxi-wrapper/web:0.1.0}
+    image: ${WEB_IMAGE:-ghcr.io/akreao/ffxi-wrapper/web:0.1.1}
     pull_policy: missing
     # Used only when the image can't be pulled, like db-init's.
     build:
-      context: ${WEB_REPO:-https://github.com/akreao/ffxi-wrapper.git}#web-v0.1.0
+      context: ${WEB_REPO:-https://github.com/akreao/ffxi-wrapper.git}#web-v0.1.1
       dockerfile: docker/web/Dockerfile
     profiles: [web]
     restart: on-failure
@@ -229,7 +231,9 @@ services:
       DB_HOST: db
       DB_PORT: "3306"
       DB_NAME: xidb
-      DB_USER: xiadmin
+      # Its own user (db-init creates it): read access to what the pages show, and
+      # no more than the password column to write. Same password as xiadmin.
+      DB_USER: xiweb
       DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
       ADMIN_SECRET: ${ADMIN_SECRET:-}
       SERVER_NAME: ${SERVER_NAME:-}
