@@ -1,0 +1,13 @@
+[package]
+name = "wrapper-core"
+version = "0.1.0"
+edition = "2021"
+description = "Code shared by the desktop app and the web service."
+license = "MIT"
+publish = false
+
+[dependencies]
+base64 = "0.22"
+getrandom = "0.3"
+hmac = "0.12"
+sha2 = "0.10"

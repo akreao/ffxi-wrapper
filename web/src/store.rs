@@ -1,0 +1,387 @@
+//! The site's own SQLite file (`DATA_DIR/web.db`): sessions, spent owner-link
+//! nonces and the action log. Nothing the site owns goes into `xidb`.
+
+use serde::Serialize;
+use sha2::{Digest, Sha256};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
+use sqlx::{Row, SqlitePool};
+use std::path::Path;
+use std::str::FromStr;
+
+const SCHEMA_V1: &str = "
+CREATE TABLE sessions (
+  id_hash    BLOB PRIMARY KEY,
+  kind       TEXT NOT NULL CHECK (kind IN ('owner', 'account')),
+  accid      INTEGER,
+  login      TEXT,
+  csrf       TEXT NOT NULL,
+  created    INTEGER NOT NULL,
+  last_seen  INTEGER NOT NULL,
+  expires    INTEGER NOT NULL,
+  ip         TEXT NOT NULL,
+  user_agent TEXT
+);
+CREATE INDEX sessions_accid ON sessions (accid);
+CREATE TABLE owner_nonces (
+  nonce TEXT PRIMARY KEY,
+  exp   INTEGER NOT NULL
+);
+CREATE TABLE action_log (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  at          INTEGER NOT NULL,
+  actor_kind  TEXT NOT NULL,
+  actor_accid INTEGER,
+  actor_login TEXT,
+  actor_role  TEXT NOT NULL,
+  ip          TEXT,
+  action      TEXT NOT NULL,
+  target_kind TEXT,
+  target_id   INTEGER,
+  target_name TEXT,
+  reason      TEXT,
+  detail      TEXT,
+  result      TEXT NOT NULL
+);
+CREATE INDEX action_log_at ON action_log (at);
+CREATE INDEX action_log_target ON action_log (target_kind, target_id);
+";
+
+/// How a session row is found: the cookie holds the id, the table only its SHA-256.
+fn hash_id(id: &str) -> Vec<u8> {
+    Sha256::digest(id.as_bytes()).to_vec()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionKind {
+    Owner,
+    Account,
+}
+
+#[derive(Debug, Clone)]
+pub struct Session {
+    pub id_hash: Vec<u8>,
+    pub kind: SessionKind,
+    pub accid: Option<i64>,
+    pub login: Option<String>,
+    pub csrf: String,
+    pub created: i64,
+    pub last_seen: i64,
+    pub expires: i64,
+}
+
+/// What a new session records.
+pub struct NewSession<'a> {
+    pub kind: SessionKind,
+    pub accid: Option<i64>,
+    pub login: Option<&'a str>,
+    pub ip: &'a str,
+    pub user_agent: Option<&'a str>,
+    pub now: i64,
+    /// Seconds until the session ends whatever happens.
+    pub lifetime: i64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct NewAction {
+    pub actor_kind: &'static str,
+    pub actor_accid: Option<i64>,
+    pub actor_login: Option<String>,
+    pub actor_role: &'static str,
+    pub ip: Option<String>,
+    pub action: &'static str,
+    pub target_kind: Option<&'static str>,
+    pub target_id: Option<i64>,
+    pub target_name: Option<String>,
+    pub reason: Option<String>,
+    pub detail: Option<String>,
+    pub result: &'static str,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ActionRow {
+    pub id: i64,
+    pub at: i64,
+    pub actor_kind: String,
+    pub actor_login: Option<String>,
+    pub actor_role: String,
+    pub action: String,
+    pub target_kind: Option<String>,
+    pub target_id: Option<i64>,
+    pub target_name: Option<String>,
+    pub reason: Option<String>,
+    pub result: String,
+}
+
+#[derive(Clone)]
+pub struct Store {
+    pool: SqlitePool,
+}
+
+/// A random cookie value or CSRF token: 32 bytes, base64url.
+pub fn random_token() -> String {
+    use base64::Engine;
+    let mut b = [0u8; 32];
+    getrandom::fill(&mut b).expect("the system random source works");
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b)
+}
+
+impl Store {
+    /// Opens (creating if needed) `dir/web.db` in WAL mode and brings its schema up to date.
+    pub async fn open(dir: &Path) -> Result<Store, sqlx::Error> {
+        let opts = SqliteConnectOptions::new()
+            .filename(dir.join("web.db"))
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal);
+        Store::with(opts, 4).await
+    }
+
+    /// An empty store in memory, for tests.
+    pub async fn memory() -> Result<Store, sqlx::Error> {
+        // One connection: every connection to ":memory:" would be its own database.
+        Store::with(SqliteConnectOptions::from_str("sqlite::memory:")?, 1).await
+    }
+
+    async fn with(opts: SqliteConnectOptions, max: u32) -> Result<Store, sqlx::Error> {
+        let pool = SqlitePoolOptions::new().max_connections(max).connect_with(opts).await?;
+        let store = Store { pool };
+        store.migrate().await?;
+        Ok(store)
+    }
+
+    async fn migrate(&self) -> Result<(), sqlx::Error> {
+        let v: i64 = sqlx::query("PRAGMA user_version").fetch_one(&self.pool).await?.try_get(0)?;
+        if v < 1 {
+            let mut tx = self.pool.begin().await?;
+            for stmt in SCHEMA_V1.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+                sqlx::query(stmt).execute(&mut *tx).await?;
+            }
+            sqlx::query("PRAGMA user_version = 1").execute(&mut *tx).await?;
+            tx.commit().await?;
+        }
+        Ok(())
+    }
+
+    // ---- sessions ----
+
+    /// Starts a session and returns its cookie value and CSRF token.
+    pub async fn create_session(&self, n: NewSession<'_>) -> Result<(String, String), sqlx::Error> {
+        let NewSession { kind, accid, login, ip, user_agent, now, lifetime } = n;
+        let id = random_token();
+        let csrf = random_token();
+        sqlx::query(
+            "INSERT INTO sessions (id_hash, kind, accid, login, csrf, created, last_seen, expires, ip, user_agent)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(hash_id(&id))
+        .bind(match kind { SessionKind::Owner => "owner", SessionKind::Account => "account" })
+        .bind(accid)
+        .bind(login)
+        .bind(&csrf)
+        .bind(now)
+        .bind(now)
+        .bind(now + lifetime)
+        .bind(ip)
+        .bind(user_agent.map(|u| u.chars().take(200).collect::<String>()))
+        .execute(&self.pool)
+        .await?;
+        Ok((id, csrf))
+    }
+
+    pub async fn session(&self, cookie: &str) -> Result<Option<Session>, sqlx::Error> {
+        let r = sqlx::query(
+            "SELECT id_hash, kind, accid, login, csrf, created, last_seen, expires FROM sessions WHERE id_hash = ?",
+        )
+        .bind(hash_id(cookie))
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(match r {
+            Some(r) => Some(Session {
+                id_hash: r.try_get("id_hash")?,
+                kind: if r.try_get::<String, _>("kind")? == "owner" { SessionKind::Owner } else { SessionKind::Account },
+                accid: r.try_get("accid")?,
+                login: r.try_get("login")?,
+                csrf: r.try_get("csrf")?,
+                created: r.try_get("created")?,
+                last_seen: r.try_get("last_seen")?,
+                expires: r.try_get("expires")?,
+            }),
+            None => None,
+        })
+    }
+
+    /// Records activity, at most once a minute.
+    pub async fn touch(&self, s: &Session, now: i64) -> Result<(), sqlx::Error> {
+        if now - s.last_seen >= 60 {
+            sqlx::query("UPDATE sessions SET last_seen = ? WHERE id_hash = ?")
+                .bind(now)
+                .bind(&s.id_hash)
+                .execute(&self.pool)
+                .await?;
+        }
+        Ok(())
+    }
+
+    pub async fn end_session(&self, id_hash: &[u8]) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM sessions WHERE id_hash = ?").bind(id_hash).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    /// Ends every session of an account except `keep` (a password change keeps the one that made it).
+    pub async fn end_account_sessions(&self, accid: i64, keep: Option<&[u8]>) -> Result<u64, sqlx::Error> {
+        let r = sqlx::query("DELETE FROM sessions WHERE accid = ? AND id_hash IS NOT ?")
+            .bind(accid)
+            .bind(keep)
+            .execute(&self.pool)
+            .await?;
+        Ok(r.rows_affected())
+    }
+
+    pub async fn session_count(&self) -> Result<i64, sqlx::Error> {
+        sqlx::query("SELECT COUNT(*) FROM sessions").fetch_one(&self.pool).await?.try_get(0)
+    }
+
+    // ---- owner links ----
+
+    /// Remembers an owner-link nonce; false when it was already used.
+    pub async fn use_nonce(&self, nonce: &str, exp: i64) -> Result<bool, sqlx::Error> {
+        let r = sqlx::query("INSERT OR IGNORE INTO owner_nonces (nonce, exp) VALUES (?, ?)")
+            .bind(nonce)
+            .bind(exp)
+            .execute(&self.pool)
+            .await?;
+        Ok(r.rows_affected() == 1)
+    }
+
+    // ---- action log ----
+
+    pub async fn log(&self, a: NewAction, now: i64) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO action_log (at, actor_kind, actor_accid, actor_login, actor_role, ip, action,
+                                     target_kind, target_id, target_name, reason, detail, result)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(now)
+        .bind(a.actor_kind)
+        .bind(a.actor_accid)
+        .bind(a.actor_login)
+        .bind(a.actor_role)
+        .bind(a.ip)
+        .bind(a.action)
+        .bind(a.target_kind)
+        .bind(a.target_id)
+        .bind(a.target_name)
+        .bind(a.reason)
+        .bind(a.detail)
+        .bind(a.result)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Newest first; `before` is the id of the last row of the previous page.
+    pub async fn actions(&self, before: Option<i64>, per: i64, only_admin: bool) -> Result<Vec<ActionRow>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT id, at, actor_kind, actor_login, actor_role, action, target_kind, target_id, target_name, reason, result
+             FROM action_log
+             WHERE (? IS NULL OR id < ?)
+               AND (? = 0 OR (actor_role IN ('owner', 'moderator') AND action NOT IN ('sign_in', 'sign_in_failed')))
+             ORDER BY id DESC LIMIT ?",
+        )
+        .bind(before)
+        .bind(before)
+        .bind(only_admin as i64)
+        .bind(per)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for r in &rows {
+            out.push(ActionRow {
+                id: r.try_get("id")?,
+                at: r.try_get("at")?,
+                actor_kind: r.try_get("actor_kind")?,
+                actor_login: r.try_get("actor_login")?,
+                actor_role: r.try_get("actor_role")?,
+                action: r.try_get("action")?,
+                target_kind: r.try_get("target_kind")?,
+                target_id: r.try_get("target_id")?,
+                target_name: r.try_get("target_name")?,
+                reason: r.try_get("reason")?,
+                result: r.try_get("result")?,
+            });
+        }
+        Ok(out)
+    }
+
+    pub async fn action_count(&self) -> Result<i64, sqlx::Error> {
+        sqlx::query("SELECT COUNT(*) FROM action_log").fetch_one(&self.pool).await?.try_get(0)
+    }
+
+    // ---- housekeeping ----
+
+    /// Drops expired sessions and spent nonces. Returns (sessions, nonces) removed.
+    pub async fn purge(&self, now: i64) -> Result<(u64, u64), sqlx::Error> {
+        let s = sqlx::query("DELETE FROM sessions WHERE expires <= ?").bind(now).execute(&self.pool).await?;
+        let n = sqlx::query("DELETE FROM owner_nonces WHERE exp < ?").bind(now).execute(&self.pool).await?;
+        Ok((s.rows_affected(), n.rows_affected()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn acct(id: i64, login: &str) -> NewSession<'_> {
+        NewSession { kind: SessionKind::Account, accid: Some(id), login: Some(login), ip: "ip", user_agent: None, now: 0, lifetime: 100 }
+    }
+
+    #[tokio::test]
+    async fn sessions_round_trip_and_store_only_a_hash() {
+        let s = Store::memory().await.unwrap();
+        let (id, csrf) = s.create_session(NewSession { kind: SessionKind::Account, accid: Some(7), login: Some("kaelyn"), ip: "10.0.0.2", user_agent: Some("ua"), now: 1000, lifetime: 600 }).await.unwrap();
+        let got = s.session(&id).await.unwrap().unwrap();
+        assert_eq!(got.accid, Some(7));
+        assert_eq!(got.csrf, csrf);
+        assert_eq!(got.expires, 1600);
+        assert_eq!(got.id_hash, hash_id(&id));
+        assert_ne!(got.id_hash, id.as_bytes());
+        assert!(s.session("nope").await.unwrap().is_none());
+        s.end_session(&got.id_hash).await.unwrap();
+        assert!(s.session(&id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn nonces_work_once_and_purge_removes_the_old() {
+        let s = Store::memory().await.unwrap();
+        assert!(s.use_nonce("abc", 100).await.unwrap());
+        assert!(!s.use_nonce("abc", 100).await.unwrap());
+        s.create_session(NewSession { kind: SessionKind::Owner, accid: None, login: None, ip: "ip", user_agent: None, now: 0, lifetime: 50 }).await.unwrap();
+        assert_eq!(s.purge(99).await.unwrap(), (1, 0));
+        assert_eq!(s.purge(101).await.unwrap(), (0, 1));
+    }
+
+    #[tokio::test]
+    async fn ending_an_accounts_sessions_can_keep_one() {
+        let s = Store::memory().await.unwrap();
+        let (a, _) = s.create_session(acct(1, "a")).await.unwrap();
+        let (_b, _) = s.create_session(acct(1, "a")).await.unwrap();
+        let (_c, _) = s.create_session(acct(2, "b")).await.unwrap();
+        let keep = s.session(&a).await.unwrap().unwrap().id_hash;
+        assert_eq!(s.end_account_sessions(1, Some(&keep)).await.unwrap(), 1);
+        assert_eq!(s.session_count().await.unwrap(), 2);
+        assert_eq!(s.end_account_sessions(1, None).await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_action_log_pages_by_id() {
+        let s = Store::memory().await.unwrap();
+        for i in 0..5 {
+            s.log(NewAction { actor_kind: "account", actor_role: "owner", action: if i == 0 { "sign_in" } else { "ban" }, result: "ok", ..Default::default() }, 100 + i).await.unwrap();
+        }
+        let page = s.actions(None, 2, false).await.unwrap();
+        assert_eq!(page.iter().map(|r| r.id).collect::<Vec<_>>(), vec![5, 4]);
+        let next = s.actions(Some(4), 10, false).await.unwrap();
+        assert_eq!(next.len(), 3);
+        // The dashboard's list leaves sign-ins out.
+        assert_eq!(s.actions(None, 10, true).await.unwrap().len(), 4);
+    }
+}

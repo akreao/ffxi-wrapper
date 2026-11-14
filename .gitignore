@@ -3,3 +3,5 @@ data/
 /desktop/src-tauri/target/
 /desktop/src-tauri/gen/
 __pycache__/
+/web/target/
+/core/target/

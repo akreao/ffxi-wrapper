@@ -212,6 +212,43 @@ services:
       db-init:
         condition: service_completed_successfully
 
+  # The website: public pages, players' own accounts, and the admin panel.
+  # Off unless .env's COMPOSE_PROFILES includes web. Listens on this
+  # computer only unless WEB_BIND_IP names another of its addresses.
+  web:
+    image: ${WEB_IMAGE:-ghcr.io/akreao/ffxi-wrapper/web:0.1.0}
+    pull_policy: missing
+    # Used only when the image can't be pulled, like db-init's.
+    build:
+      context: ${WEB_REPO:-https://github.com/akreao/ffxi-wrapper.git}#web-v0.1.0
+      dockerfile: docker/web/Dockerfile
+    profiles: [web]
+    restart: on-failure
+    logging: *logging
+    environment:
+      DB_HOST: db
+      DB_PORT: "3306"
+      DB_NAME: xidb
+      DB_USER: xiadmin
+      DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+      ADMIN_SECRET: ${ADMIN_SECRET:-}
+      SERVER_NAME: ${SERVER_NAME:-}
+      # Phase 4: the address players use, and the proxy it may trust.
+      WEB_PUBLIC_URL: ${WEB_PUBLIC_URL:-}
+    volumes:
+      - ${DATA_DIR:-./data}/web:/data
+    ports:
+      - "${WEB_BIND_IP:-127.0.0.1}:${WEB_PORT:-54080}:8080"
+    healthcheck:
+      test: ["CMD", "/web", "healthcheck"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    # Not db-init: the site still starts, and says so, if the database update failed.
+    depends_on:
+      db:
+        condition: service_healthy
+
 volumes:
   # Used when DB_DATA is db-data (the default).
   db-data:

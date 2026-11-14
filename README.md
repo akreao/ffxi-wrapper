@@ -77,6 +77,17 @@ The optional `ahbot` service runs [ffxiahbot](https://github.com/AdamGagorik/ffx
 
 The [`Auction house bot image`](.github/workflows/ahbot-image.yml) workflow builds it at `AHBOT_COMMIT` and publishes `ghcr.io/akreao/ffxi-wrapper/ahbot:<commit>`; without one, the stack builds it from [`docker/ahbot/`](docker/ahbot/Dockerfile). Change the pin in `.env.example` and `compose.yaml` together.
 
+### Website
+
+The optional `web` service is a website for the server: a home page, **My account** for every game account (its characters, read-only, and a password change), and an admin panel (dashboard with who is online, busiest zones, service status and recent admin actions) for GM 3-5 accounts and the owner. It's off unless `.env` has `COMPOSE_PROFILES=web` (comma-separated with `ahbot`), and it listens on this computer only, <http://127.0.0.1:54080>. `WEB_BIND_IP` in `.env` opens it to a LAN or Tailscale address of this computer, `WEB_PORT` changes the port. The site speaks plain HTTP: don't put it on the internet as it is.
+
+- **Signing in.** Every game account signs in with its login and password (passwords stay LSB's own bcrypt hashes; an account with an old-style hash logs in to the game once first; two-step sign-in is honoured). The highest GM level among an account's characters decides its role: 5 is Owner, 3 and 4 Moderator, anything else Player. The role is read again on every request, so a ban or demotion takes effect at once. Failed sign-ins are limited per address and login, and every change needs a CSRF token.
+- **The owner link.** `ADMIN_SECRET` (64 hex characters, `openssl rand -hex 32`) signs a one-minute, single-use link, `/auth/owner?t=...`, that signs the owner in without a password. Empty turns it off.
+- **What it keeps.** The site's own SQLite file (sessions and the admin action log) is `DATA_DIR/web/web.db`; nothing is added to the game database. Backups from the desktop app don't include it yet.
+- **The image.** [`docker/web/`](docker/web/Dockerfile) builds the Rust service in [`web/`](web/) with the shared crate [`core/`](core/); the [`Website image`](.github/workflows/web-image.yml) workflow publishes `ghcr.io/akreao/ffxi-wrapper/web:<version>` and tags the commit `web-v<version>`. The version is the one in `web/Cargo.toml`; `compose.yaml` names it twice (the image and the `#web-v<version>` build fallback), and a pull request that changes `web/`, `core/` or `docker/web/` has to bump all three. Its pages share `desktop/ui/tokens.css` (fonts, colours, frames and controls) with the desktop app.
+
+Adding to the site: a route is a handler plus one `.route(...)` line in the module for its audience under [`web/src/routes/`](web/src/routes/) (`public`, `session`, `me`, `admin`), a page is a file in [`web/ui/`](web/ui/) plus a line in `routes/pages.rs` and a function in `ui/app.js`, and a query is a method on the `Game` trait in `web/src/game.rs` (with a fake in `web/tests/common/`). Run the tests with `cargo test` in `web/` and `core/`.
+
 ### Stopping and wiping
 
 `docker compose down` stops everything; the database stays in `DB_DATA`. To start over with an empty database, run `docker compose down -v` (with the default `DB_DATA`) or delete the `DB_DATA` folder. The [desktop app](desktop/README.md) can back the database up into `backups/` and restore it.
@@ -87,4 +98,5 @@ The [`Auction house bot image`](.github/workflows/ahbot-image.yml) workflow buil
 - `db-init` runs LSB's `tools/dbtool.py update` and then sets every zone's address to `PUBLIC_IP` ([`docker/lsb/db-init.sh`](docker/lsb/db-init.sh)). The other LSB services wait for it.
 - `meshes` copies the navmeshes from LSB's published meshes image into `DATA_DIR` on the first start.
 - `connect`, `search`, `world` and `map` are LSB's servers, all from the same image. One map server runs every zone. Each starts through [`docker/lsb/run.sh`](docker/lsb/run.sh), which links the settings in `overrides/settings/` into place, and for `connect` the login certificate in `DATA_DIR/tls/`.
+- `ahbot` and `web` are the optional services above, each behind its own Compose profile.
 - The PlayOnline profile server (`xi_profile`) and LSB's HTTP API aren't run.
