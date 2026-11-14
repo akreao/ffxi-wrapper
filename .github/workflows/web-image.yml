@@ -108,11 +108,25 @@ jobs:
             org.opencontainers.image.description=The website of an ffxi-wrapper server: public pages, My account and the admin panel.
             org.opencontainers.image.licenses=MIT
 
+      # The tag goes through the API: a git push of a tag whose history touches
+      # .github/workflows is refused for GITHUB_TOKEN (it has no `workflows`
+      # permission). When the image was already published, only a missing tag is
+      # created, so a re-run finishes a build that stopped before this step.
       - name: Tag the commit
-        if: ${{ steps.existing.outputs.found != 'true' }}
         env:
+          GH_TOKEN: ${{ github.token }}
           TAG: web-v${{ steps.pin.outputs.version }}
+          FOUND: ${{ steps.existing.outputs.found }}
         run: |
           set -eu
-          git tag -f "$TAG" "$GITHUB_SHA"
-          git push -f origin "refs/tags/$TAG"
+          api="repos/$GITHUB_REPOSITORY/git/refs"
+          if gh api "$api/tags/$TAG" > /dev/null 2>&1; then
+            if [ "$FOUND" = true ]; then
+              echo "::notice::$TAG already exists; leaving it."
+              exit 0
+            fi
+            gh api -X PATCH "$api/tags/$TAG" -f sha="$GITHUB_SHA" -F force=true > /dev/null
+          else
+            gh api -X POST "$api" -f ref="refs/tags/$TAG" -f sha="$GITHUB_SHA" > /dev/null
+          fi
+          echo "Tagged $GITHUB_SHA as $TAG"
