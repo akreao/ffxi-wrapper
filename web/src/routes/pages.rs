@@ -40,6 +40,8 @@ pub fn router() -> Router<Shared> {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/", get(|s, v| page(s, v, "home.html", Access::Anyone)))
+        .route("/online", get(|s, v| page(s, v, "online.html", Access::Anyone)))
+        .route("/rankings", get(|s, v| page(s, v, "rankings.html", Access::Anyone)))
         .route("/signin", get(|s, v| page(s, v, "signin.html", Access::Anyone)))
         .route("/me", get(|s, v| page(s, v, "me.html", Access::SignedIn)))
         .route("/me/characters/{id}", get(|s, v, _p: Path<String>| page(s, v, "me-character.html", Access::SignedIn)))

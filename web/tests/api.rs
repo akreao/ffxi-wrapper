@@ -509,14 +509,9 @@ async fn no_page_uses_inline_scripts_or_styles() {
 #[tokio::test]
 async fn the_public_home_shows_only_its_listed_keys() {
     let s = with_players().await;
-    {
-        let mut d = s.fake.0.lock().unwrap();
-        let mut gm = online_row("Halvard", "Ru'Lude Gardens", 1);
-        gm.gm = 3;
-        let mut hidden = online_row("Ghost", "Ru'Lude Gardens", 1);
-        hidden.gm_hidden = true;
-        d.online = vec![online_row("Torvald", "Batallia Downs", 1), gm, hidden];
-    }
+    s.fake.add_person(Person::new("Torvald").online(7, 52, "Batallia_Downs"));
+    s.fake.add_person(Person::new("Halvard").gm(3).online(12, 75, "Ru'Lude_Gardens"));
+    s.fake.add_person(Person::new("Ghost").gm(3).hidden().online(12, 75, "Ru'Lude_Gardens"));
     let j = s.send(Req::get("/api/public/home")).await.json();
     let mut keys: Vec<&str> = j.as_object().unwrap().keys().map(String::as_str).collect();
     keys.sort();

@@ -53,8 +53,14 @@ pub trait Game: Send + Sync {
 
     async fn counts(&self) -> DbResult<Counts>;
     async fn online(&self) -> DbResult<Vec<OnlineRow>>;
-    /// Characters a visitor may be told are in game (not GMs, not hidden).
-    async fn public_online(&self) -> DbResult<i64>;
+    /// Characters a visitor may be told are in game: no GMs, no GM-hidden ones, no banned
+    /// accounts (the boards leave them out, so listing them online would show who is banned),
+    /// nobody still connecting. Anonymous ones come back without job, level or zone.
+    /// The home page's count is this list's length, so the two always agree.
+    async fn public_online(&self) -> DbResult<Vec<PublicPlayer>>;
+    /// The top [`RANKING_TOP`] of one board: no GMs, no banned accounts, no
+    /// characters without an account; the level and job boards leave out /anon.
+    async fn public_ranking(&self, board: Board) -> DbResult<Vec<RankRow>>;
 
     // ---- the admin panel ----
 
@@ -469,17 +475,112 @@ impl Game for MariaDb {
         Ok(out)
     }
 
-    async fn public_online(&self) -> DbResult<i64> {
-        let r = sqlx::query(
-            "SELECT CAST(COUNT(*) AS SIGNED) AS n
+    async fn public_online(&self) -> DbResult<Vec<PublicPlayer>> {
+        // /anon is bit 2 of chars.settings (SAVE_CONF.AnonymityFlg in LSB's mmo.h).
+        let rows = sqlx::query(
+            "SELECT c.charname, CAST(c.nation AS SIGNED) AS nation, z.name AS zone,
+                    CAST((c.settings & 4) <> 0 AS SIGNED) AS anon,
+                    CAST(st.mjob AS SIGNED) AS mjob, CAST(st.mlvl AS SIGNED) AS mlvl,
+                    CAST(st.sjob AS SIGNED) AS sjob, CAST(st.slvl AS SIGNED) AS slvl
              FROM accounts_sessions x
              JOIN chars c ON c.charid = x.charid
+             JOIN accounts a ON a.id = c.accid AND (a.status & 1) = 1
+             LEFT JOIN char_stats st ON st.charid = c.charid
+             LEFT JOIN zone_settings z ON z.zoneid = c.pos_zone
              LEFT JOIN char_flags f ON f.charid = c.charid
-             WHERE x.client_port <> 0 AND COALESCE(f.gmHiddenEnabled, 0) = 0 AND c.gmlevel = 0",
+             WHERE x.client_port <> 0 AND c.accid <> 0
+               AND COALESCE(f.gmHiddenEnabled, 0) = 0 AND c.gmlevel = 0
+             ORDER BY c.charname",
         )
-        .fetch_one(&self.pool)
+        .fetch_all(&self.pool)
         .await?;
-        Ok(r.try_get("n")?)
+        let mut out = Vec::with_capacity(rows.len());
+        for r in &rows {
+            let anon = r.try_get::<i64, _>("anon")? != 0;
+            let zone: Option<String> = r.try_get("zone")?;
+            out.push(PublicPlayer {
+                name: r.try_get("charname")?,
+                nation: r.try_get("nation")?,
+                zone: if anon { None } else { zone.map(|z| zone_name(&z)) },
+                mjob: if anon { None } else { r.try_get("mjob")? },
+                mlvl: if anon { None } else { r.try_get("mlvl")? },
+                sjob: if anon { None } else { r.try_get("sjob")? },
+                slvl: if anon { None } else { r.try_get("slvl")? },
+                anonymous: anon,
+            });
+        }
+        Ok(out)
+    }
+
+    async fn public_ranking(&self, board: Board) -> DbResult<Vec<RankRow>> {
+        // Every board: characters with an account, not GMs, not GM-hidden, on an account
+        // that is not banned. The only interpolated names are job columns from JOBS.
+        const WHO: &str = "FROM chars c
+             JOIN accounts a ON a.id = c.accid AND (a.status & 1) = 1
+             LEFT JOIN char_flags f ON f.charid = c.charid";
+        const OK: &str = "c.accid <> 0 AND c.gmlevel = 0 AND COALESCE(f.gmHiddenEnabled, 0) = 0";
+        let top = RANKING_TOP as i64;
+        let mut out = Vec::new();
+        match board {
+            Board::Level => {
+                let cols: Vec<String> = JOBS.iter().map(|j| format!("CAST(j.`{j}` AS SIGNED) AS `{j}`")).collect();
+                let greatest: Vec<String> = JOBS.iter().map(|j| format!("j.`{j}`")).collect();
+                let sql = format!(
+                    "SELECT c.charname, CAST(c.nation AS SIGNED) AS nation, {} {WHO}
+                     JOIN char_jobs j ON j.charid = c.charid
+                     WHERE {OK} AND (c.settings & 4) = 0
+                     ORDER BY GREATEST({}) DESC, c.charname LIMIT {top}",
+                    cols.join(", "),
+                    greatest.join(", ")
+                );
+                for (i, r) in sqlx::query(&sql).fetch_all(&self.pool).await?.iter().enumerate() {
+                    // The job this character is best at: the first of the highest levels.
+                    let mut best = (0usize, -1i64);
+                    for (n, j) in JOBS.iter().enumerate() {
+                        let lvl: i64 = r.try_get(*j)?;
+                        if lvl > best.1 {
+                            best = (n, lvl);
+                        }
+                    }
+                    out.push(RankRow { rank: i as i64 + 1, name: r.try_get("charname")?, nation: r.try_get("nation")?, job: Some(best.0 as i64 + 1), value: best.1 });
+                }
+            }
+            Board::Job(n) => {
+                let col = JOBS[n];
+                let sql = format!(
+                    "SELECT c.charname, CAST(c.nation AS SIGNED) AS nation, CAST(j.`{col}` AS SIGNED) AS lvl {WHO}
+                     JOIN char_jobs j ON j.charid = c.charid
+                     JOIN char_exp e ON e.charid = c.charid
+                     WHERE {OK} AND (c.settings & 4) = 0 AND j.`{col}` > 1
+                     ORDER BY j.`{col}` DESC, e.`{col}` DESC, c.charname LIMIT {top}"
+                );
+                for (i, r) in sqlx::query(&sql).fetch_all(&self.pool).await?.iter().enumerate() {
+                    out.push(RankRow { rank: i as i64 + 1, name: r.try_get("charname")?, nation: r.try_get("nation")?, job: Some(n as i64 + 1), value: r.try_get("lvl")? });
+                }
+            }
+            Board::Craft(skill) => {
+                let sql = format!(
+                    "SELECT c.charname, CAST(c.nation AS SIGNED) AS nation, CAST(k.value DIV 10 AS SIGNED) AS lvl {WHO}
+                     JOIN char_skills k ON k.charid = c.charid AND k.skillid = ?
+                     WHERE {OK} AND k.value > 0
+                     ORDER BY k.value DESC, c.charname LIMIT {top}"
+                );
+                for (i, r) in sqlx::query(&sql).bind(skill).fetch_all(&self.pool).await?.iter().enumerate() {
+                    out.push(RankRow { rank: i as i64 + 1, name: r.try_get("charname")?, nation: r.try_get("nation")?, job: None, value: r.try_get("lvl")? });
+                }
+            }
+            Board::Playtime => {
+                let sql = format!(
+                    "SELECT c.charname, CAST(c.nation AS SIGNED) AS nation, CAST(c.playtime DIV 3600 AS SIGNED) AS hrs {WHO}
+                     WHERE {OK} AND c.playtime >= 3600
+                     ORDER BY c.playtime DESC, c.charname LIMIT {top}"
+                );
+                for (i, r) in sqlx::query(&sql).fetch_all(&self.pool).await?.iter().enumerate() {
+                    out.push(RankRow { rank: i as i64 + 1, name: r.try_get("charname")?, nation: r.try_get("nation")?, job: None, value: r.try_get("hrs")? });
+                }
+            }
+        }
+        Ok(out)
     }
 
     // ---- the admin panel ----
