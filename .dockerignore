@@ -1,0 +1,11 @@
+# Only the website's image is built with this folder as its context
+# (docker/web/Dockerfile); let in just what that build copies.
+*
+!web
+!core
+!docker/web
+!desktop/ui/tokens.css
+!desktop/ui/fonts
+!desktop/ui/modern
+web/target
+core/target

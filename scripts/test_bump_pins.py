@@ -58,6 +58,15 @@ class BumpPins(unittest.TestCase):
         defaults = set(re.findall(r"AHBOT_COMMIT:-([0-9a-fA-F]+)", compose))
         self.assertEqual(defaults, {commit}, "compose.yaml's AHBOT_COMMIT defaults differ from .env.example")
 
+    def test_web_image_in_step(self):
+        """The web image and its build fallback both name the version in web/Cargo.toml."""
+        version = re.search(r'^version = "([^"]+)"', (ROOT / "web" / "Cargo.toml").read_text(encoding="utf-8"), re.M).group(1)
+        compose = self.read("compose.yaml")
+        images = set(re.findall(r"ffxi-wrapper/web:([0-9][0-9A-Za-z.\-]*)", compose))
+        refs = set(re.findall(r"#web-v([0-9][0-9A-Za-z.\-]*)", compose))
+        self.assertEqual(images, {version}, "compose.yaml's web image isn't web/Cargo.toml's version")
+        self.assertEqual(refs, {version}, "compose.yaml's web build context isn't #web-v<version>")
+
     def test_bump_lsb(self):
         old = env_value(self.read(".env.example"), "LSB_COMMIT")
         count, pins = app_pins(self.read("desktop/src-tauri/src/stack.rs"))

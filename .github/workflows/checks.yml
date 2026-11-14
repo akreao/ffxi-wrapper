@@ -39,6 +39,8 @@ jobs:
         run: docker compose --env-file .env.example config --quiet
       - name: And with the ahbot profile
         run: docker compose --env-file .env.example --profile ahbot config --quiet
+      - name: And with the web profile
+        run: docker compose --env-file .env.example --profile web config --quiet
 
   scripts:
     name: Shell and UI scripts
@@ -50,9 +52,60 @@ jobs:
         run: shellcheck --version && shellcheck docker/*/*.sh
       - name: The UI's JavaScript parses
         run: |
-          for f in desktop/ui/*.js; do
+          for f in desktop/ui/*.js web/ui/*.js; do
             node --check "$f"
           done
+
+  web:
+    name: Website
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The version check below compares with the base branch.
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: |
+            web
+            core
+      - name: Tests (web)
+        working-directory: web
+        run: cargo test --locked
+      - name: Clippy (web)
+        working-directory: web
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Tests (core)
+        working-directory: core
+        run: cargo test --locked
+      - name: Clippy (core)
+        working-directory: core
+        run: cargo clippy --locked --all-targets -- -D warnings
+      # The published image is tagged by web/Cargo.toml's version, and a version
+      # that's already published is skipped, so a change to the site's code
+      # without a new version would never reach anyone.
+      - name: A change to web/, core/ or docker/web/ needs a new web version
+        if: github.event_name == 'pull_request'
+        env:
+          BASE: origin/${{ github.base_ref }}
+        run: |
+          set -eu
+          changed="$(git diff --name-only "$BASE"...HEAD -- web core docker/web ':!web/Cargo.lock')"
+          [ -n "$changed" ] || { echo "No website code changed."; exit 0; }
+          version() { sed -n 's/^version = "\(.*\)"$/\1/p' | head -n1; }
+          old="$(git show "$BASE:web/Cargo.toml" 2>/dev/null | version || true)"
+          new="$(version < web/Cargo.toml)"
+          if [ -n "$old" ] && [ "$old" = "$new" ]; then
+            echo "::error::These files changed but web/Cargo.toml still says version $new. Bump it, and the web image tags and #web-v tag in compose.yaml with it."
+            echo "$changed"
+            exit 1
+          fi
+          echo "Version $old -> $new."
 
   workflows:
     name: Workflows
