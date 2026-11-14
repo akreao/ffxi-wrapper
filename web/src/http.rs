@@ -216,6 +216,17 @@ impl FromRequestParts<Shared> for Staff {
     }
 }
 
+/// The owner and nobody else: a moderator or player gets 403 before the handler runs.
+pub struct Owner(pub Identity);
+
+impl FromRequestParts<Shared> for Owner {
+    type Rejection = ApiError;
+    async fn from_request_parts(parts: &mut Parts, state: &Shared) -> Result<Self, ApiError> {
+        let id = resolve(state, &parts.headers).await?.ok_or_else(ApiError::unauthorized)?;
+        if id.role == Role::Owner { Ok(Owner(id)) } else { Err(ApiError::forbidden()) }
+    }
+}
+
 // ---- guards ----
 
 /// The scheme and any `://` stripped from an Origin: `http://host:54080` -> `host:54080`.

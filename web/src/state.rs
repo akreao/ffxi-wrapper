@@ -17,6 +17,8 @@ pub struct AppState {
     pub store: Store,
     pub limiter: Limiter,
     pub probe: Arc<dyn Probe>,
+    /// The rendered news and site content, kept 30 seconds and dropped on any edit.
+    pub news_cache: crate::cache::PublicCache,
     pub clock: Clock,
     /// The newest two-step code step accepted for each account, so a code works once.
     pub totp_seen: Mutex<HashMap<i64, u64>>,

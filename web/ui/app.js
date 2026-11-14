@@ -41,6 +41,7 @@
     audit: '<path d="M8 3h8l4 4v14H4V3z"/><path d="M8 9h8M8 13h8M8 17h5"/>',
     log: '<path d="M9 4h6v3H9z"/><path d="M15 5.5h3v15H6v-15h3"/><path d="M9 12l2 2 4-4"/>',
     news: '<path d="M4 5h13v14H6a2 2 0 0 1-2-2z"/><path d="M17 9h3v8a2 2 0 0 1-2 2"/><path d="M7.5 9h6M7.5 12.5h6M7.5 16h4"/>',
+    content: '<path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h4"/>',
     signup: '<path d="M7 4.5h7.5L18 8v11.5H7z"/><path d="M10 12h5M12.5 9.5v5"/>',
     menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
     sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
@@ -111,6 +112,31 @@
     return data;
   }
 
+  // The home answer is cached by the server; the shell and the page share one request.
+  let homeP = null;
+  const homeInfo = () => (homeP = homeP || api("/public/home"));
+
+  // For HTML the server rendered from Markdown (raw HTML already turned into text there); never for anything else.
+  function rendered(el, html) {
+    el.innerHTML = html;
+    return el;
+  }
+  const prose = (html, tag) => rendered(h(tag || "div", { class: "prose" }), html);
+
+  async function copyText(text, btn) {
+    try { await navigator.clipboard.writeText(text); } catch {
+      const t = h("textarea", { "aria-hidden": "true" });
+      t.value = text;
+      document.body.append(t);
+      t.select();
+      try { document.execCommand("copy"); } catch { /* nothing more to try */ }
+      t.remove();
+    }
+    const was = btn.textContent;
+    btn.textContent = "Copied";
+    setTimeout(() => { btn.textContent = was; }, 1500);
+  }
+
   // ---- shells ----
 
   const q = new URLSearchParams(location.search);
@@ -160,7 +186,7 @@
   const ADMIN_NAV = [
     ["Server", [["dashboard", "Dashboard", "/admin"], ["settings", "Settings", null]]],
     ["Players", [["accounts", "Accounts", "/admin/accounts"], ["characters", "Characters", "/admin/characters"], ["bans", "Bans", "/admin/bans"]]],
-    ["Site", [["news", "News posts", null]]],
+    ["Site", [["news", "News posts", "/admin/news"], ["content", "Site content", "/admin/content"]]],
     ["Economy", [["items", "Items", null], ["auction", "Auction house", null]]],
     ["Records", [["audit", "Audit logs", null], ["log", "Admin log", "/admin/log"]]],
   ];
@@ -170,12 +196,13 @@
     const nav = h("nav", { id: "sidebar", "aria-label": "Admin screens" },
       h("div", { class: "brand" }, logo(), h("div", {}, h("div", { class: "brand-name" }, "Admin panel"), h("div", { class: "brand-sub" }, me.server_name))),
       h("a", { class: "sidebar-back", href: "/", title: "Back to the site" }, icon("back"), h("span", {}, "Back to the site")),
-      ADMIN_NAV.map(([heading, items]) => h("div", { class: "nav-group" },
+      // The Site group is the owner's; moderators don't see it.
+      ADMIN_NAV.filter(([heading]) => heading !== "Site" || me.role === "owner").map(([heading, items]) => h("div", { class: "nav-group" },
         h("div", { class: "nav-heading" }, heading),
         items.map(([id, label, href]) => href
           ? h("a", { class: "nav-item" + (current === id ? " active" : ""), href, title: label, "aria-current": current === id ? "page" : false }, icon(id), h("span", {}, label))
           : h("a", { class: "nav-item soon", "aria-disabled": "true", title: `${label}: later` }, icon(id), h("span", {}, label), h("em", {}, "Later"))))),
-      h("div", { class: "sidebar-foot" }, "LandSandBoat", h("br"), "Site 0.3.0"));
+      h("div", { class: "sidebar-foot" }, "LandSandBoat", h("br"), "Site 0.4.0"));
     const scrim = h("div", { class: "scrim" });
     const toggle = h("button", { class: "icon-button menu-toggle", "aria-label": "Menu", "aria-controls": "sidebar", "aria-expanded": "false" }, icon("menu"));
     const theme = h("button", { class: "icon-button theme-toggle", "aria-label": "Switch theme", title: "Switch between Light and Dark" });
@@ -193,9 +220,9 @@
 
   // The public pages and My account: a top bar.
   function siteShell() {
-    const links = [["home", "Home", "/"], ["online", "Who's online", "/online"], ["rankings", "Rankings", "/rankings"]];
+    const links = [["home", "Home", "/"], ["news", "News", "/news"], ["online", "Who's online", "/online"], ["rankings", "Rankings", "/rankings"], ["rules", "Rules", "/rules"]];
     if (me.accid) links.push(["me", "My account", "/me"]);
-    const active = page === "me-character" ? "me" : page;
+    const active = page === "me-character" ? "me" : page === "post" ? "news" : page;
     const toggle = h("button", { class: "icon-button menu-toggle", "aria-label": "Menu", "aria-controls": "site-nav", "aria-expanded": "false" }, icon("menu"));
     const theme = h("button", { class: "icon-button theme-toggle", "aria-label": "Switch theme", title: "Switch between Light and Dark" });
     const top = h("header", { class: "topbar" },
@@ -208,7 +235,10 @@
         me.role === "visitor" ? h("a", { class: "btn-link primary", href: "/signin" }, "Sign in") : userMenu(false),
         toggle));
     body.prepend(top);
-    body.append(h("footer", { class: "site-foot" }, h("span", {}, `${me.server_name} runs on `, h("a", { href: "https://github.com/LandSandBoat/server" }, "LandSandBoat"), "."), h("span", {}, "Not affiliated with Square Enix.")));
+    // The footer text is the owner's (Site content); until it arrives the page has no footer text.
+    const foot = h("footer", { class: "site-foot" });
+    body.append(foot);
+    homeInfo().then((i) => { if (i.footer_html) foot.append(prose(i.footer_html, "span")); }).catch(() => {});
     toggle.addEventListener("click", () => { const o = !body.classList.contains("nav-open"); body.classList.toggle("nav-open", o); toggle.setAttribute("aria-expanded", o); });
     themeButton(theme);
   }
@@ -238,21 +268,96 @@
 
   const pages = {};
 
+  // One post in a list: title, who and when, a short text, a link to the rest.
+  function postCard(p) {
+    return h("article", { class: "card post" + (p.pinned ? " pinned" : "") },
+      h("div", { class: "post-head" },
+        h("h3", {}, h("a", { href: `/news/${p.id}` }, p.title)),
+        p.pinned ? h("span", { class: "badge gm plain" }, "Pinned") : null,
+        h("span", { class: "byline" }, `${p.author} · ${date(p.published)}`)),
+      p.excerpt ? h("p", {}, p.excerpt) : null,
+      h("a", { class: "more", href: `/news/${p.id}` }, "Read more"));
+  }
+
   pages.home = async function (main) {
-    const info = await api("/public/home").catch(() => ({ up: false, online: null, server_name: me.server_name }));
+    const info = await homeInfo().catch(() => ({ up: false, online: null, server_name: me.server_name, title: me.server_name, news: [] }));
     setOnline(info.online);
+    const connect = info.connect_html || info.connect_address
+      ? h("div", { class: "connect" },
+        h("h3", {}, "How to connect"),
+        info.connect_html ? prose(info.connect_html) : null,
+        info.connect_address ? (() => {
+          const btn = h("button", { class: "small", type: "button" }, "Copy");
+          btn.addEventListener("click", () => copyText(info.connect_address, btn));
+          return h("div", { class: "copy-line" }, h("code", {}, info.connect_address), btn);
+        })() : null)
+      : null;
     main.append(h("section", { class: "card hero" },
       h("div", {},
-        h("h2", {}, info.server_name || me.server_name),
+        h("h2", {}, info.title || info.server_name || me.server_name),
         h("div", { class: "meta" },
           h("span", { class: "badge " + (info.up ? "ok" : "bad") }, info.up ? "Online" : "Offline"),
           info.online != null ? h("span", { class: "badge info plain" }, `${info.online} ${info.online === 1 ? "player" : "players"} in game`) : null),
-        h("p", {}, "A LandSandBoat server. Sign in with the login and password you play with to see your characters."),
+        info.description_html ? prose(info.description_html) : null,
         h("div", { class: "cta" },
           me.role === "visitor"
             ? h("a", { class: "btn-link primary", href: "/signin" }, "Sign in")
-            : h("a", { class: "btn-link primary", href: me.accid ? "/me" : "/admin" }, me.accid ? "My account" : "Admin panel")))));
-    onlineNow(main);
+            : h("a", { class: "btn-link primary", href: me.accid ? "/me" : "/admin" }, me.accid ? "My account" : "Admin panel"))),
+      connect));
+    const news = info.news || [];
+    const aside = h("aside", { class: "stack" });
+    main.append(h("div", { class: "side-grid" },
+      h("section", { class: "posts", "aria-label": "News" },
+        news.length ? news.map(postCard) : h("section", { class: "card pad" }, h("p", { class: "muted" }, "No news yet.")),
+        news.length ? h("div", { class: "pager card" }, h("span", { class: "count" }, "Newer posts first"), h("a", { class: "btn-link", href: "/news" }, "All news")) : null),
+      aside));
+    aside.append(h("section", { class: "card pad" },
+      h("h2", {}, "Server"),
+      h("dl", { class: "kv" },
+        h("dt", {}, "Status"), h("dd", {}, info.up ? "Online" : "Offline"),
+        h("dt", {}, "In game"), h("dd", {}, info.online == null ? "–" : `${info.online} ${info.online === 1 ? "player" : "players"}`),
+        h("dt", {}, "Rules"), h("dd", {}, h("a", { href: "/rules" }, "House rules")))));
+    onlineNow(aside);
+  };
+
+  pages.news = async function (main) {
+    const st = { page: Math.max(1, Number(q.get("page")) || 1) };
+    const list = h("section", { class: "posts", "aria-label": "News" });
+    const pager = h("div", { class: "pager card" });
+    main.append(h("h2", {}, "News"), list, pager);
+    async function load() {
+      const d = await api(`/public/news?page=${st.page}`);
+      list.replaceChildren(...(d.items.length ? d.items.map(postCard) : [h("section", { class: "card pad" }, h("p", { class: "muted" }, "No news yet."))]));
+      const pagesN = Math.max(1, Math.ceil(d.total / d.per));
+      const go = (n) => { st.page = n; history.replaceState(null, "", n > 1 ? `?page=${n}` : location.pathname); load().catch((ex) => list.replaceChildren(errorCard(ex.message))); window.scrollTo(0, 0); };
+      pager.replaceChildren(
+        h("span", { class: "count" }, d.total ? `Page ${d.page} of ${pagesN}` : ""),
+        h("div", { class: "pages", "aria-label": "Pages" },
+          h("button", { type: "button", "aria-label": "Newer posts", disabled: d.page <= 1, onclick: () => go(d.page - 1) }, "‹"),
+          h("button", { type: "button", class: "on", "aria-current": "page" }, String(d.page)),
+          h("button", { type: "button", "aria-label": "Older posts", disabled: d.page >= pagesN, onclick: () => go(d.page + 1) }, "›")));
+      pager.hidden = pagesN <= 1;
+    }
+    await load();
+  };
+
+  pages.post = async function (main) {
+    let p;
+    try { p = await api(`/public/news/${encodeURIComponent(pathId())}`); } catch (ex) {
+      main.append(h("a", { class: "back-link", href: "/news" }, "‹ All news"), errorCard(ex.status === 404 ? "That post doesn't exist, or hasn't been published." : ex.message));
+      return;
+    }
+    document.title = `${p.title} · ${me.server_name}`;
+    main.append(h("a", { class: "back-link", href: "/news" }, "‹ All news"),
+      h("article", { class: "card post full" + (p.pinned ? " pinned" : "") },
+        h("div", { class: "post-head" }, h("h3", {}, p.title), p.pinned ? h("span", { class: "badge gm plain" }, "Pinned") : null,
+          h("span", { class: "byline" }, `${p.author} · ${date(p.published)}`)),
+        prose(p.body_html)));
+  };
+
+  pages.rules = async function (main) {
+    const d = await api("/public/content/rules");
+    main.append(h("h2", {}, "House rules"), h("section", { class: "card pad" }, prose(d.html)));
   };
 
   // "Online now": the busiest zones, from the same cached list as the online page.
@@ -260,7 +365,7 @@
     let j;
     try { j = await api("/public/online"); } catch { return; }
     const shown = j.players.filter((p) => p.zone);
-    main.append(h("section", { class: "card pad" },
+    main.prepend(h("section", { class: "card pad" },
       h("div", { class: "card-head" }, h("h2", {}, "Online now"), h("a", { class: "muted", href: "/online" }, `${j.count} ${j.count === 1 ? "player" : "players"}`)),
       shown.length ? zoneBars(shown) : h("p", { class: "muted" }, j.count ? "Everyone in game is anonymous." : "Nobody is in game right now.")));
   }
@@ -585,8 +690,8 @@
 
   // ---- the admin panel: players, bans and the log ----
 
-  const ACTION_LABEL = { ban: "Ban", unban: "Unban", gm_level: "GM level", password_reset: "Password reset", totp_reset: "Two-step reset", password_change: "Password change", sign_in: "Sign-in", sign_in_failed: "Sign-in failed" };
-  const ACTION_TONE = { ban: "bad", unban: "ok", gm_level: "gm", password_reset: "busy", totp_reset: "busy", password_change: "info", sign_in: "off", sign_in_failed: "busy" };
+  const ACTION_LABEL = { ban: "Ban", unban: "Unban", gm_level: "GM level", password_reset: "Password reset", totp_reset: "Two-step reset", password_change: "Password change", sign_in: "Sign-in", sign_in_failed: "Sign-in failed", news_create: "News draft", news_edit: "News edit", news_publish: "News published", news_unpublish: "News unpublished", news_pin: "News pinned", news_unpin: "News unpinned", news_delete: "News deleted", content_edit: "Content edit", content_reset: "Content reset" };
+  const ACTION_TONE = { ban: "bad", unban: "ok", gm_level: "gm", password_reset: "busy", totp_reset: "busy", password_change: "info", sign_in: "off", sign_in_failed: "busy", news_publish: "ok", news_delete: "bad", news_unpublish: "busy" };
 
   const pathId = () => location.pathname.split("/").pop();
   const fmtDT = (s) => (s ? new Date(s * 1000).toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "–");
@@ -610,6 +715,10 @@
       case "gm_level": return { tone: "gm", what: `GM level ${d.before} → ${d.after} by ${who}` };
       case "password_reset": return { tone: "info", what: `Password reset by ${who}` };
       case "totp_reset": return { tone: "info", what: `Two-step sign-in removed by ${who}` };
+      case "news_create": case "news_edit": case "news_publish": case "news_unpublish": case "news_pin": case "news_unpin": case "news_delete":
+        return { tone: "info", what: `${ACTION_LABEL[a.action]}: "${a.target_name || ""}" by ${who}` };
+      case "content_edit": case "content_reset":
+        return { tone: "info", what: `${ACTION_LABEL[a.action]}: ${a.target_name || ""} (${d.before_size ?? "–"} → ${d.after_size ?? "–"} characters) by ${who}` };
       default: return { tone: "", what: `${ACTION_LABEL[a.action] || a.action} by ${who}` };
     }
   }
@@ -1035,7 +1144,9 @@
       },
       row: (a) => {
         const dsc = describe(a);
-        const target = a.target_id && a.target_kind ? h("a", { href: `/admin/${a.target_kind === "account" ? "accounts" : "characters"}/${a.target_id}` }, a.target_name || a.target_id) : h("span", { class: "muted" }, "–");
+        const target = a.target_kind === "news" ? (a.action === "news_delete" ? h("span", {}, a.target_name || "Post") : h("a", { href: `/admin/news/${a.target_id}` }, a.target_name || a.target_id))
+          : a.target_kind === "content" ? h("a", { href: "/admin/content" }, a.target_name || "Site content")
+          : a.target_id && a.target_kind ? h("a", { href: `/admin/${a.target_kind === "account" ? "accounts" : "characters"}/${a.target_id}` }, a.target_name || a.target_id) : h("span", { class: "muted" }, "–");
         const detail = a.action === "sign_in_failed" ? `Login "${a.actor_login || ""}": ${a.reason || ""}` : [dsc.what, a.reason ? `. ${a.reason}` : ""].join("");
         return h("tr", {},
           h("td", {}, when(a.at)), h("td", {}, a.action === "sign_in_failed" ? h("span", { class: "muted" }, "Unknown") : actorName(a)),
@@ -1048,6 +1159,211 @@
     await view.load();
   };
 
+  // ---- the owner's editors: news posts and site content ----
+
+  let editorSeq = 0;
+
+  // A Markdown box with a small toolbar and Write/Preview tabs. Preview asks the server, so it
+  // shows exactly what visitors get.
+  function mdEditor({ value, short, max, onInput }) {
+    const n = ++editorSeq;
+    const ta = h("textarea", { class: "body-input" + (short ? " short" : ""), "aria-label": "Text (Markdown)", spellcheck: "true" });
+    ta.value = value || "";
+    const view = h("div", { class: "preview", id: `pv-${n}`, role: "tabpanel", hidden: true });
+    const write = h("div", { id: `wr-${n}`, role: "tabpanel" }, ta);
+    const count = h("span", { class: "count-note" });
+    const tabW = h("button", { type: "button", class: "subtab active", role: "tab", "aria-selected": "true", "aria-controls": `wr-${n}` }, "Write");
+    const tabP = h("button", { type: "button", class: "subtab", role: "tab", "aria-selected": "false", "aria-controls": `pv-${n}` }, "Preview");
+    function show(preview) {
+      tabW.classList.toggle("active", !preview); tabP.classList.toggle("active", preview);
+      tabW.setAttribute("aria-selected", String(!preview)); tabP.setAttribute("aria-selected", String(preview));
+      write.hidden = preview; view.hidden = !preview;
+    }
+    tabW.addEventListener("click", () => show(false));
+    tabP.addEventListener("click", async () => {
+      show(true);
+      view.replaceChildren(h("p", { class: "muted" }, "Loading the preview…"));
+      try {
+        const out = await api("/admin/preview", { method: "POST", body: { markdown: ta.value } });
+        rendered(view, "");
+        view.append(prose(out.html));
+      } catch (ex) { view.replaceChildren(errorCard(ex.message)); }
+    });
+    // Wrap the selection (or put the marks around nothing) and keep the caret in the right place.
+    function wrap(before, after, fallback) {
+      const a = ta.selectionStart, b = ta.selectionEnd;
+      const sel = ta.value.slice(a, b) || fallback;
+      ta.setRangeText(before + sel + after, a, b, "end");
+      ta.setSelectionRange(a + before.length, a + before.length + sel.length);
+      ta.focus();
+      changed();
+    }
+    function linePrefix(prefix) {
+      const a = ta.selectionStart;
+      const start = ta.value.lastIndexOf("\n", a - 1) + 1;
+      ta.setRangeText(prefix, start, start, "end");
+      ta.focus();
+      changed();
+    }
+    const tool = (label, title, fn, extra) => h("button", { class: "icon-button", type: "button", title, "aria-label": title, onclick: fn }, extra || label);
+    const bar = h("div", { class: "fmt" },
+      tool("B", "Bold", () => wrap("**", "**", "bold")),
+      tool("I", "Italic", () => wrap("*", "*", "italic"), h("i", {}, "I")),
+      tool("H", "Heading", () => linePrefix("## ")),
+      tool("•", "List", () => linePrefix("- ")),
+      tool("↗", "Link", () => wrap("[", "](https://)", "link text")),
+      count,
+      h("nav", { class: "subtabs", role: "tablist", "aria-label": "Editor view" }, tabW, tabP));
+    function changed() {
+      count.textContent = max ? `${ta.value.length.toLocaleString()} / ${max.toLocaleString()}` : "";
+      count.classList.toggle("error", !!max && ta.value.length > max);
+      if (onInput) onInput();
+    }
+    ta.addEventListener("input", changed);
+    changed();
+    return { el: h("div", {}, bar, write, view), get: () => ta.value, set: (v) => { ta.value = v; show(false); changed(); }, focus: () => ta.focus() };
+  }
+
+  function statusLine() {
+    const el = h("span", { class: "editor-status", role: "status" });
+    return { el, say: (text, dirty) => { el.textContent = text; el.classList.toggle("dirty", !!dirty); } };
+  }
+
+  pages["admin-news"] = async function (main) {
+    const idParam = pathId();
+    const editing = idParam !== "news" && /^\d+$/.test(idParam) ? Number(idParam) : null;
+    const list = await api("/admin/news");
+    let post = null;
+    if (editing != null) post = await api(`/admin/news/${editing}`);
+    document.title = `${post ? post.title : "New post"} · News posts`;
+
+    let dirty = false;
+    const status = statusLine();
+    const title = h("input", { class: "title-input", type: "text", maxlength: String(list.max_title), placeholder: "Title", "aria-label": "Title", value: post ? post.title : "" });
+    const author = h("input", { type: "text", maxlength: String(list.max_author), placeholder: "Staff", "aria-label": "Author name", value: post ? post.author : "" });
+    const pinned = h("input", { type: "checkbox", class: "switch", "aria-label": "Pin to the top of the home page" });
+    pinned.checked = !!(post && post.pinned);
+    const markDirty = () => { dirty = true; status.say("Changes not saved", true); };
+    title.addEventListener("input", markDirty);
+    author.addEventListener("input", markDirty);
+    pinned.addEventListener("change", markDirty);
+    const editor = mdEditor({ value: post ? post.body : "", max: list.max_body, onInput: markDirty });
+    const err = h("p", { class: "error", role: "alert", hidden: true });
+    const published = post && post.published != null;
+    window.addEventListener("beforeunload", (e) => { if (dirty) { e.preventDefault(); e.returnValue = ""; } });
+
+    async function save(publish) {
+      err.hidden = true;
+      const body = { title: title.value, body: editor.get(), author: author.value, pinned: pinned.checked };
+      if (publish !== undefined) body.publish = publish;
+      buttons.forEach((b) => { b.disabled = true; });
+      try {
+        let out;
+        if (post) out = await api(`/admin/news/${post.id}`, { method: "PUT", body });
+        else out = await api("/admin/news", { method: "POST", body });
+        dirty = false;
+        location.href = `/admin/news/${out.id}`;
+      } catch (ex) {
+        err.textContent = ex.message; err.hidden = false;
+        buttons.forEach((b) => { b.disabled = false; });
+      }
+    }
+    const bDiscard = h("button", { type: "button", onclick: () => { dirty = false; location.reload(); } }, "Discard");
+    const bDraft = h("button", { type: "button", onclick: () => save(false) }, "Save draft");
+    const bPublish = h("button", { type: "button", class: "primary", onclick: () => save(true) }, "Publish");
+    const bSave = h("button", { type: "button", class: "primary", onclick: () => save(undefined) }, "Save changes");
+    const buttons = published ? [bDiscard, bSave] : [bDiscard, bDraft, bPublish];
+    status.say(post ? (published ? "Published" : "Draft") : "New post", false);
+
+    const side = [];
+    if (post) {
+      const bUnpub = h("button", { type: "button", onclick: () => save(false) }, "Unpublish");
+      const bDel = h("button", { type: "button", class: "danger", onclick: () => confirmDialog({
+        title: `Delete "${post.title}"?`, danger: true, icon: "bans", confirm: "Delete post",
+        body: h("p", {}, published ? "It disappears from the site now and can't be brought back. Unpublish instead to keep it as a draft." : "The draft is gone for good."),
+        onSubmit: async () => { await api(`/admin/news/${post.id}`, { method: "DELETE", body: {} }); dirty = false; location.href = "/admin/news"; },
+      }) }, "Delete");
+      side.push(h("section", { class: "card pad" },
+        h("h2", {}, "Publishing"),
+        h("dl", { class: "kv" },
+          h("dt", {}, "Status"), h("dd", {}, h("span", { class: "badge " + (published ? "ok" : "off") }, published ? "Published" : "Draft")),
+          h("dt", {}, "Pinned"), h("dd", {}, pinned),
+          h("dt", {}, "Author"), h("dd", {}, author),
+          published ? [h("dt", {}, "Shown"), h("dd", {}, fmtDT(post.published))] : null,
+          h("dt", {}, "Edited"), h("dd", {}, fmtDT(post.updated), post.updated_by ? ` by ${post.updated_by}` : "")),
+        h("div", { class: "form-actions" }, published ? bUnpub : null, bDel)));
+    } else {
+      side.push(h("section", { class: "card pad" },
+        h("h2", {}, "Publishing"),
+        h("dl", { class: "kv" },
+          h("dt", {}, "Pinned"), h("dd", {}, pinned),
+          h("dt", {}, "Author"), h("dd", {}, author)),
+        h("p", { class: "hint" }, "The author is the name shown under the post, not your login. Left empty it reads “Staff”.")));
+    }
+    side.push(h("section", { class: "card table-card" },
+      h("div", { class: "card-head" }, h("h2", {}, "Posts"), h("a", { class: "btn-link", href: "/admin/news" }, "New post")),
+      h("table", { class: "data" }, h("tbody", {}, list.items.length ? list.items.map((p) =>
+        h("tr", {}, h("td", { class: "wrap" },
+          h("a", { href: `/admin/news/${p.id}`, "aria-current": post && post.id === p.id ? "page" : false }, p.title),
+          h("div", { class: "hint" }, p.published == null ? h("span", { class: "badge off" }, "Draft") : [p.pinned ? "Pinned · " : "", date(p.published)], ` · ${p.author}`))))
+        : h("tr", {}, h("td", { class: "muted" }, "No posts yet."))))));
+
+    main.append(h("div", { class: "editor-grid" },
+      h("section", { class: "card editor-card" }, title, editor.el,
+        h("div", { class: "editor-bar" }, status.el, err, buttons)),
+      h("div", { class: "stack" }, side)));
+    if (!post) title.focus();
+  };
+
+  pages["admin-content"] = async function (main) {
+    const d = await api("/admin/content");
+    main.append(h("p", { class: "hint" }, "Text the public pages show. Each block has a default; “Reset to default” puts it back. Markdown works everywhere except the title; raw HTML is shown as text."));
+    for (const b of d.blocks) {
+      let cur = b;
+      const status = statusLine();
+      const err = h("p", { class: "error", role: "alert", hidden: true });
+      let field, get, set;
+      const dirtyNow = () => status.say("Changes not saved", true);
+      if (b.plain) {
+        const input = h("input", { class: "title-input", type: "text", maxlength: String(b.max), "aria-label": b.label });
+        input.value = b.body;
+        input.addEventListener("input", dirtyNow);
+        field = input; get = () => input.value; set = (v) => { input.value = v; };
+      } else {
+        const ed = mdEditor({ value: b.body, short: b.max <= 2000, max: b.max, onInput: dirtyNow });
+        field = ed.el; get = ed.get; set = ed.set;
+      }
+      const note = (c) => (c.is_default ? "Showing the default" : `Saved ${fmtDT(c.updated)}${c.updated_by ? " by " + c.updated_by : ""}`);
+      const bSave = h("button", { type: "button", class: "primary" }, "Save");
+      const bReset = h("button", { type: "button" }, "Reset to default");
+      status.say(note(b), false);
+      bSave.addEventListener("click", async () => {
+        err.hidden = true; bSave.disabled = true;
+        try {
+          await api(`/admin/content/${b.key}`, { method: "PUT", body: { body: get() } });
+          cur = Object.assign({}, cur, { is_default: false, updated: nowSec(), updated_by: me.login || "Owner link" });
+          status.say(note(cur), false);
+        } catch (ex) { err.textContent = ex.message; err.hidden = false; }
+        bSave.disabled = false;
+      });
+      bReset.addEventListener("click", () => confirmDialog({
+        title: `Reset "${b.label}"?`, icon: "bans", confirm: "Reset to default",
+        body: h("p", {}, "The text goes back to what the site says until it is edited. What is there now is lost."),
+        onSubmit: async (dlg) => {
+          await api(`/admin/content/${b.key}`, { method: "DELETE", body: {} });
+          set(b.default); cur = Object.assign({}, cur, { is_default: true });
+          status.say(note(cur), false);
+          dlg.close();
+        },
+      }));
+      main.append(h("section", { class: "card editor-card block-card" },
+        h("div", { class: "card-head" }, h("h2", {}, b.label)),
+        h("p", { class: "hint" }, b.hint),
+        field,
+        h("div", { class: "editor-bar" }, status.el, err, bReset, bSave)));
+    }
+  };
+
   // ---- start ----
 
   (async function start() {
@@ -1056,10 +1372,10 @@
     if (body.classList.contains("app")) {
       if (!isAdmin()) { location.replace("/signin?next=" + encodeURIComponent(location.pathname)); return; }
       adminShell();
-      if (page !== "dashboard") api("/public/home").then((i) => setOnline(i.online)).catch(() => setOnline(null));
+      if (page !== "dashboard") homeInfo().then((i) => setOnline(i.online)).catch(() => setOnline(null));
     } else {
       siteShell();
-      api("/public/home").then((i) => setOnline(i.online)).catch(() => setOnline(null));
+      homeInfo().then((i) => setOnline(i.online)).catch(() => setOnline(null));
     }
     const main = document.getElementById("main");
     if (pages[page] && main) {

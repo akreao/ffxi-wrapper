@@ -599,6 +599,12 @@ impl Req {
     pub fn post(path: &str, body: serde_json::Value) -> Req {
         Req { method: Method::POST, body: Some(body), origin: Some("http://site.test".into()), ..Req::get(path) }
     }
+    pub fn put(path: &str, body: serde_json::Value) -> Req {
+        Req { method: Method::PUT, ..Req::post(path, body) }
+    }
+    pub fn delete(path: &str) -> Req {
+        Req { method: Method::DELETE, ..Req::post(path, serde_json::json!({})) }
+    }
     pub fn session(mut self, cookie: &str, csrf: &str) -> Req {
         self.cookie = Some(cookie.into());
         self.csrf = Some(csrf.into());

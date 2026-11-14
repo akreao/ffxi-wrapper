@@ -61,7 +61,7 @@ async fn dashboard(State(state): State<Shared>, Staff(id): Staff) -> ApiResult<J
     let zones = busiest_zones(&online);
     let services = state.probe.services(true).await;
     let owner = id.role == Role::Owner;
-    let actions = state.store.actions(None, 8, true).await?;
+    let actions = state.store.actions(None, 8, true, owner).await?;
     let online: Vec<OnlineOut> = online
         .into_iter()
         .map(|row| {
@@ -103,7 +103,7 @@ struct LogParams {
     per: Option<i64>,
 }
 
-async fn log(State(state): State<Shared>, Staff(_): Staff, Query(p): Query<LogParams>) -> ApiResult<Json<Value>> {
+async fn log(State(state): State<Shared>, Staff(id): Staff, Query(p): Query<LogParams>) -> ApiResult<Json<Value>> {
     let (page, per) = paging(p.page, p.per);
     let nonempty = |s: Option<String>| s.filter(|s| !s.is_empty());
     let q = LogQuery {
@@ -111,11 +111,12 @@ async fn log(State(state): State<Shared>, Staff(_): Staff, Query(p): Query<LogPa
         actor: nonempty(p.actor),
         action: nonempty(p.action),
         since: p.days.filter(|d| *d > 0).map(|d| state.now() - d.min(36_500) * 86_400),
+        owner: id.role == Role::Owner,
         page,
         per,
     };
     let (items, total) = state.store.log_page(&q).await?;
-    let (actors, actions) = state.store.log_facets().await?;
+    let (actors, actions) = state.store.log_facets(q.owner).await?;
     Ok(Json(json!({
         "items": items,
         "total": total, "page": page, "per": per,

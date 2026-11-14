@@ -46,6 +46,27 @@ CREATE INDEX action_log_at ON action_log (at);
 CREATE INDEX action_log_target ON action_log (target_kind, target_id);
 ";
 
+const SCHEMA_V2: &str = "
+CREATE TABLE news (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  title      TEXT NOT NULL,
+  body       TEXT NOT NULL,
+  author     TEXT NOT NULL,
+  published  INTEGER,
+  pinned     INTEGER NOT NULL DEFAULT 0,
+  created    INTEGER NOT NULL,
+  updated    INTEGER NOT NULL,
+  updated_by TEXT
+);
+CREATE INDEX news_published ON news (published);
+CREATE TABLE site_content (
+  key        TEXT PRIMARY KEY,
+  body       TEXT NOT NULL,
+  updated    INTEGER NOT NULL,
+  updated_by TEXT
+);
+";
+
 const ACTION_COLS: &str = "id, at, actor_kind, actor_login, actor_role, ip, action, target_kind, target_id, target_name, reason, detail, result";
 
 fn action_row(r: &sqlx::sqlite::SqliteRow) -> Result<ActionRow, sqlx::Error> {
@@ -145,9 +166,59 @@ pub struct LogQuery {
     pub action: Option<String>,
     /// Only rows at or after this time.
     pub since: Option<i64>,
+    /// News and site content rows are the owner's: others don't see them.
+    pub owner: bool,
     pub page: i64,
     pub per: i64,
 }
+
+/// A news post as the admin editor sees it. `updated_by` is the editor's login: staff only.
+#[derive(Debug, Clone, Serialize)]
+pub struct NewsPost {
+    pub id: i64,
+    pub title: String,
+    pub body: String,
+    pub author: String,
+    pub published: Option<i64>,
+    pub pinned: bool,
+    pub created: i64,
+    pub updated: i64,
+    pub updated_by: Option<String>,
+}
+
+/// What a post is written with.
+#[derive(Debug, Clone)]
+pub struct PostFields {
+    pub title: String,
+    pub body: String,
+    pub author: String,
+    pub pinned: bool,
+}
+
+/// One stored block of site content.
+#[derive(Debug, Clone, Serialize)]
+pub struct ContentRow {
+    pub key: String,
+    pub body: String,
+    pub updated: i64,
+    pub updated_by: Option<String>,
+}
+
+fn post_row(r: &sqlx::sqlite::SqliteRow) -> Result<NewsPost, sqlx::Error> {
+    Ok(NewsPost {
+        id: r.try_get("id")?,
+        title: r.try_get("title")?,
+        body: r.try_get("body")?,
+        author: r.try_get("author")?,
+        published: r.try_get("published")?,
+        pinned: r.try_get::<i64, _>("pinned")? != 0,
+        created: r.try_get("created")?,
+        updated: r.try_get("updated")?,
+        updated_by: r.try_get("updated_by")?,
+    })
+}
+
+const POST_COLS: &str = "id, title, body, author, published, pinned, created, updated, updated_by";
 
 #[derive(Clone)]
 pub struct Store {
@@ -193,6 +264,14 @@ impl Store {
                 sqlx::query(stmt).execute(&mut *tx).await?;
             }
             sqlx::query("PRAGMA user_version = 1").execute(&mut *tx).await?;
+            tx.commit().await?;
+        }
+        if v < 2 {
+            let mut tx = self.pool.begin().await?;
+            for stmt in SCHEMA_V2.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+                sqlx::query(stmt).execute(&mut *tx).await?;
+            }
+            sqlx::query("PRAGMA user_version = 2").execute(&mut *tx).await?;
             tx.commit().await?;
         }
         Ok(())
@@ -316,16 +395,18 @@ impl Store {
     }
 
     /// Newest first; `before` is the id of the last row of the previous page.
-    pub async fn actions(&self, before: Option<i64>, per: i64, only_admin: bool) -> Result<Vec<ActionRow>, sqlx::Error> {
+    pub async fn actions(&self, before: Option<i64>, per: i64, only_admin: bool, owner: bool) -> Result<Vec<ActionRow>, sqlx::Error> {
         let rows = sqlx::query(&format!(
             "SELECT {ACTION_COLS} FROM action_log
              WHERE (? IS NULL OR id < ?)
                AND (? = 0 OR (actor_role IN ('owner', 'moderator', 'system') AND action NOT IN ('sign_in', 'sign_in_failed')))
+               AND (? = 1 OR target_kind IS NULL OR target_kind NOT IN ('news', 'content'))
              ORDER BY id DESC LIMIT ?"
         ))
         .bind(before)
         .bind(before)
         .bind(only_admin as i64)
+        .bind(owner as i64)
         .bind(per)
         .fetch_all(&self.pool)
         .await?;
@@ -336,16 +417,17 @@ impl Store {
     pub async fn log_page(&self, q: &LogQuery) -> Result<(Vec<ActionRow>, i64), sqlx::Error> {
         let like = format!("%{}%", q.q.replace('|', "||").replace('%', "|%").replace('_', "|_"));
         let wh = "WHERE (? = '' OR target_name LIKE ? ESCAPE '|' OR reason LIKE ? ESCAPE '|' OR actor_login LIKE ? ESCAPE '|')
-                    AND (? IS NULL OR actor_login = ?) AND (? IS NULL OR action = ?) AND (? IS NULL OR at >= ?)";
+                    AND (? IS NULL OR actor_login = ?) AND (? IS NULL OR action = ?) AND (? IS NULL OR at >= ?)
+                    AND (? = 1 OR target_kind IS NULL OR target_kind NOT IN ('news', 'content'))";
         let total: i64 = sqlx::query(&format!("SELECT COUNT(*) FROM action_log {wh}"))
             .bind(&q.q).bind(&like).bind(&like).bind(&like)
-            .bind(&q.actor).bind(&q.actor).bind(&q.action).bind(&q.action).bind(q.since).bind(q.since)
+            .bind(&q.actor).bind(&q.actor).bind(&q.action).bind(&q.action).bind(q.since).bind(q.since).bind(q.owner as i64)
             .fetch_one(&self.pool)
             .await?
             .try_get(0)?;
         let rows = sqlx::query(&format!("SELECT {ACTION_COLS} FROM action_log {wh} ORDER BY id DESC LIMIT ? OFFSET ?"))
             .bind(&q.q).bind(&like).bind(&like).bind(&like)
-            .bind(&q.actor).bind(&q.actor).bind(&q.action).bind(&q.action).bind(q.since).bind(q.since)
+            .bind(&q.actor).bind(&q.actor).bind(&q.action).bind(&q.action).bind(q.since).bind(q.since).bind(q.owner as i64)
             .bind(q.per)
             .bind((q.page - 1) * q.per)
             .fetch_all(&self.pool)
@@ -354,11 +436,11 @@ impl Store {
     }
 
     /// Everyone who has acted and every action done, for the log's filters.
-    pub async fn log_facets(&self) -> Result<(Vec<String>, Vec<String>), sqlx::Error> {
+    pub async fn log_facets(&self, owner: bool) -> Result<(Vec<String>, Vec<String>), sqlx::Error> {
         let actors = sqlx::query("SELECT DISTINCT actor_login FROM action_log WHERE actor_login IS NOT NULL AND actor_role IN ('owner', 'moderator') ORDER BY actor_login")
             .fetch_all(&self.pool)
             .await?;
-        let actions = sqlx::query("SELECT DISTINCT action FROM action_log ORDER BY action").fetch_all(&self.pool).await?;
+        let actions = sqlx::query("SELECT DISTINCT action FROM action_log WHERE ? = 1 OR target_kind IS NULL OR target_kind NOT IN ('news', 'content') ORDER BY action").bind(owner as i64).fetch_all(&self.pool).await?;
         Ok((
             actors.iter().map(|r| r.try_get(0)).collect::<Result<_, _>>()?,
             actions.iter().map(|r| r.try_get(0)).collect::<Result<_, _>>()?,
@@ -383,6 +465,112 @@ impl Store {
 
     pub async fn action_count(&self) -> Result<i64, sqlx::Error> {
         sqlx::query("SELECT COUNT(*) FROM action_log").fetch_one(&self.pool).await?.try_get(0)
+    }
+
+    // ---- news ----
+
+    /// Published posts, pinned first and then newest first, with how many there are in all.
+    pub async fn news_public(&self, page: i64, per: i64) -> Result<(Vec<NewsPost>, i64), sqlx::Error> {
+        let total: i64 = sqlx::query("SELECT COUNT(*) FROM news WHERE published IS NOT NULL").fetch_one(&self.pool).await?.try_get(0)?;
+        let rows = sqlx::query(&format!(
+            "SELECT {POST_COLS} FROM news WHERE published IS NOT NULL ORDER BY pinned DESC, published DESC, id DESC LIMIT ? OFFSET ?"
+        ))
+        .bind(per)
+        .bind((page - 1) * per)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok((rows.iter().map(post_row).collect::<Result<_, _>>()?, total))
+    }
+
+    pub async fn news_published_post(&self, id: i64) -> Result<Option<NewsPost>, sqlx::Error> {
+        let r = sqlx::query(&format!("SELECT {POST_COLS} FROM news WHERE id = ? AND published IS NOT NULL"))
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        r.as_ref().map(post_row).transpose()
+    }
+
+    pub async fn news_post(&self, id: i64) -> Result<Option<NewsPost>, sqlx::Error> {
+        let r = sqlx::query(&format!("SELECT {POST_COLS} FROM news WHERE id = ?")).bind(id).fetch_optional(&self.pool).await?;
+        r.as_ref().map(post_row).transpose()
+    }
+
+    /// Every post, drafts too, newest edit first (the admin list).
+    pub async fn news_all(&self) -> Result<Vec<NewsPost>, sqlx::Error> {
+        let rows = sqlx::query(&format!("SELECT {POST_COLS} FROM news ORDER BY updated DESC, id DESC LIMIT 500"))
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter().map(post_row).collect()
+    }
+
+    pub async fn news_create(&self, f: &PostFields, publish: bool, by: &str, now: i64) -> Result<i64, sqlx::Error> {
+        let r = sqlx::query("INSERT INTO news (title, body, author, published, pinned, created, updated, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+            .bind(&f.title)
+            .bind(&f.body)
+            .bind(&f.author)
+            .bind(publish.then_some(now))
+            .bind(f.pinned as i64)
+            .bind(now)
+            .bind(now)
+            .bind(by)
+            .execute(&self.pool)
+            .await?;
+        Ok(r.last_insert_rowid())
+    }
+
+    /// Rewrites a post. `publish`: `Some(true)` publishes (keeping the original date if it
+    /// was already out), `Some(false)` turns it back into a draft, `None` leaves it alone.
+    /// False when the post doesn't exist.
+    pub async fn news_update(&self, id: i64, f: &PostFields, publish: Option<bool>, by: &str, now: i64) -> Result<bool, sqlx::Error> {
+        let r = sqlx::query(
+            "UPDATE news SET title = ?, body = ?, author = ?, pinned = ?, updated = ?, updated_by = ?,
+                 published = CASE ? WHEN 1 THEN COALESCE(published, ?) WHEN 0 THEN NULL ELSE published END
+             WHERE id = ?",
+        )
+        .bind(&f.title)
+        .bind(&f.body)
+        .bind(&f.author)
+        .bind(f.pinned as i64)
+        .bind(now)
+        .bind(by)
+        .bind(publish.map(|p| p as i64))
+        .bind(now)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected() == 1)
+    }
+
+    pub async fn news_delete(&self, id: i64) -> Result<bool, sqlx::Error> {
+        Ok(sqlx::query("DELETE FROM news WHERE id = ?").bind(id).execute(&self.pool).await?.rows_affected() == 1)
+    }
+
+    // ---- site content ----
+
+    pub async fn content_all(&self) -> Result<Vec<ContentRow>, sqlx::Error> {
+        let rows = sqlx::query("SELECT key, body, updated, updated_by FROM site_content").fetch_all(&self.pool).await?;
+        rows.iter()
+            .map(|r| Ok(ContentRow { key: r.try_get("key")?, body: r.try_get("body")?, updated: r.try_get("updated")?, updated_by: r.try_get("updated_by")? }))
+            .collect()
+    }
+
+    pub async fn content_set(&self, key: &str, body: &str, by: &str, now: i64) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO site_content (key, body, updated, updated_by) VALUES (?, ?, ?, ?)
+             ON CONFLICT(key) DO UPDATE SET body = excluded.body, updated = excluded.updated, updated_by = excluded.updated_by",
+        )
+        .bind(key)
+        .bind(body)
+        .bind(now)
+        .bind(by)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Back to the default: the stored row goes. False when there was none.
+    pub async fn content_reset(&self, key: &str) -> Result<bool, sqlx::Error> {
+        Ok(sqlx::query("DELETE FROM site_content WHERE key = ?").bind(key).execute(&self.pool).await?.rows_affected() == 1)
     }
 
     // ---- housekeeping ----
@@ -446,11 +634,11 @@ mod tests {
         for i in 0..5 {
             s.log(NewAction { actor_kind: "account", actor_role: "owner", action: if i == 0 { "sign_in" } else { "ban" }, result: "ok", ..Default::default() }, 100 + i).await.unwrap();
         }
-        let page = s.actions(None, 2, false).await.unwrap();
+        let page = s.actions(None, 2, false, true).await.unwrap();
         assert_eq!(page.iter().map(|r| r.id).collect::<Vec<_>>(), vec![5, 4]);
-        let next = s.actions(Some(4), 10, false).await.unwrap();
+        let next = s.actions(Some(4), 10, false, true).await.unwrap();
         assert_eq!(next.len(), 3);
         // The dashboard's list leaves sign-ins out.
-        assert_eq!(s.actions(None, 10, true).await.unwrap().len(), 4);
+        assert_eq!(s.actions(None, 10, true, true).await.unwrap().len(), 4);
     }
 }

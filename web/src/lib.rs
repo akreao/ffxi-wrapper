@@ -2,10 +2,13 @@
 //! admin panel, in one service that runs beside LandSandBoat's.
 
 pub mod auth;
+pub mod cache;
 pub mod config;
+pub mod content;
 pub mod game;
 pub mod http;
 pub mod limits;
+pub mod markdown;
 pub mod model;
 pub mod routes;
 pub mod state;
@@ -35,6 +38,7 @@ pub fn app_state(p: Parts) -> Shared {
         store: p.store,
         limiter: limits::Limiter::new(),
         probe: p.probe,
+        news_cache: cache::PublicCache::default(),
         clock: p.clock,
         totp_seen: Mutex::new(Default::default()),
         dummy_hash: p.dummy_hash,
