@@ -32,8 +32,16 @@ impl Proxies {
         for n in &self.names {
             if let Ok(ip) = n.parse::<IpAddr>() {
                 found.insert(ip.to_canonical());
-            } else if let Ok(addrs) = tokio::net::lookup_host((n.as_str(), 0)).await {
-                found.extend(addrs.map(|a| a.ip().to_canonical()));
+            } else {
+                match tokio::net::lookup_host((n.as_str(), 0)).await {
+                    // Only a private address can be the container beside us: a name that fell
+                    // through to the host's resolver and came back public is not trusted.
+                    Ok(addrs) => found.extend(addrs.map(|a| a.ip().to_canonical()).filter(|i| is_private_client(&i.to_string()))),
+                    // A lookup that fails (resolver hiccup) leaves what we knew; a name that
+                    // doesn't exist at all yields no addresses above and so clears it.
+                    Err(e) if !gone(&e) => return,
+                    Err(_) => {}
+                }
             }
         }
         let mut cur = self.ips.write().unwrap();
@@ -51,6 +59,13 @@ impl Proxies {
     pub fn set(&self, ips: impl IntoIterator<Item = IpAddr>) {
         *self.ips.write().unwrap() = ips.into_iter().map(|i| i.to_canonical()).collect();
     }
+}
+
+/// Does this lookup error mean the name doesn't exist (the proxy isn't running), as opposed to the
+/// resolver being briefly unreachable?
+fn gone(e: &std::io::Error) -> bool {
+    let m = e.to_string();
+    m.contains("not known") || m.contains("No address associated") || m.contains("NXDOMAIN") || m.contains("No such host")
 }
 
 /// Where a request really came from.

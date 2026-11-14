@@ -140,9 +140,9 @@ pub fn cookie_value(headers: &HeaderMap) -> Option<String> {
     None
 }
 
-pub fn set_cookie(state: &Shared, value: &str, max_age: i64) -> HeaderValue {
-    let secure = if state.cfg.secure_cookies() { "; Secure" } else { "" };
-    HeaderValue::from_str(&format!("{COOKIE}={value}; HttpOnly; SameSite=Strict; Path=/; Max-Age={max_age}{secure}"))
+pub fn set_cookie(_state: &Shared, value: &str, max_age: i64) -> HeaderValue {
+    // `Secure` is added by `edge`, only on answers that went over HTTPS.
+    HeaderValue::from_str(&format!("{COOKIE}={value}; HttpOnly; SameSite=Strict; Path=/; Max-Age={max_age}"))
         .expect("cookie values are base64url")
 }
 
@@ -338,7 +338,22 @@ pub async fn edge(State(state): State<Shared>, mut req: Request, next: Next) -> 
     req.extensions_mut().insert(src);
     let mut res = next.run(req).await;
     add_security_headers(res.headers_mut(), https);
+    if https {
+        mark_secure(res.headers_mut());
+    }
     res
+}
+
+/// A session cookie is `Secure` only when it travels over HTTPS (through the proxy). On the direct
+/// port (LAN, Tailscale, the owner link) the page is plain HTTP and browsers drop a Secure cookie.
+fn mark_secure(h: &mut HeaderMap) {
+    let cookies: Vec<HeaderValue> = h.get_all(header::SET_COOKIE).iter().cloned().collect();
+    h.remove(header::SET_COOKIE);
+    for c in cookies {
+        let s = c.to_str().unwrap_or("");
+        let v = if s.starts_with(&format!("{COOKIE}=")) && !s.contains("; Secure") { HeaderValue::from_str(&format!("{s}; Secure")).unwrap_or(c) } else { c };
+        h.append(header::SET_COOKIE, v);
+    }
 }
 
 fn add_security_headers(h: &mut HeaderMap, https: bool) {

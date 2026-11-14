@@ -5,8 +5,10 @@
 	# Nothing to administer from outside the container.
 	admin off
 	servers {
+		protocols h1 h2
 		timeouts {
 			read_header 10s
+			read_body 30s
 			idle 2m
 		}
 	}

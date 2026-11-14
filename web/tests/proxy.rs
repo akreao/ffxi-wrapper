@@ -85,7 +85,10 @@ async fn over_https_the_site_sends_hsts_and_secure_cookies() {
     assert_eq!(r.status, StatusCode::OK);
     assert!(r.header("strict-transport-security").unwrap().starts_with("max-age="));
     assert!(r.headers.get("set-cookie").unwrap().to_str().unwrap().contains("; Secure"));
-    // The direct port is plain HTTP: no HSTS there.
+    // The direct port is plain HTTP: no HSTS there, and a cookie browsers will keep.
+    let r = s.send(Req::post("/api/auth/login", login("hunter22")).peer(9)).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert!(!r.headers.get("set-cookie").unwrap().to_str().unwrap().contains("Secure"));
     let direct = s.send(Req::get("/healthz")).await;
     assert!(direct.header("strict-transport-security").is_none());
 }

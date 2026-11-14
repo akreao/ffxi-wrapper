@@ -133,7 +133,7 @@ fn spawn_proxy_lookup(state: ffxi_web::Shared) {
         return;
     }
     tokio::spawn(async move {
-        let mut tick = tokio::time::interval(Duration::from_secs(15));
+        let mut tick = tokio::time::interval(Duration::from_secs(5));
         loop {
             tick.tick().await;
             state.proxies.refresh().await;

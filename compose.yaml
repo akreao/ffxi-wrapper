@@ -244,7 +244,7 @@ services:
       # The address players use (https://<WEB_DOMAIN> when the public profile is on),
       # and the proxy container whose X-Forwarded-For it believes. Where there is no
       # `proxy` service the name doesn't resolve and no header is trusted.
-      WEB_PUBLIC_URL: ${WEB_PUBLIC_URL:-}
+      WEB_PUBLIC_URL: ${WEB_PUBLIC_URL:-${WEB_DOMAIN:+https://${WEB_DOMAIN}}}
       WEB_TRUSTED_PROXY: proxy
     volumes:
       - ${DATA_DIR:-./data}/web:/data
@@ -279,8 +279,8 @@ services:
     environment:
       WEB_DOMAIN: ${WEB_DOMAIN:-}
     ports:
-      - "${BIND_IP:+${BIND_IP}:}80:80"
-      - "${BIND_IP:+${BIND_IP}:}443:443"
+      - "${BIND_IP:-0.0.0.0}:80:80"
+      - "${BIND_IP:-0.0.0.0}:443:443"
     volumes:
       - ./docker/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - ${DATA_DIR:-./data}/caddy/data:/data
@@ -304,13 +304,20 @@ services:
     cap_drop: [all]
     security_opt: ["no-new-privileges:true"]
     user: "1000:1000"
+    secrets: [cloudflare_token]
     environment:
-      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
+      # Read from a file mounted as a secret, so `docker compose config` and
+      # `docker inspect` don't show it.
+      CLOUDFLARE_API_TOKEN_FILE: /run/secrets/cloudflare_token
       DOMAINS: ${WEB_DOMAIN:-}
       PROXIED: "false"
       IP4_PROVIDER: cloudflare.trace
       # The router forwards IPv4 only: no AAAA record.
       IP6_PROVIDER: none
+
+secrets:
+  cloudflare_token:
+    environment: CLOUDFLARE_API_TOKEN
 
 volumes:
   # Used when DB_DATA is db-data (the default).

@@ -189,8 +189,7 @@ async fn login(
     let mut res = Json(json!({ "ok": true, "role": role.as_str(), "csrf": csrf, "next": "/me" })).into_response();
     let cookie_header = if role.is_admin() {
         // Staff sessions end with the browser session as well.
-        let secure = if state.cfg.secure_cookies() { "; Secure" } else { "" };
-        axum::http::HeaderValue::from_str(&format!("{COOKIE}={cookie}; HttpOnly; SameSite=Strict; Path=/{secure}")).unwrap()
+        axum::http::HeaderValue::from_str(&format!("{COOKIE}={cookie}; HttpOnly; SameSite=Strict; Path=/")).unwrap()
     } else {
         set_cookie(&state, &cookie, lifetime)
     };
@@ -273,11 +272,10 @@ async fn owner_link(State(state): State<Shared>, ClientIp(ip): ClientIp, headers
         Err(e) => return ApiError::from(e).into_response(),
     };
     record(&state, NewAction { actor_kind: "owner", actor_role: "owner", ip: Some(ip), action: "sign_in", result: "ok", ..Default::default() }).await;
-    let secure = if state.cfg.secure_cookies() { "; Secure" } else { "" };
     let mut res = Redirect::to("/admin").into_response();
     res.headers_mut().insert(
         header::SET_COOKIE,
-        axum::http::HeaderValue::from_str(&format!("{COOKIE}={cookie}; HttpOnly; SameSite=Strict; Path=/{secure}")).unwrap(),
+        axum::http::HeaderValue::from_str(&format!("{COOKIE}={cookie}; HttpOnly; SameSite=Strict; Path=/")).unwrap(),
     );
     res
 }
