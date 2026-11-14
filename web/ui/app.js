@@ -186,7 +186,7 @@
   const ADMIN_NAV = [
     ["Server", [["dashboard", "Dashboard", "/admin"], ["settings", "Settings", null]]],
     ["Players", [["accounts", "Accounts", "/admin/accounts"], ["characters", "Characters", "/admin/characters"], ["bans", "Bans", "/admin/bans"]]],
-    ["Site", [["news", "News posts", "/admin/news"], ["content", "Site content", "/admin/content"]]],
+    ["Site", [["news", "News posts", "/admin/news"], ["content", "Site content", "/admin/content"], ["invites", "Invite codes", "/admin/invites"]]],
     ["Economy", [["items", "Items", null], ["auction", "Auction house", null]]],
     ["Records", [["audit", "Audit logs", null], ["log", "Admin log", "/admin/log"]]],
   ];
@@ -202,7 +202,7 @@
         items.map(([id, label, href]) => href
           ? h("a", { class: "nav-item" + (current === id ? " active" : ""), href, title: label, "aria-current": current === id ? "page" : false }, icon(id), h("span", {}, label))
           : h("a", { class: "nav-item soon", "aria-disabled": "true", title: `${label}: later` }, icon(id), h("span", {}, label), h("em", {}, "Later"))))),
-      h("div", { class: "sidebar-foot" }, "LandSandBoat", h("br"), "Site 0.4.0"));
+      h("div", { class: "sidebar-foot" }, "LandSandBoat", h("br"), "Site 0.6.0"));
     const scrim = h("div", { class: "scrim" });
     const toggle = h("button", { class: "icon-button menu-toggle", "aria-label": "Menu", "aria-controls": "sidebar", "aria-expanded": "false" }, icon("menu"));
     const theme = h("button", { class: "icon-button theme-toggle", "aria-label": "Switch theme", title: "Switch between Light and Dark" });
@@ -301,7 +301,8 @@
         info.description_html ? prose(info.description_html) : null,
         h("div", { class: "cta" },
           me.role === "visitor"
-            ? h("a", { class: "btn-link primary", href: "/signin" }, "Sign in")
+            ? [info.signup_open ? h("a", { class: "btn-link primary", href: "/signup" }, "Create account") : null,
+              h("a", { class: info.signup_open ? "btn-link" : "btn-link primary", href: "/signin" }, "Sign in")]
             : h("a", { class: "btn-link primary", href: me.accid ? "/me" : "/admin" }, me.accid ? "My account" : "Admin panel"))),
       connect));
     const news = info.news || [];
@@ -484,6 +485,10 @@
     document.getElementById("server-name").textContent = me.server_name;
     themeButton(document.querySelector(".theme-toggle"));
     if (me.role !== "visitor") { location.replace(me.accid ? "/me" : "/admin"); return; }
+    homeInfo().then((i) => {
+      const foot = document.querySelector(".signin-foot");
+      if (i.signup_open && foot) foot.prepend(h("a", { href: "/signup" }, "Create an account"), " · ");
+    }).catch(() => {});
     const form = document.getElementById("form");
     const err = document.getElementById("err");
     const errText = document.getElementById("err-text");
@@ -514,10 +519,61 @@
     });
   };
 
+  pages.signup = async function () {
+    document.getElementById("server-name").textContent = me.server_name;
+    themeButton(document.querySelector(".theme-toggle"));
+    if (me.role !== "visitor") { location.replace(me.accid ? "/me" : "/admin"); return; }
+    const form = document.getElementById("form");
+    const err = document.getElementById("err");
+    const errText = document.getElementById("err-text");
+    const go = document.getElementById("go");
+    const show = (message) => { errText.textContent = message; err.hidden = !message; };
+    let info = { open: false, invite_required: true };
+    try { info = await api("/public/signup"); } catch (ex) { show(ex.message); }
+    document.getElementById("invite-row").hidden = !info.invite_required;
+    if (!info.open) {
+      document.getElementById("fields").hidden = true;
+      document.getElementById("closed").hidden = false;
+      return;
+    }
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      show("");
+      if (form.password.value !== form.password2.value) return show("The two passwords don't match.");
+      go.disabled = true;
+      try {
+        const out = await api("/public/signup", {
+          method: "POST",
+          body: { login: form.login.value, password: form.password.value, invite: form.invite.value },
+        });
+        location.href = out.next || "/me?welcome=1";
+      } catch (ex) {
+        show(ex.message);
+        if (ex.status !== 409) form.password.value = form.password2.value = "";
+        if (ex.data && ex.data.closed) location.reload();
+      } finally {
+        go.disabled = false;
+      }
+    });
+  };
+
   pages.me = async function (main) {
     let data;
     try { data = await api("/me/account"); } catch (ex) { main.append(errorCard(ex.message)); return; }
     const { account, characters } = data;
+    if (q.has("welcome")) {
+      const info = await homeInfo().catch(() => ({}));
+      main.append(h("section", { class: "card pad connect" },
+        h("h2", {}, "Welcome, ", account.login),
+        h("p", {}, "Your account is ready. To play, set up the game client and connect to this server:"),
+        info.connect_html ? prose(info.connect_html) : null,
+        info.connect_address ? (() => {
+          const btn = h("button", { class: "small", type: "button" }, "Copy");
+          btn.addEventListener("click", () => copyText(info.connect_address, btn));
+          return h("div", { class: "copy-line" }, h("code", {}, info.connect_address), btn);
+        })() : null,
+        h("p", { class: "hint" }, "Sign in to the game with your login and password, then make a character there.")));
+    }
     main.append(h("div", { class: "page-head" },
       h("div", { class: "ident" },
         h("span", { class: "avatar" }, account.login[0].toUpperCase()),
@@ -1364,11 +1420,74 @@
     }
   };
 
+  pages["admin-invites"] = async function (main) {
+    const d = await api("/admin/invites");
+    const err = h("p", { class: "error", role: "alert", hidden: true });
+    const fail = (ex) => { err.textContent = ex.message; err.hidden = false; };
+    const reload = () => location.reload();
+
+    const need = h("input", { type: "checkbox", class: "switch", "aria-label": "Sign-up needs an invite code" });
+    need.checked = d.invite_required;
+    need.addEventListener("change", async () => {
+      try { await api("/admin/signup", { method: "PUT", body: { invite_required: need.checked } }); } catch (ex) { need.checked = !need.checked; fail(ex); }
+    });
+    main.append(h("section", { class: "card pad" },
+      h("h2", {}, "Sign-up"),
+      h("dl", { class: "kv" },
+        h("dt", {}, "Server allows accounts"), h("dd", {}, h("span", { class: "badge " + (d.lsb_open ? "ok" : "off") }, d.lsb_open ? "Open" : "Closed")),
+        h("dt", {}, "Needs an invite code"), h("dd", {}, need)),
+      h("p", { class: "hint" }, "“Open” follows LSB's login.ACCOUNT_CREATION setting (Game settings in the desktop app). Without a code anyone who finds the page can make an account, up to 3 an hour per address and 30 a day.")));
+
+    const note = h("input", { type: "text", maxlength: String(d.max_note), placeholder: "Who it is for", "aria-label": "Note" });
+    const uses = h("input", { type: "number", min: "1", max: String(d.max_uses), value: "1", "aria-label": "Uses" });
+    const days = h("input", { type: "number", min: "0", max: "365", value: "0", "aria-label": "Days it works" });
+    const shown = h("div", { class: "stack" });
+    const make = h("form", { class: "card pad form-grid", novalidate: true },
+      h("h2", {}, "New invite code"),
+      h("label", {}, "Note"), note,
+      h("label", {}, "Uses"), uses,
+      h("label", {}, "Works for (days, 0 = no end)"), days,
+      err,
+      h("div", { class: "form-actions" }, h("button", { class: "primary", type: "submit" }, "Make code")),
+      shown);
+    make.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      err.hidden = true;
+      try {
+        const out = await api("/admin/invites", { method: "POST", body: { note: note.value, max_uses: Number(uses.value), days: Number(days.value) } });
+        const btn = h("button", { class: "small", type: "button" }, "Copy");
+        btn.addEventListener("click", () => copyText(out.code, btn));
+        shown.replaceChildren(h("p", { class: "hint" }, "Copy it now: it isn't shown again."), h("div", { class: "copy-line" }, h("code", {}, out.code), btn),
+          h("button", { type: "button", onclick: reload }, "Done"));
+      } catch (ex) { fail(ex); }
+    });
+
+    const badge = { active: "ok", "used up": "off", expired: "off", revoked: "bad" };
+    main.append(make, h("section", { class: "card table-card" },
+      h("div", { class: "card-head" }, h("h2", {}, "Codes")),
+      h("div", { class: "table-wrap" }, h("table", { class: "data" },
+        h("thead", {}, h("tr", {}, ["Code", "Note", "Uses", "Ends", "Made", "State", ""].map((t) => h("th", {}, t)))),
+        h("tbody", {}, d.items.length ? d.items.map((i) => h("tr", {},
+          h("td", {}, h("code", {}, `…${i.hint}`)),
+          h("td", { class: "wrap" }, i.note || "–"),
+          h("td", { class: "num" }, `${i.uses} / ${i.max_uses}`),
+          h("td", {}, i.expires ? fmtDT(i.expires) : "No end"),
+          h("td", {}, `${date(i.created)} · ${i.created_by}`),
+          h("td", {}, h("span", { class: "badge " + (badge[i.state] || "off") }, i.state)),
+          h("td", {}, i.state === "active" ? h("button", { class: "small danger", type: "button", onclick: () => confirmDialog({
+            title: "Revoke this code?", danger: true, icon: "bans", confirm: "Revoke",
+            body: h("p", {}, "It stops working now. Accounts already made with it stay."),
+            onSubmit: async () => { await api(`/admin/invites/${i.id}/revoke`, { method: "POST", body: {} }); reload(); },
+          }) }, "Revoke") : null)))
+          : h("tr", { class: "empty-row" }, h("td", { colspan: "7" }, "No codes yet.")))))));
+  };
+
   // ---- start ----
 
   (async function start() {
     try { me = await api("/me"); } catch { me = { role: "visitor", server_name: "Server" }; }
     if (page === "signin") return pages.signin();
+    if (page === "signup") return pages.signup();
     if (body.classList.contains("app")) {
       if (!isAdmin()) { location.replace("/signin?next=" + encodeURIComponent(location.pathname)); return; }
       adminShell();

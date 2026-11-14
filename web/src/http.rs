@@ -64,6 +64,7 @@ impl From<DbError> for ApiError {
                 StatusCode::SERVICE_UNAVAILABLE,
                 "The game database isn't ready yet. If this lasts, the database update failed: check the server's log.",
             ),
+            DbError::Busy => ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "The site is busy. Try again in a moment."),
             DbError::Failed(m) => {
                 tracing::error!("database error: {m}");
                 ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "Something went wrong on the server.")

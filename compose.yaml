@@ -219,11 +219,11 @@ services:
   # Off unless .env's COMPOSE_PROFILES includes web. Listens on this
   # computer only unless WEB_BIND_IP names another of its addresses.
   web:
-    image: ${WEB_IMAGE:-ghcr.io/akreao/ffxi-wrapper/web:0.5.0}
+    image: ${WEB_IMAGE:-ghcr.io/akreao/ffxi-wrapper/web:0.6.0}
     pull_policy: missing
     # Used only when the image can't be pulled, like db-init's.
     build:
-      context: ${WEB_REPO:-https://github.com/akreao/ffxi-wrapper.git}#web-v0.5.0
+      context: ${WEB_REPO:-https://github.com/akreao/ffxi-wrapper.git}#web-v0.6.0
       dockerfile: docker/web/Dockerfile
     profiles: [web]
     restart: on-failure
@@ -241,13 +241,14 @@ services:
       DB_PASSWORD: ${WEB_DB_PASSWORD:-}
       ADMIN_SECRET: ${ADMIN_SECRET:-}
       SERVER_NAME: ${SERVER_NAME:-}
-      # The address players use (https://<WEB_DOMAIN> when the public profile is on),
-      # and the proxy container whose X-Forwarded-For it believes. Where there is no
-      # `proxy` service the name doesn't resolve and no header is trusted.
-      WEB_PUBLIC_URL: ${WEB_PUBLIC_URL:-${WEB_DOMAIN:+https://${WEB_DOMAIN}}}
-      WEB_TRUSTED_PROXY: proxy
+      # Phase 4: the address players use, and the proxy it may trust.
+      WEB_PUBLIC_URL: ${WEB_PUBLIC_URL:-}
+      # Sign-up is open only while LSB's login.ACCOUNT_CREATION is on, which the site
+      # reads from the same settings files LSB loads (read-only).
+      WEB_LSB_SETTINGS: /lsb-settings
     volumes:
       - ${DATA_DIR:-./data}/web:/data
+      - ./overrides/settings:/lsb-settings:ro
     ports:
       - "${WEB_BIND_IP:-127.0.0.1}:${WEB_PORT:-54080}:8080"
     healthcheck:

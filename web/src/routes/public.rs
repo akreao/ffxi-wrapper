@@ -133,8 +133,7 @@ async fn home(State(state): State<Shared>, ClientIp(ip): ClientIp) -> ApiResult<
     map.insert("server_name".into(), json!(state.cfg.server_name));
     map.insert("up".into(), json!(online.is_some()));
     map.insert("online".into(), json!(online));
-    // The later sign-up PR turns this on.
-    map.insert("signup_open".into(), json!(false));
+    map.insert("signup_open".into(), json!(state.signup_open().await));
     Ok(Json(out))
 }
 

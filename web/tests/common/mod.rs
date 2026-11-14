@@ -127,6 +127,8 @@ pub struct Data {
     pub chars: Vec<FakeChar>,
     pub online: Vec<OnlineRow>,
     pub down: bool,
+    /// Making an account fails, as when the database refuses the insert.
+    pub fail_create: bool,
     pub not_ready: bool,
     /// (accid, charid) of every account-scoped character query, in order.
     pub char_queries: Vec<(i64, i64)>,
@@ -251,6 +253,19 @@ impl Game for Fake {
         self.check()?;
         self.0.lock().unwrap().accounts.iter_mut().find(|a| a.id == accid).unwrap().hash = hash.into();
         Ok(())
+    }
+    async fn create_account(&self, login: &str, hash: &str) -> DbResult<Created> {
+        self.check()?;
+        let mut d = self.0.lock().unwrap();
+        if d.fail_create {
+            return Err(DbError::Failed("insert failed".into()));
+        }
+        if d.accounts.iter().any(|a| a.login.eq_ignore_ascii_case(login)) {
+            return Ok(Created::Taken);
+        }
+        let id = (d.accounts.iter().map(|a| a.id).max().unwrap_or(0) + 1).max(1000);
+        d.accounts.push(FakeAccount { id, login: login.into(), hash: hash.into(), status: 1, totp: None, ban: None, trust_tokens: true });
+        Ok(Created::Account(id))
     }
     async fn counts(&self) -> DbResult<Counts> {
         self.check()?;
