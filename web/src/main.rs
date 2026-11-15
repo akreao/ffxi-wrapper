@@ -112,12 +112,17 @@ fn spawn_housekeeping(state: ffxi_web::Shared) {
     });
 }
 
-/// Every minute: lift bans whose end has passed (LSB never does).
+/// Every minute: lift bans whose end has passed (LSB never does). Also makes the one-time
+/// copy of website roles from GM levels as soon as the game database answers (the first
+/// tick is at once), rather than waiting for the first request that needs a role.
 fn spawn_ban_lifter(state: ffxi_web::Shared) {
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(60));
         loop {
             tick.tick().await;
+            if let Err(e) = ffxi_web::roles::ensure_seeded(&state).await {
+                tracing::warn!("website roles not copied yet: {e:?}");
+            }
             let n = ffxi_web::routes::admin::lift_expired_bans(&state).await;
             if n > 0 {
                 tracing::info!("lifted {n} ban(s) that ran out");

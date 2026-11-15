@@ -191,15 +191,72 @@ async fn nobody_acts_on_an_equal_or_higher_level_and_refusals_are_logged() {
     assert_eq!(refused, 5, "every refusal is in the log");
 }
 
+async fn owner_link_session(s: &Site) -> Who {
+    let r = s.send(Req::get(&format!("/auth/owner?t={}", wrapper_core::owner_link::sign(SECRET, NOW as u64).unwrap()))).await;
+    let cookie = r.cookie().unwrap();
+    let csrf = s.send(Req::get("/api/me").cookie(&cookie)).await.json()["csrf"].as_str().unwrap().to_string();
+    Who { cookie, csrf }
+}
+
+// ---- website roles ----
+
 #[tokio::test]
-async fn the_database_guard_catches_a_level_that_changed_after_the_check() {
-    use ffxi_web::game::Game;
-    use ffxi_web::model::Acted;
+async fn roles_are_copied_from_gm_levels_once_then_gm_levels_give_none() {
     let s = site_with_people().await;
-    // The check inside the write is what counts: at or above the guard, nothing changes.
-    assert_eq!(s.fake.ban_account(3, None, "r", Some(3)).await.unwrap(), Acted::TooHigh);
-    assert_eq!(s.fake.ban_account(2, None, "r", Some(3)).await.unwrap(), Acted::Done);
-    assert_eq!(s.fake.ban_account(3, None, "r", None).await.unwrap(), Acted::Done, "the owner link has no limit");
+    // The first request copies today's roles: halvard and moira Moderator, steven and ownerb Owner.
+    let o = owner(&s).await;
+    let list = s.send(get(&o, "/api/admin/accounts?per=100")).await.json();
+    let roles: Vec<(String, String)> =
+        list["items"].as_array().unwrap().iter().map(|a| (a["login"].as_str().unwrap().into(), a["role"].as_str().unwrap().into())).collect();
+    for (login, role) in [("kaelyn", "player"), ("ravenna", "player"), ("halvard", "moderator"), ("steven", "owner"), ("moira", "moderator"), ("ownerb", "owner")] {
+        assert!(roles.contains(&(login.into(), role.into())), "{login} should be {role}: {roles:?}");
+    }
+    // After that, in-game GM levels change nothing on the site, either way.
+    s.fake.set_gm(1, 5); // kaelyn promoted in game (say with !promote)
+    s.fake.set_gm(3, 0); // halvard demoted in game
+    let k = who(&s, "kaelyn", "hunter22").await;
+    assert_eq!(s.send(get(&k, "/api/admin/dashboard")).await.status, StatusCode::FORBIDDEN);
+    let m = moderator(&s).await;
+    assert_eq!(s.send(get(&m, "/api/admin/dashboard")).await.status, StatusCode::OK);
+    // A newly added GM 5 account is a Player too: the copy happened once.
+    s.fake.add_account(7, "latecomer", "late-password", 5);
+    let l = who(&s, "latecomer", "late-password").await;
+    assert_eq!(s.send(Req::get("/api/me").cookie(&l.cookie)).await.json()["role"], "player");
+}
+
+#[tokio::test]
+async fn only_an_owner_sets_website_roles_within_the_rules() {
+    let s = site_with_people().await;
+    let o = owner(&s).await;
+    let m = moderator(&s).await;
+    let k = who(&s, "kaelyn", "hunter22").await;
+    let url = "/api/admin/accounts/1/role";
+    assert_eq!(s.send(post(&m, url, json!({ "role": "moderator", "reason": "x" }))).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(s.send(post(&k, url, json!({ "role": "moderator", "reason": "x" }))).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(s.send(post(&o, url, json!({ "role": "admin", "reason": "x" }))).await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(s.send(post(&o, url, json!({ "role": "moderator" }))).await.status, StatusCode::BAD_REQUEST, "needs a reason");
+    assert_eq!(s.send(post(&o, url, json!({ "role": "player", "reason": "x" }))).await.status, StatusCode::BAD_REQUEST, "no change");
+
+    assert_eq!(s.send(post(&o, url, json!({ "role": "moderator", "reason": "Runs our events" }))).await.status, StatusCode::OK);
+    // Her old session ended; signed in again she is a Moderator, with no GM level at all.
+    assert_eq!(s.send(Req::get("/api/me").cookie(&k.cookie)).await.json()["role"], "visitor");
+    let k = who(&s, "kaelyn", "hunter22").await;
+    assert_eq!(s.send(Req::get("/api/me").cookie(&k.cookie)).await.json()["role"], "moderator");
+    let d = s.send(get(&o, "/api/admin/accounts/1")).await.json();
+    assert_eq!(d["role"], "moderator");
+    assert_eq!(d["history"][0]["action"], "site_role");
+    assert_eq!(d["history"][0]["detail"], "{\"after\":\"moderator\",\"before\":\"player\"}");
+
+    // Not their own role, not another Owner's; an Owner may make another Owner.
+    assert_eq!(s.send(post(&o, "/api/admin/accounts/4/role", json!({ "role": "player", "reason": "x" }))).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(s.send(post(&o, "/api/admin/accounts/6/role", json!({ "role": "player", "reason": "x" }))).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(s.send(post(&o, "/api/admin/accounts/2/role", json!({ "role": "owner", "reason": "co-owner" }))).await.status, StatusCode::OK);
+    // Only the owner link takes Owner away.
+    let link = owner_link_session(&s).await;
+    assert_eq!(s.send(post(&link, "/api/admin/accounts/6/role", json!({ "role": "player", "reason": "stepped down" }))).await.status, StatusCode::OK);
+    let b = who(&s, "ownerb", "owner-pass-b").await;
+    assert_eq!(s.send(Req::get("/api/me").cookie(&b.cookie)).await.json()["role"], "player");
+    assert_eq!(s.send(post(&o, "/api/admin/accounts/999/role", json!({ "role": "player", "reason": "x" }))).await.status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -327,10 +384,19 @@ async fn only_an_owner_changes_gm_levels_within_the_rules() {
     let d = s.send(get(&o, "/api/admin/characters/20")).await.json();
     assert_eq!(d["history"][0]["action"], "gm_level");
     assert_eq!(d["history"][0]["detail"], "{\"after\":3,\"before\":0}");
-    // Another owner's characters, and the owner's own, are out of reach.
+    // A GM level gives no website role.
+    let r = who(&s, "ravenna", "secret-pw-2").await;
+    assert_eq!(s.send(get(&r, "/api/admin/dashboard")).await.status, StatusCode::FORBIDDEN);
+    // Another Owner account's characters are out of reach, whatever that character's own
+    // level: the check is the account's website role.
+    s.fake.add_char(61, 6, "OwnerbAlt", 0);
+    assert_eq!(s.send(post(&o, "/api/admin/characters/61/gm-level", json!({ "level": 3, "reason": "x" }))).await.status, StatusCode::FORBIDDEN);
     assert_eq!(s.send(post(&o, "/api/admin/characters/60/gm-level", json!({ "level": 0, "reason": "x" }))).await.status, StatusCode::FORBIDDEN);
-    assert_eq!(s.send(post(&o, "/api/admin/characters/40/gm-level", json!({ "level": 0, "reason": "lock myself out" }))).await.status, StatusCode::FORBIDDEN);
-    assert_eq!(s.fake.gm_of_char(40), 5);
+    assert_eq!(s.fake.gm_of_char(61), 0);
+    // The owner's own characters are theirs to change, and that changes no website role.
+    assert_eq!(s.send(post(&o, "/api/admin/characters/40/gm-level", json!({ "level": 0, "reason": "play as a player" }))).await.status, StatusCode::OK);
+    assert_eq!(s.fake.gm_of_char(40), 0);
+    assert_eq!(s.send(get(&o, "/api/admin/dashboard")).await.status, StatusCode::OK);
     // Not while the character is in game.
     s.fake.set_online(20, true);
     assert_eq!(s.send(post(&o, url, json!({ "level": 0, "reason": "undo" }))).await.status, StatusCode::CONFLICT);

@@ -27,9 +27,40 @@ impl Role {
     }
 }
 
-/// The role of an account, from the highest GM level among its characters:
-/// 5 is Owner, 3 and 4 are Moderator, anything else is a Player.
-pub fn role_for_gm(gm: i64) -> Role {
+impl Role {
+    /// A stored role name; anything else is a Player.
+    pub fn from_stored(s: &str) -> Role {
+        match s {
+            "owner" => Role::Owner,
+            "moderator" => Role::Moderator,
+            _ => Role::Player,
+        }
+    }
+
+    /// A role an owner may give: player, moderator or owner.
+    pub fn assignable(s: &str) -> Option<Role> {
+        match s {
+            "player" => Some(Role::Player),
+            "moderator" => Some(Role::Moderator),
+            "owner" => Some(Role::Owner),
+            _ => None,
+        }
+    }
+}
+
+/// The role an account gets from its stored row, if any. The row must name the account's
+/// current login: a role never passes to a different account that later gets the same id.
+pub fn stored_role(row: Option<(&str, &str)>, login: &str) -> Role {
+    match row {
+        Some((role, stored_login)) if stored_login == login => Role::from_stored(role),
+        _ => Role::Player,
+    }
+}
+
+/// The role the site used to work out from the highest GM level among an account's
+/// characters (5 Owner, 3 and 4 Moderator). Now only used once, to copy those roles into
+/// the site's own table on upgrade; GM levels no longer give website roles.
+pub fn legacy_role_for_gm(gm: i64) -> Role {
     match gm {
         5.. => Role::Owner,
         3 | 4 => Role::Moderator,
@@ -37,22 +68,20 @@ pub fn role_for_gm(gm: i64) -> Role {
     }
 }
 
-/// Who is acting, for the "never act on someone at your own level or above" rule.
+/// Who is acting, for the "never act on someone at your own role or above" rule.
 #[derive(Debug, Clone, Copy)]
 pub struct Actor {
     pub role: Role,
-    pub gm: i64,
     pub owner_link: bool,
 }
 
-/// May `actor` change an account whose highest GM level is `target_gm`? Not when
-/// that level is equal to or higher than their own; the owner link (which has no
-/// account of its own) may act on anyone.
-pub fn can_act_on(actor: Actor, target_gm: i64) -> bool {
+/// May `actor` change an account whose website role is `target`? Only when that role is
+/// below their own; the owner link (which has no account of its own) may act on anyone.
+pub fn can_act_on(actor: Actor, target: Role) -> bool {
     if actor.owner_link {
         return true;
     }
-    actor.role.is_admin() && target_gm < actor.gm
+    actor.role.is_admin() && target < actor.role
 }
 
 // ---- logins and passwords, as LSB checks them ----
@@ -175,27 +204,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn gm_levels_map_to_roles() {
-        let roles: Vec<Role> = (0..=5).map(role_for_gm).collect();
-        assert_eq!(roles, [Role::Player, Role::Player, Role::Player, Role::Moderator, Role::Moderator, Role::Owner]);
+    fn roles_come_from_the_stored_row_for_the_same_login() {
+        assert_eq!(stored_role(Some(("owner", "steven")), "steven"), Role::Owner);
+        assert_eq!(stored_role(Some(("moderator", "halvard")), "halvard"), Role::Moderator);
+        assert_eq!(stored_role(Some(("owner", "steven")), "someoneelse"), Role::Player);
+        assert_eq!(stored_role(Some(("admin", "x")), "x"), Role::Player);
+        assert_eq!(stored_role(None, "x"), Role::Player);
         assert!(Role::Owner > Role::Moderator && Role::Moderator > Role::Player && Role::Player > Role::Visitor);
         assert!(!Role::Player.is_admin() && Role::Moderator.is_admin());
+        assert_eq!(Role::assignable("visitor"), None);
     }
 
     #[test]
-    fn nobody_acts_on_an_equal_or_higher_level_except_the_owner_link() {
-        let moderator = Actor { role: Role::Moderator, gm: 3, owner_link: false };
-        assert!(can_act_on(moderator, 0));
-        assert!(can_act_on(moderator, 2));
-        assert!(!can_act_on(moderator, 3));
-        assert!(!can_act_on(moderator, 5));
-        let owner = Actor { role: Role::Owner, gm: 5, owner_link: false };
-        assert!(can_act_on(owner, 4));
-        assert!(!can_act_on(owner, 5));
-        let link = Actor { role: Role::Owner, gm: 0, owner_link: true };
-        assert!(can_act_on(link, 5));
-        let player = Actor { role: Role::Player, gm: 0, owner_link: false };
-        assert!(!can_act_on(player, 0));
+    fn the_one_time_copy_maps_gm_levels_as_before() {
+        let roles: Vec<Role> = (0..=5).map(legacy_role_for_gm).collect();
+        assert_eq!(roles, [Role::Player, Role::Player, Role::Player, Role::Moderator, Role::Moderator, Role::Owner]);
+    }
+
+    #[test]
+    fn nobody_acts_on_an_equal_or_higher_role_except_the_owner_link() {
+        let moderator = Actor { role: Role::Moderator, owner_link: false };
+        assert!(can_act_on(moderator, Role::Player));
+        assert!(!can_act_on(moderator, Role::Moderator));
+        assert!(!can_act_on(moderator, Role::Owner));
+        let owner = Actor { role: Role::Owner, owner_link: false };
+        assert!(can_act_on(owner, Role::Moderator));
+        assert!(!can_act_on(owner, Role::Owner));
+        let link = Actor { role: Role::Owner, owner_link: true };
+        assert!(can_act_on(link, Role::Owner));
+        let player = Actor { role: Role::Player, owner_link: false };
+        assert!(!can_act_on(player, Role::Player));
     }
 
     #[test]

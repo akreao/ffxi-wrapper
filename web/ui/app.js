@@ -202,7 +202,7 @@
         items.map(([id, label, href]) => href
           ? h("a", { class: "nav-item" + (current === id ? " active" : ""), href, title: label, "aria-current": current === id ? "page" : false }, icon(id), h("span", {}, label))
           : h("a", { class: "nav-item soon", "aria-disabled": "true", title: `${label}: later` }, icon(id), h("span", {}, label), h("em", {}, "Later"))))),
-      h("div", { class: "sidebar-foot" }, "LandSandBoat", h("br"), "Site 0.6.0"));
+      h("div", { class: "sidebar-foot" }, "LandSandBoat", h("br"), "Site 0.8.0"));
     const scrim = h("div", { class: "scrim" });
     const toggle = h("button", { class: "icon-button menu-toggle", "aria-label": "Menu", "aria-controls": "sidebar", "aria-expanded": "false" }, icon("menu"));
     const theme = h("button", { class: "icon-button theme-toggle", "aria-label": "Switch theme", title: "Switch between Light and Dark" });
@@ -685,7 +685,7 @@
     wireTabs(main);
   };
 
-  const ACTION_BADGE = { ban: "bad", unban: "ok", gm_level: "gm", password_reset: "busy", password_change: "info" };
+  const ACTION_BADGE = { ban: "bad", unban: "ok", gm_level: "gm", site_role: "info", password_reset: "busy", password_change: "info" };
 
   pages.dashboard = async function (main) {
     const counts = h("div", { class: "stats four" });
@@ -746,8 +746,8 @@
 
   // ---- the admin panel: players, bans and the log ----
 
-  const ACTION_LABEL = { ban: "Ban", unban: "Unban", gm_level: "GM level", password_reset: "Password reset", totp_reset: "Two-step reset", password_change: "Password change", sign_in: "Sign-in", sign_in_failed: "Sign-in failed", news_create: "News draft", news_edit: "News edit", news_publish: "News published", news_unpublish: "News unpublished", news_pin: "News pinned", news_unpin: "News unpinned", news_delete: "News deleted", content_edit: "Content edit", content_reset: "Content reset" };
-  const ACTION_TONE = { ban: "bad", unban: "ok", gm_level: "gm", password_reset: "busy", totp_reset: "busy", password_change: "info", sign_in: "off", sign_in_failed: "busy", news_publish: "ok", news_delete: "bad", news_unpublish: "busy" };
+  const ACTION_LABEL = { ban: "Ban", unban: "Unban", gm_level: "GM level", site_role: "Website role", password_reset: "Password reset", totp_reset: "Two-step reset", password_change: "Password change", sign_in: "Sign-in", sign_in_failed: "Sign-in failed", news_create: "News draft", news_edit: "News edit", news_publish: "News published", news_unpublish: "News unpublished", news_pin: "News pinned", news_unpin: "News unpinned", news_delete: "News deleted", content_edit: "Content edit", content_reset: "Content reset" };
+  const ACTION_TONE = { ban: "bad", unban: "ok", gm_level: "gm", site_role: "info", password_reset: "busy", totp_reset: "busy", password_change: "info", sign_in: "off", sign_in_failed: "busy", news_publish: "ok", news_delete: "bad", news_unpublish: "busy" };
 
   const pathId = () => location.pathname.split("/").pop();
   const fmtDT = (s) => (s ? new Date(s * 1000).toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "–");
@@ -760,7 +760,11 @@
   }
   const parseDetail = (a) => { try { return (a.detail && JSON.parse(a.detail)) || {}; } catch { return {}; } };
   const actorName = (a) => a.actor_login || (a.actor_kind === "owner" ? "Owner" : a.actor_kind === "system" ? "The site" : "Unknown");
-  const gmBadge = (n) => (n > 0 ? h("span", { class: "badge gm" }, `GM ${n}`) : null);
+  const gmBadge = (n) => (n > 0 ? h("span", { class: "badge gm", title: "In-game GM level" }, `GM ${n}`) : null);
+  // Website roles belong to accounts and are set by an owner; GM levels belong to characters
+  // and only control in-game commands.
+  const ROLE_NAME = { player: "Player", moderator: "Moderator", owner: "Owner" };
+  const roleBadge = (r) => (r === "owner" || r === "moderator" ? h("span", { class: "badge info", title: "Website role" }, ROLE_NAME[r]) : null);
 
   // What an action-log row says, for the History lists and the log's Details column.
   function describe(a) {
@@ -769,6 +773,7 @@
       case "ban": return { tone: "bad", what: `Banned ${d.until ? "until " + fmtDT(d.until) : "until someone lifts it"} by ${who}` };
       case "unban": return a.actor_kind === "system" ? { tone: "ok", what: "Ban ended" } : { tone: "ok", what: `Unbanned by ${who}` };
       case "gm_level": return { tone: "gm", what: `GM level ${d.before} → ${d.after} by ${who}` };
+      case "site_role": return { tone: "info", what: `Website role ${ROLE_NAME[d.before] || d.before} → ${ROLE_NAME[d.after] || d.after} by ${who}` };
       case "password_reset": return { tone: "info", what: `Password reset by ${who}` };
       case "totp_reset": return { tone: "info", what: `Two-step sign-in removed by ${who}` };
       case "news_create": case "news_edit": case "news_publish": case "news_unpublish": case "news_pin": case "news_unpin": case "news_delete":
@@ -909,7 +914,7 @@
       toolbar: (ctx, d) => [segmented([["all", `All ${d.counts.accounts}`], ["online", `Online ${d.counts.online}`], ["banned", `Banned ${d.counts.banned}`]], ctx.st.status, (v) => ctx.set("status", v), "Status")],
       row: (a) => h("tr", { class: a.status & 1 ? false : "is-banned" },
         h("td", { class: "num id hide-phone" }, a.id),
-        h("td", {}, h("a", { href: `/admin/accounts/${a.id}` }, a.login)),
+        h("td", {}, h("a", { href: `/admin/accounts/${a.id}` }, a.login), roleBadge(a.role) ? [" ", roleBadge(a.role)] : null),
         a.characters.length ? h("td", {}, a.characters.join(", "), a.gm > 0 ? [" ", gmBadge(a.gm)] : null) : h("td", { class: "muted" }, "None yet"),
         h("td", {}, a.status & 1 ? (a.online ? h("span", { class: "badge ok" }, "Online") : h("span", { class: "badge off" }, "Offline")) : h("span", { class: "badge bad" }, "Banned")),
         h("td", {}, a.last_login ? when(a.last_login) : h("span", { class: "muted" }, "Never")),
@@ -1010,6 +1015,39 @@
     });
   }
 
+  // The owner's control for an account's website role. Owners can't change their own role
+  // or another Owner's; only the owner link (from the desktop app) can take Owner away.
+  function roleCard(a, d, owner, done) {
+    if (!owner) return null;
+    const pick = h("select", { id: "site-role", disabled: !d.can_act || d.own }, ["player", "moderator", "owner"].map((r) => h("option", { value: r, selected: r === d.role }, ROLE_NAME[r])));
+    const save = h("button", { class: "primary", type: "button", disabled: !d.can_act || d.own }, "Save");
+    save.addEventListener("click", () => {
+      const role = pick.value;
+      if (role === d.role) return;
+      confirmDialog({
+        title: `Make ${a.login} ${role === "owner" ? "an Owner" : "a " + ROLE_NAME[role]}?`, icon: "key", danger: role !== "player", confirm: `Set ${ROLE_NAME[role]}`,
+        body: [h("p", {}, role === "owner"
+          ? "Owners can do everything on this site, including resetting passwords, changing GM levels and making other Owners. Only the owner link from the desktop app can take Owner away again."
+          : role === "moderator"
+            ? "Moderators can sign in to this admin panel, see accounts and characters, and ban or unban players."
+            : "Players only see their own account. Their admin access ends at once."),
+          h("p", {}, "This doesn't change any GM level: GM levels only control in-game commands. Their web sign-ins end, so they sign in again with the new role."),
+          ...reasonField("role-reason", "Reason", true, "Why. Kept in the admin log.")],
+        onSubmit: async (dlg) => {
+          const reason = dlg.querySelector("#role-reason").value.trim();
+          if (!reason) throw new Error("Say why: a reason is needed.");
+          await api(`/admin/accounts/${a.id}/role`, { method: "POST", body: { role, reason } });
+          dlg.close();
+          done();
+        },
+      });
+    });
+    const hint = d.own ? "You can't change your own website role." : !d.can_act ? "Only the owner link from the desktop app can change another Owner's role." : "Set by owners only. GM levels give no website role.";
+    return h("div", {}, h("h2", {}, "Website role"),
+      h("dl", { class: "kv" }, h("dt", {}, h("label", { for: "site-role" }, "Role")), h("dd", {}, pick)),
+      h("div", { class: "save-row" }, h("span", { class: "hint grow" }, hint), save));
+  }
+
   pages.account = async function (main) {
     const id = pathId();
     async function draw() {
@@ -1032,7 +1070,7 @@
               online.length ? [" ", h("span", { class: "badge info plain" }, `${online.length} ${online.length === 1 ? "character" : "characters"} in game`)] : null),
               h("div", { class: "sub" }, "Account ", h("code", {}, a.id), ` · created ${date(a.created)}`))),
           h("div", { class: "toolbar" }, actions)),
-        d.can_act ? null : h("div", { class: "update-bar lock" }, icon("lock"), h("p", {}, "This account is at or above your GM level, so you can look but not change it.")),
+        d.can_act ? null : h("div", { class: "update-bar lock" }, icon("lock"), h("p", {}, "This account's website role is the same as yours or higher, so you can look but not change it.")),
         banned ? h("div", { class: "update-bar lock" }, icon("bans"), h("p", {}, ban
           ? [h("strong", {}, ban.until ? `Banned until ${fmtDT(ban.until)}. ` : "Banned until someone lifts it. "), ban.reason || "No reason recorded."]
           : "Banned without a record (the ban was made outside this site).")) : null,
@@ -1041,7 +1079,7 @@
             h("section", { class: "card table-card" },
               h("div", { class: "card-head" }, h("h2", {}, "Characters"), h("span", { class: "muted" }, `${a.characters.length} on this account`)),
               h("div", { class: "table-wrap" }, h("table", { class: "data" },
-                h("thead", {}, h("tr", {}, h("th", {}, "Name"), h("th", {}, "Job"), h("th", {}, "Zone"), h("th", { class: "hide-phone" }, "GM"), h("th", {}, "Last played"))),
+                h("thead", {}, h("tr", {}, h("th", {}, "Name"), h("th", {}, "Job"), h("th", {}, "Zone"), h("th", { class: "hide-phone" }, "GM level"), h("th", {}, "Last played"))),
                 h("tbody", {}, a.characters.length ? a.characters.map((c) => h("tr", {},
                   h("td", {}, h("span", { class: "dot" + (c.online ? " ok" : "") }), h("a", { href: `/admin/characters/${c.charid}` }, c.name)),
                   jobCell(c), h("td", {}, c.zone || "–"), h("td", { class: "hide-phone muted" }, c.gm), h("td", {}, c.online ? "Now" : date(c.last_logout))))
@@ -1055,7 +1093,9 @@
               h("dt", {}, "Created"), h("dd", {}, fmtDT(a.created)),
               h("dt", {}, "Last login"), h("dd", {}, a.last_login ? fmtDT(a.last_login) : "Never"),
               h("dt", {}, "Two-step sign-in"), h("dd", {}, a.has_totp ? "On" : "Off"),
-              h("dt", {}, "Highest GM level"), h("dd", {}, String(a.gm)))))].filter(Boolean));
+              owner ? null : [h("dt", {}, "Website role"), h("dd", {}, ROLE_NAME[d.role] || d.role)],
+              h("dt", {}, "Highest in-game GM level"), h("dd", {}, String(a.gm))),
+            roleCard(a, d, owner, draw)))].filter(Boolean));
     }
     await draw();
   };
@@ -1081,7 +1121,7 @@
     await view.load();
   };
 
-  const GM_LEVELS = ["0, none", "1", "2", "3, moderator", "4, moderator", "5, every command"];
+  const GM_LEVELS = ["0, none", "1", "2", "3", "4", "5, every command"];
 
   pages.character = async function (main) {
     const id = pathId();
@@ -1095,14 +1135,15 @@
     const panel = (tid, on, ...kids) => h("div", { id: "p-" + tid, class: "tabpanel", role: "tabpanel", "aria-labelledby": "tab-" + tid, hidden: !on }, kids);
     const stat = (label, value, sub) => h("section", { class: "card stat" }, h("div", { class: "stat-label" }, label), h("div", { class: "stat-value" }, value), h("div", { class: "stat-sub" }, sub || ""));
 
-    const gm = h("select", { id: "gm", disabled: !(owner && d.can_act) || c.online }, GM_LEVELS.map((t, i) => h("option", { value: i, selected: i === c.gm }, t)));
-    const save = h("button", { class: "primary", type: "button", disabled: !(owner && d.can_act) || c.online }, "Save");
+    const mayGm = owner && (d.can_act || d.own);
+    const gm = h("select", { id: "gm", disabled: !mayGm || c.online }, GM_LEVELS.map((t, i) => h("option", { value: i, selected: i === c.gm }, t)));
+    const save = h("button", { class: "primary", type: "button", disabled: !mayGm || c.online }, "Save");
     save.addEventListener("click", () => {
       const level = Number(gm.value);
       if (level === c.gm) return;
       confirmDialog({
         title: `Change ${c.name}'s GM level?`, icon: "key", danger: level >= 3, confirm: `Set level ${level}`,
-        body: [h("p", {}, `From ${c.gm} to ${level}. It applies the next time they log in or change zone. Levels 3 and 4 can sign in to this panel as moderators, 5 as an owner.`),
+        body: [h("p", {}, `From ${c.gm} to ${level}. It applies the next time they log in or change zone. It only changes which GM commands they can use in game, not their website role.`),
           ...reasonField("gm-reason", "Reason", true, "Why. Kept in the admin log.")],
         onSubmit: async (dlg) => {
           const reason = dlg.querySelector("#gm-reason").value.trim();
@@ -1112,13 +1153,13 @@
         },
       });
     });
-    const gmHint = !owner ? "Only the owner can change GM levels." : !d.can_act ? "This character's account is at or above your own level." : c.online ? "Locked while in game." : "";
+    const gmHint = !owner ? "Only an owner can change GM levels." : !mayGm ? "This character's account has the Owner website role." : c.online ? "Locked while in game." : "";
 
     main.append(
       h("div", { class: "page-head" },
         h("div", { class: "ident" }, h("span", { class: "avatar" }, c.name[0].toUpperCase()),
           h("div", {}, h("h2", {}, c.name, " ", c.online ? h("span", { class: "badge ok" }, "In game") : h("span", { class: "badge off" }, "Offline"), c.gm > 0 ? [" ", gmBadge(c.gm)] : null),
-            h("div", { class: "sub" }, "Character ", h("code", {}, c.charid), " · account ", h("a", { href: `/admin/accounts/${c.accid}` }, c.login), ` · ${NATIONS[c.nation] || "Unknown"}`)))),
+            h("div", { class: "sub" }, "Character ", h("code", {}, c.charid), " · account ", h("a", { href: `/admin/accounts/${c.accid}` }, c.login), roleBadge(d.role) ? [" ", roleBadge(d.role)] : null, ` · ${NATIONS[c.nation] || "Unknown"}`)))),
       ...(c.online ? [h("div", { class: "update-bar lock" }, icon("lock"), h("p", {}, h("strong", {}, `${c.name} is in game, so this page is read-only. `),
         "The map server holds an online character and writes it back when they log out, which would undo changes made here. Editing opens again when they log out."))] : []),
       h("nav", { class: "subtabs", role: "tablist", "aria-label": "Character sections" }, tab("overview", "Overview", true), tab("jobs", "Jobs"), tab("inventory", "Inventory"), tab("history", "History")));
@@ -1138,7 +1179,7 @@
             h("dt", {}, "Last logout"), h("dd", {}, fmtDT(c.last_logout)))),
         h("section", { class: "card pad" }, h("h2", {}, "Game master"),
           h("dl", { class: "kv" }, h("dt", {}, h("label", { for: "gm" }, "GM level")), h("dd", {}, gm,
-            h("p", { class: "hint" }, "Levels 3 and 4 can also sign in here as moderators, 5 as an owner."))),
+            h("p", { class: "hint" }, "Controls in-game GM commands only. It gives no website role: website roles are set on the account's page."))),
           h("div", { class: "save-row" }, h("span", { class: "hint grow" }, gmHint), save)))));
     main.append(panel("jobs", false, jobsCard(c)));
     main.append(panel("inventory", false, inventoryCard(inv)));

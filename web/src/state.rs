@@ -34,6 +34,11 @@ pub struct AppState {
     /// What LSB's `login.ACCOUNT_CREATION` was when last looked up (time, value); `None` = unknown.
     pub account_creation: Mutex<Option<(i64, Option<bool>)>>,
     pub public_cache: PublicCache,
+    /// Set once the one-time copy of GM-level roles into `site_roles` is known to be done.
+    pub roles_seeded: std::sync::atomic::AtomicBool,
+    /// Held from reading a target account's role to the end of a change to that account,
+    /// and while a role changes, so a check can't go stale before the change it allows.
+    pub role_gate: tokio::sync::Mutex<()>,
 }
 
 /// Public answers kept for a short while, so visitors cannot load the database.

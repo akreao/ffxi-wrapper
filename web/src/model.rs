@@ -13,11 +13,12 @@ pub struct AccountAuth {
     pub password: String,
 }
 
-/// What every request re-reads: the account's standing and its highest GM level.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// What every request re-reads: the account's standing and login (a stored website role
+/// only counts for the login it was given to).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Standing {
     pub status: i64,
-    pub gm: i64,
+    pub login: String,
 }
 
 #[derive(Debug, Clone)]
@@ -225,8 +226,6 @@ pub struct BanRow {
 pub enum Acted {
     Done,
     NotFound,
-    /// The target's GM level is not below the guard: nothing changed.
-    TooHigh,
     /// The change doesn't apply (for instance unbanning someone who isn't banned).
     NoChange,
 }

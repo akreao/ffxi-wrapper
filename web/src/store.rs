@@ -88,6 +88,34 @@ CREATE TABLE invites (
 );
 ";
 
+/// Website roles. Only Moderator and Owner accounts have a row; every other account is a
+/// Player. The login is kept with the role so a role never passes to a new account that
+/// later gets the same id. `settings.site_roles_seeded` marks the one-time copy of the
+/// roles the site used to work out from GM levels.
+const SCHEMA_V4: &str = "
+CREATE TABLE site_roles (
+  accid      INTEGER PRIMARY KEY,
+  login      TEXT NOT NULL,
+  role       TEXT NOT NULL CHECK (role IN ('moderator', 'owner')),
+  updated    INTEGER NOT NULL,
+  updated_by TEXT NOT NULL
+);
+";
+
+/// One account's stored website role.
+#[derive(Debug, Clone, Serialize)]
+pub struct SiteRole {
+    pub accid: i64,
+    pub login: String,
+    pub role: String,
+    pub updated: i64,
+    pub updated_by: String,
+}
+
+fn site_role_row(r: &sqlx::sqlite::SqliteRow) -> Result<SiteRole, sqlx::Error> {
+    Ok(SiteRole { accid: r.try_get("accid")?, login: r.try_get("login")?, role: r.try_get("role")?, updated: r.try_get("updated")?, updated_by: r.try_get("updated_by")? })
+}
+
 /// An invite code as the owner's list shows it. The code itself is never stored: only its
 /// SHA-256, and the last four characters (`hint`) so the list tells codes apart.
 #[derive(Debug, Clone, Serialize)]
@@ -338,6 +366,14 @@ impl Store {
                 sqlx::query(stmt).execute(&mut *tx).await?;
             }
             sqlx::query("PRAGMA user_version = 3").execute(&mut *tx).await?;
+            tx.commit().await?;
+        }
+        if v < 4 {
+            let mut tx = self.pool.begin().await?;
+            for stmt in SCHEMA_V4.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+                sqlx::query(stmt).execute(&mut *tx).await?;
+            }
+            sqlx::query("PRAGMA user_version = 4").execute(&mut *tx).await?;
             tx.commit().await?;
         }
         Ok(())
@@ -727,6 +763,69 @@ impl Store {
     pub async fn invite_return(&self, id: i64) -> Result<(), sqlx::Error> {
         sqlx::query("UPDATE invites SET uses = uses - 1 WHERE id = ? AND uses > 0").bind(id).execute(&self.pool).await?;
         Ok(())
+    }
+
+    // ---- website roles ----
+
+    pub async fn site_role(&self, accid: i64) -> Result<Option<SiteRole>, sqlx::Error> {
+        sqlx::query("SELECT * FROM site_roles WHERE accid = ?").bind(accid).fetch_optional(&self.pool).await?.as_ref().map(site_role_row).transpose()
+    }
+
+    /// Every Moderator and Owner (the table only holds those).
+    pub async fn site_roles(&self) -> Result<Vec<SiteRole>, sqlx::Error> {
+        sqlx::query("SELECT * FROM site_roles ORDER BY accid").fetch_all(&self.pool).await?.iter().map(site_role_row).collect()
+    }
+
+    /// Sets an account's role; `"player"` removes its row.
+    pub async fn set_site_role(&self, accid: i64, login: &str, role: &str, by: &str, now: i64) -> Result<(), sqlx::Error> {
+        if role == "player" {
+            sqlx::query("DELETE FROM site_roles WHERE accid = ?").bind(accid).execute(&self.pool).await?;
+            return Ok(());
+        }
+        sqlx::query(
+            "INSERT INTO site_roles (accid, login, role, updated, updated_by) VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(accid) DO UPDATE SET login = excluded.login, role = excluded.role,
+               updated = excluded.updated, updated_by = excluded.updated_by",
+        )
+        .bind(accid)
+        .bind(login)
+        .bind(role)
+        .bind(now)
+        .bind(by)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn site_roles_seeded(&self) -> Result<bool, sqlx::Error> {
+        Ok(self.setting("site_roles_seeded").await?.is_some())
+    }
+
+    /// The one-time copy of the roles GM levels used to give: writes `rows` (account, login,
+    /// role) and the `site_roles_seeded` mark in one transaction, unless the mark is there
+    /// already. Returns whether it wrote anything.
+    pub async fn seed_site_roles(&self, rows: &[(i64, String, &str)], now: i64) -> Result<bool, sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        let done = sqlx::query("SELECT 1 FROM settings WHERE key = 'site_roles_seeded'").fetch_optional(&mut *tx).await?.is_some();
+        if done {
+            return Ok(false);
+        }
+        for (accid, login, role) in rows {
+            sqlx::query("INSERT OR IGNORE INTO site_roles (accid, login, role, updated, updated_by) VALUES (?, ?, ?, ?, 'system')")
+                .bind(accid)
+                .bind(login)
+                .bind(role)
+                .bind(now)
+                .execute(&mut *tx)
+                .await?;
+        }
+        sqlx::query("INSERT OR IGNORE INTO settings (key, value, updated, updated_by) VALUES ('site_roles_seeded', ?, ?, 'system')")
+            .bind(rows.len().to_string())
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(true)
     }
 
     // ---- housekeeping ----
