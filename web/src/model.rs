@@ -563,3 +563,41 @@ pub struct AuditPage {
     pub items: Vec<AuditRow>,
     pub more: bool,
 }
+
+// ---- the auction house (read-only) ----
+
+/// An item with listings up at the auction house: how many, and the cheapest, for singles and stacks.
+#[derive(Debug, Clone, Default)]
+pub struct AuctionListed {
+    pub item: ItemRaw,
+    pub singles: i64,
+    pub single_low: Option<i64>,
+    pub stacks: i64,
+    pub stack_low: Option<i64>,
+}
+
+/// One `auction_house` row: a listing (no buyer yet) or a sale.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AuctionRow {
+    /// The asking price of a listing, what it went for in a sale.
+    pub price: i64,
+    /// When it was listed (a listing) or sold (a sale).
+    pub at: i64,
+    /// `seller`: the character id, or 0 for the auction house bot.
+    pub seller: i64,
+    pub seller_name: Option<String>,
+    /// `buyer`: the character id; 0 on a sale means the bot bought it (LSB always sets it).
+    pub buyer: i64,
+    pub buyer_name: Option<String>,
+}
+
+/// One side of an item at the auction house: singles or stacks.
+#[derive(Debug, Clone, Default)]
+pub struct AuctionSide {
+    /// Every listing up, though `listings` holds only the cheapest few.
+    pub listed: i64,
+    /// Cheapest first.
+    pub listings: Vec<AuctionRow>,
+    /// Newest first.
+    pub sales: Vec<AuctionRow>,
+}

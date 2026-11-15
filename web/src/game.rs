@@ -143,6 +143,13 @@ pub trait Game: Send + Sync {
     /// item is refused when they already hold one or one waits in their box: LSB wouldn't let
     /// them take a second, and returning it would only put it back in their own box.
     async fn give_item(&self, charid: i64, itemid: i64, quantity: i64, sender: &str, rare: bool) -> DbResult<Given>;
+    // ---- the auction house (read-only; listings and sales of shown items only) ----
+
+    /// Items with listings up, filtered and ordered like [`Game::items`] (same `ITEM_SHOWN` rule).
+    async fn auction_listed(&self, q: &ItemQuery) -> DbResult<Page<AuctionListed>>;
+    /// One item's singles (or stacks): the cheapest `listings` listings and the newest `sales`
+    /// sales. The caller checks that the item is shown first.
+    async fn auction_side(&self, itemid: i64, stack: bool, listings: i64, sales: i64) -> DbResult<AuctionSide>;
 }
 
 /// The most items a character's delivery box may have waiting (slot 8 and up) before a give is
@@ -1021,7 +1028,7 @@ impl Game for MariaDb {
             .fetch_one(&self.pool)
             .await?
             .try_get("n")?;
-        let rows = sqlx::query(&format!("{ITEM_SELECT} WHERE {ITEM_SHOWN} {ITEM_FILTERS} ORDER BY b.name, b.itemid LIMIT ? OFFSET ?"))
+        let rows = sqlx::query(&format!("SELECT {ITEM_COLS} {ITEM_FROM} WHERE {ITEM_SHOWN} {ITEM_FILTERS} ORDER BY b.name, b.itemid LIMIT ? OFFSET ?"))
             .bind(q.level_cap)
             .bind(&q.q).bind(&like)
             .bind(q.category).bind(q.category)
@@ -1078,8 +1085,65 @@ impl Game for MariaDb {
         Ok(Given::Done)
     }
 
+    async fn auction_listed(&self, q: &ItemQuery) -> DbResult<Page<AuctionListed>> {
+        let from = format!("FROM {AH_LISTED} JOIN item_basic b ON b.itemid = s.itemid LEFT JOIN item_equipment e ON e.itemId = b.itemid WHERE {ITEM_SHOWN} {ITEM_FILTERS}");
+        let total: i64 = bind_item_filters(sqlx::query(&format!("SELECT CAST(COUNT(*) AS SIGNED) AS n {from}")), q, like_pattern(&q.q))
+            .fetch_one(&self.pool)
+            .await?
+            .try_get("n")?;
+        let sql = format!("SELECT {ITEM_COLS}, s.singles, s.single_low, s.stacks, s.stack_low {from} ORDER BY b.name, b.itemid LIMIT ? OFFSET ?");
+        let rows = bind_item_filters(sqlx::query(&sql), q, like_pattern(&q.q))
+            .bind(q.per)
+            .bind((q.page - 1) * q.per)
+            .fetch_all(&self.pool)
+            .await?;
+        let items = rows
+            .iter()
+            .map(|r| {
+                Ok(AuctionListed {
+                    item: item_row(r)?,
+                    singles: r.try_get("singles")?,
+                    single_low: r.try_get("single_low")?,
+                    stacks: r.try_get("stacks")?,
+                    stack_low: r.try_get("stack_low")?,
+                })
+            })
+            .collect::<Result<_, sqlx::Error>>()?;
+        Ok(Page { items, total })
+    }
+
+    async fn auction_side(&self, itemid: i64, stack: bool, listings: i64, sales: i64) -> DbResult<AuctionSide> {
+        let stack = i64::from(stack);
+        let listed: i64 = sqlx::query("SELECT CAST(COUNT(*) AS SIGNED) AS n FROM auction_house WHERE buyer_name IS NULL AND itemid = ? AND stack = ?")
+            .bind(itemid)
+            .bind(stack)
+            .fetch_one(&self.pool)
+            .await?
+            .try_get("n")?;
+        let up = sqlx::query(&format!("SELECT {AH_LISTING_COLS} FROM auction_house WHERE buyer_name IS NULL AND itemid = ? AND stack = ? ORDER BY price, id LIMIT ?"))
+            .bind(itemid)
+            .bind(stack)
+            .bind(listings)
+            .fetch_all(&self.pool)
+            .await?;
+        // What the game's history window reads (LSB's GetAHItemHistory), newest first.
+        let sold = sqlx::query(&format!(
+            "SELECT {AH_SALE_COLS} FROM auction_house WHERE buyer_name IS NOT NULL AND itemid = ? AND stack = ? ORDER BY sell_date DESC, id DESC LIMIT ?"
+        ))
+        .bind(itemid)
+        .bind(stack)
+        .bind(sales)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(AuctionSide {
+            listed,
+            listings: up.iter().map(auction_row).collect::<Result<_, _>>()?,
+            sales: sold.iter().map(auction_row).collect::<Result<_, _>>()?,
+        })
+    }
+
     async fn item(&self, id: i64, level_cap: i64) -> DbResult<Option<ItemDetailRaw>> {
-        let Some(r) = sqlx::query(&format!("{ITEM_SELECT} WHERE b.itemid = ? AND {ITEM_SHOWN}"))
+        let Some(r) = sqlx::query(&format!("SELECT {ITEM_COLS} {ITEM_FROM} WHERE b.itemid = ? AND {ITEM_SHOWN}"))
             .bind(id)
             .bind(level_cap)
             .fetch_optional(&self.pool)
@@ -1242,11 +1306,49 @@ pub fn plain_text(bytes: &[u8]) -> String {
 }
 
 /// An item: `item_basic b`, and `item_equipment e` when it is equipment.
-const ITEM_SELECT: &str = "SELECT CAST(b.itemid AS SIGNED) AS id, b.name AS name, CAST(b.type AS SIGNED) AS kind,
+const ITEM_COLS: &str = "CAST(b.itemid AS SIGNED) AS id, b.name AS name, CAST(b.type AS SIGNED) AS kind,
        CAST(b.aH AS SIGNED) AS category, CAST(b.stackSize AS SIGNED) AS stack, CAST(b.flags AS SIGNED) AS flags,
        CAST(e.level AS SIGNED) AS level, CAST(e.ilevel AS SIGNED) AS ilevel,
-       CAST(COALESCE(e.jobs, 0) AS SIGNED) AS jobs, CAST(COALESCE(e.slot, 0) AS SIGNED) AS slots
-FROM item_basic b LEFT JOIN item_equipment e ON e.itemId = b.itemid";
+       CAST(COALESCE(e.jobs, 0) AS SIGNED) AS jobs, CAST(COALESCE(e.slot, 0) AS SIGNED) AS slots";
+const ITEM_FROM: &str = "FROM item_basic b LEFT JOIN item_equipment e ON e.itemId = b.itemid";
+/// Listings up at the auction house, per item. LSB marks a listing sold by setting its buyer's
+/// name, so `buyer_name IS NULL` is "still for sale" (and reads `idx_ah_active` alone).
+const AH_LISTED: &str = "(SELECT itemid,
+        CAST(SUM(stack = 0) AS SIGNED) AS singles, CAST(MIN(IF(stack = 0, price, NULL)) AS SIGNED) AS single_low,
+        CAST(SUM(stack <> 0) AS SIGNED) AS stacks, CAST(MIN(IF(stack <> 0, price, NULL)) AS SIGNED) AS stack_low
+    FROM auction_house WHERE buyer_name IS NULL GROUP BY itemid) s";
+/// One auction house row as an [`AuctionRow`]; a listing's price and date, or a sale's.
+const AH_LISTING_COLS: &str = "CAST(price AS SIGNED) AS price, CAST(date AS SIGNED) AS at, CAST(seller AS SIGNED) AS seller, seller_name,
+        CAST(0 AS SIGNED) AS buyer, CAST(NULL AS CHAR) AS buyer_name";
+const AH_SALE_COLS: &str = "CAST(sale AS SIGNED) AS price, CAST(sell_date AS SIGNED) AS at, CAST(seller AS SIGNED) AS seller, seller_name,
+        CAST(buyer AS SIGNED) AS buyer, buyer_name";
+
+/// Binds `ITEM_SHOWN`'s level cap and `ITEM_FILTERS`, in their order.
+fn bind_item_filters<'q>(
+    query: sqlx::query::Query<'q, sqlx::MySql, sqlx::mysql::MySqlArguments>,
+    q: &'q ItemQuery,
+    like: String,
+) -> sqlx::query::Query<'q, sqlx::MySql, sqlx::mysql::MySqlArguments> {
+    query
+        .bind(q.level_cap)
+        .bind(&q.q).bind(like)
+        .bind(q.category).bind(q.category)
+        .bind(q.job_bit).bind(q.job_bit)
+        .bind(q.slot_bit).bind(q.slot_bit)
+        .bind(q.min_level).bind(q.min_level)
+        .bind(q.max_level).bind(q.max_level)
+}
+
+fn auction_row(r: &sqlx::mysql::MySqlRow) -> Result<AuctionRow, sqlx::Error> {
+    Ok(AuctionRow {
+        price: r.try_get("price")?,
+        at: r.try_get("at")?,
+        seller: r.try_get("seller")?,
+        seller_name: r.try_get("seller_name")?,
+        buyer: r.try_get("buyer")?,
+        buyer_name: r.try_get("buyer_name")?,
+    })
+}
 /// Items players can have, given the server's level cap (1 bind). Left out: LSB's GM-only flag
 /// (0x2: the Judge's set), currency (type 8: gil, id 65535, which LSB keeps as an item), and
 /// equipment above the server's `MAX_LEVEL` (gear from past the server's era). Items named

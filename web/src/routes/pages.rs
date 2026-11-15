@@ -52,6 +52,7 @@ pub fn router() -> Router<Shared> {
         .route("/me", get(|s, v| page(s, v, "me.html", Access::SignedIn)))
         .route("/me/characters/{id}", get(|s, v, _p: Path<String>| page(s, v, "me-character.html", Access::SignedIn)))
         .route("/items", get(|s, v| page(s, v, "items.html", Access::SignedIn)))
+        .route("/auction", get(|s, v| page(s, v, "auction.html", Access::SignedIn)))
         .route("/admin", get(|s, v| page(s, v, "admin.html", Access::Staff)))
         .route("/admin/accounts", get(|s, v| page(s, v, "accounts.html", Access::Staff)))
         .route("/admin/accounts/{id}", get(|s, v, _p: Path<String>| page(s, v, "account.html", Access::Staff)))
@@ -60,6 +61,7 @@ pub fn router() -> Router<Shared> {
         .route("/admin/bans", get(|s, v| page(s, v, "bans.html", Access::Staff)))
         .route("/admin/help-desk", get(|s, v| page(s, v, "help-desk.html", Access::Staff)))
         .route("/admin/items", get(|s, v| page(s, v, "admin-items.html", Access::Staff)))
+        .route("/admin/auction", get(|s, v| page(s, v, "admin-auction.html", Access::Staff)))
         .route("/admin/log", get(|s, v| page(s, v, "log.html", Access::Staff)))
         .route("/admin/audit", get(|s, v| page(s, v, "audit.html", Access::Staff)))
         .route("/admin/news", get(|s, v| page(s, v, "admin-news.html", Access::Owner)))
@@ -89,7 +91,11 @@ fn read_ui(state: &Shared, name: &str) -> Option<Vec<u8>> {
 
 async fn page(State(state): State<Shared>, Viewer(id): Viewer, file: &'static str, access: Access) -> Response {
     match (access, &id) {
-        (Access::SignedIn, None) => return Redirect::to(if file == "items.html" { "/signin?next=/items" } else { "/signin?next=/me" }).into_response(),
+        (Access::SignedIn, None) => return Redirect::to(match file {
+            "items.html" => "/signin?next=/items",
+            "auction.html" => "/signin?next=/auction",
+            _ => "/signin?next=/me",
+        }).into_response(),
         (Access::SignedIn, Some(i)) if i.owner_link() => return Redirect::to("/admin").into_response(),
         (Access::Staff, None) => return Redirect::to("/signin?next=/admin").into_response(),
         (Access::Owner, None) => return Redirect::to("/signin?next=/admin").into_response(),

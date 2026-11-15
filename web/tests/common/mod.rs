@@ -145,6 +145,8 @@ pub struct Data {
     pub audit_queries: Vec<AuditQuery>,
     /// Delivery box rows the site wrote: (charid, itemid, quantity, sender).
     pub gives: Vec<(i64, i64, i64, String)>,
+    /// Auction house rows: (itemid, stack, row); a row with a buyer name is a sale.
+    pub auction: Vec<(i64, bool, AuctionRow)>,
 }
 
 #[derive(Clone, Debug)]
@@ -218,6 +220,9 @@ impl Fake {
     }
     pub fn ticket(&self, id: i64) -> FakeTicket {
         self.0.lock().unwrap().tickets.iter().find(|t| t.id == id).unwrap().clone()
+    }
+    pub fn add_auction(&self, itemid: i64, stack: bool, row: AuctionRow) {
+        self.0.lock().unwrap().auction.push((itemid, stack, row));
     }
     pub fn add_item(&self, item: ItemDetailRaw) {
         self.0.lock().unwrap().items.push(item);
@@ -686,6 +691,38 @@ impl Game for Fake {
         }
         d.gives.push((charid, itemid, quantity, sender.to_string()));
         Ok(Given::Done)
+    }
+
+    async fn auction_listed(&self, q: &ItemQuery) -> DbResult<Page<AuctionListed>> {
+        self.check()?;
+        let hits = self.items(q).await?;
+        let d = self.0.lock().unwrap();
+        let rows: Vec<AuctionListed> = hits
+            .items
+            .into_iter()
+            .filter_map(|item| {
+                let id = item.id;
+                let up = |stack: bool| d.auction.iter().filter(move |(i, s, r)| *i == id && *s == stack && r.buyer_name.is_none()).map(|(_, _, r)| r.price);
+                let (singles, stacks) = (up(false).count() as i64, up(true).count() as i64);
+                (singles + stacks > 0).then(|| AuctionListed { singles, single_low: up(false).min(), stacks, stack_low: up(true).min(), item })
+            })
+            .collect();
+        Ok(Page { total: rows.len() as i64, items: rows })
+    }
+
+    async fn auction_side(&self, itemid: i64, stack: bool, listings: i64, sales: i64) -> DbResult<AuctionSide> {
+        self.check()?;
+        let d = self.0.lock().unwrap();
+        let rows = || d.auction.iter().filter(|(i, s, _)| *i == itemid && *s == stack).map(|(_, _, r)| r.clone());
+        let mut up: Vec<AuctionRow> = rows().filter(|r| r.buyer_name.is_none()).collect();
+        up.sort_by_key(|r| r.price);
+        let mut sold: Vec<AuctionRow> = rows().filter(|r| r.buyer_name.is_some()).collect();
+        sold.sort_by_key(|r| -r.at);
+        Ok(AuctionSide {
+            listed: up.len() as i64,
+            listings: up.into_iter().take(listings as usize).collect(),
+            sales: sold.into_iter().take(sales as usize).collect(),
+        })
     }
 }
 

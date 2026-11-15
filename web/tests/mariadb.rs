@@ -3,8 +3,9 @@
 //!
 //! 1. Start `mariadb:12.3` with a database `xidb`, load LSB's `sql/` tables at the
 //!    pinned commit (accounts, chars, char_stats, char_jobs, char_exp, char_flags,
-//!    char_skills, char_inventory, accounts_sessions, zone_settings, delivery_box and its
-//!    `delivery_box_insert` trigger from `triggers.sql`) and `tests/fixtures/public.sql`.
+//!    char_skills, char_inventory, accounts_sessions, zone_settings, item_basic,
+//!    item_equipment, auction_house, delivery_box and its `delivery_box_insert` trigger from
+//!    `triggers.sql`), `tests/fixtures/public.sql`, then `tests/fixtures/auction.sql`.
 //! 2. Create the website's user with the grants from `docker/lsb/db-init.sh`
 //!    (the xiweb block), so a missing grant fails here.
 //! 3. `WEB_TEST_DB_PORT=33307 WEB_TEST_DB_PASSWORD=... cargo test --test mariadb -- --ignored`
@@ -109,6 +110,8 @@ async fn the_site_user_can_read_what_the_queries_need_and_write_nothing() {
     let mut conn = xiweb().await;
     assert!(sqlx::query("UPDATE chars SET playtime = 0").execute(&mut conn).await.is_err());
     assert!(sqlx::query("DELETE FROM char_skills").execute(&mut conn).await.is_err());
+    assert!(sqlx::query("DELETE FROM auction_house").execute(&mut conn).await.is_err());
+    assert!(sqlx::query("UPDATE auction_house SET price = 1").execute(&mut conn).await.is_err());
     conn.close().await.unwrap();
 }
 
@@ -148,4 +151,30 @@ async fn gives_queue_in_the_delivery_box_without_deadlocks() {
     // Still no way to change or remove what is in a box.
     assert!(sqlx::query("DELETE FROM delivery_box WHERE charid = ?").bind(charid).execute(&mut conn).await.is_err());
     assert!(sqlx::query("UPDATE delivery_box SET quantity = 99 WHERE charid = ?").bind(charid).execute(&mut conn).await.is_err());
+}
+
+#[tokio::test]
+#[ignore = "needs the fixture database, see the file header"]
+async fn the_auction_house_lists_shown_items_and_their_sides() {
+    let db = db();
+    let query = ItemQuery { level_cap: 99, page: 1, per: 25, ..Default::default() };
+    let up = db.auction_listed(&query).await.unwrap();
+    // Distilled water only has sales; the Judge's shield (GM only) and gil never show.
+    let ids: Vec<i64> = up.items.iter().map(|l| l.item.id).collect();
+    assert_eq!(ids, [16535, 4096]);
+    assert_eq!(up.total, 2);
+    let fire = &up.items[1];
+    assert_eq!((fire.singles, fire.single_low, fire.stacks, fire.stack_low), (2, Some(250), 1, Some(3000)));
+    let named = db.auction_listed(&ItemQuery { q: "fire".into(), ..query.clone() }).await.unwrap();
+    assert_eq!(named.total, 1);
+
+    let singles = db.auction_side(4096, false, 1, 20).await.unwrap();
+    assert_eq!(singles.listed, 2);
+    // Capped at one, the cheapest; a listing has no buyer.
+    assert_eq!(singles.listings, [AuctionRow { price: 250, at: 1763000100, seller: 0, seller_name: Some("M.H.M.U.".into()), buyer: 0, buyer_name: None }]);
+    // Newest sale first, with what it sold for and when.
+    let sold: Vec<(i64, i64, i64, i64)> = singles.sales.iter().map(|r| (r.price, r.at, r.seller, r.buyer)).collect();
+    assert_eq!(sold, [(260, 1762100000, 0, 10001), (280, 1762000500, 10005, 0)]);
+    let stacks = db.auction_side(4096, true, 50, 20).await.unwrap();
+    assert_eq!((stacks.listed, stacks.listings.len(), stacks.sales.len()), (1, 1, 0));
 }

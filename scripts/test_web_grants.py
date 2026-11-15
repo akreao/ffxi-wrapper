@@ -120,6 +120,13 @@ class WebGrants(unittest.TestCase):
         for priv in ("UPDATE", "DELETE"):
             self.assertNotIn((priv, "delivery_box"), g, f"{priv} on delivery_box")
 
+    def test_auction_house_is_read_only(self):
+        # The auction house pages only look: changing a listing would race the bot and the map server.
+        g = grants()
+        self.assertTrue(covered(g, "SELECT", "auction_house"))
+        for priv in ("INSERT", "UPDATE", "DELETE"):
+            self.assertNotIn((priv, "auction_house"), g, f"{priv} on auction_house")
+
 
 if __name__ == "__main__":
     unittest.main()
