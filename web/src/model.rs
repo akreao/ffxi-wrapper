@@ -372,3 +372,54 @@ pub enum Created {
     /// Someone has the login already.
     Taken,
 }
+
+/// A help desk ticket: a GM call a player sent from the game's Help Desk (LSB `help_desk`).
+#[derive(Debug, Clone, Serialize)]
+pub struct Ticket {
+    pub id: i64,
+    pub charid: i64,
+    /// `None` when the character is gone.
+    pub character: Option<String>,
+    pub accid: Option<i64>,
+    pub login: Option<String>,
+    /// The highest GM level on the filer's account: who may act on the ticket.
+    pub gm: i64,
+    /// What the player wrote (player input: shown as text only).
+    pub message: String,
+    pub response: Option<String>,
+    pub created: Option<i64>,
+    pub responded: Option<i64>,
+    /// When the player read the reply in game, or a GM closed the ticket without one.
+    pub closed: Option<i64>,
+}
+
+/// Which tickets a Help desk list shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TicketFilter {
+    /// No reply yet, not closed.
+    Open,
+    /// Replied to; the player hasn't read it in game yet.
+    Answered,
+    /// The player read the reply (deleted it in game).
+    Read,
+    /// Closed without a reply.
+    Closed,
+    All,
+}
+
+#[derive(Debug, Clone)]
+pub struct TicketQuery {
+    /// Character name or login.
+    pub q: String,
+    pub filter: TicketFilter,
+    pub page: i64,
+    pub per: i64,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+pub struct TicketCounts {
+    pub open: i64,
+    pub answered: i64,
+    pub read: i64,
+    pub closed: i64,
+}

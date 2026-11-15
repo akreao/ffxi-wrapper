@@ -39,6 +39,7 @@
     items: '<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/>',
     auction: '<path d="M14 4l6 6M11 7l6 6M12.5 5.5l-6 6 3 3 6-6M8 13l-5 5 3 3 5-5M4 21h9"/>',
     audit: '<path d="M8 3h8l4 4v14H4V3z"/><path d="M8 9h8M8 13h8M8 17h5"/>',
+    helpdesk: '<path d="M4 5h16v11H9l-5 4z"/><path d="M9 10h6"/>',
     log: '<path d="M9 4h6v3H9z"/><path d="M15 5.5h3v15H6v-15h3"/><path d="M9 12l2 2 4-4"/>',
     news: '<path d="M4 5h13v14H6a2 2 0 0 1-2-2z"/><path d="M17 9h3v8a2 2 0 0 1-2 2"/><path d="M7.5 9h6M7.5 12.5h6M7.5 16h4"/>',
     content: '<path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h4"/>',
@@ -185,7 +186,7 @@
   // The admin panel: dark sidebar + title bar. Entries for later phases carry a "Later" tag.
   const ADMIN_NAV = [
     ["Server", [["dashboard", "Dashboard", "/admin"], ["settings", "Settings", null]]],
-    ["Players", [["accounts", "Accounts", "/admin/accounts"], ["characters", "Characters", "/admin/characters"], ["bans", "Bans", "/admin/bans"]]],
+    ["Players", [["accounts", "Accounts", "/admin/accounts"], ["characters", "Characters", "/admin/characters"], ["bans", "Bans", "/admin/bans"], ["helpdesk", "Help desk", "/admin/help-desk"]]],
     ["Site", [["news", "News posts", "/admin/news"], ["content", "Site content", "/admin/content"], ["invites", "Invite codes", "/admin/invites"]]],
     ["Economy", [["items", "Items", null], ["auction", "Auction house", null]]],
     ["Records", [["audit", "Audit logs", null], ["log", "Admin log", "/admin/log"]]],
@@ -202,7 +203,7 @@
         items.map(([id, label, href]) => href
           ? h("a", { class: "nav-item" + (current === id ? " active" : ""), href, title: label, "aria-current": current === id ? "page" : false }, icon(id), h("span", {}, label))
           : h("a", { class: "nav-item soon", "aria-disabled": "true", title: `${label}: later` }, icon(id), h("span", {}, label), h("em", {}, "Later"))))),
-      h("div", { class: "sidebar-foot" }, "LandSandBoat", h("br"), "Site 0.9.0"));
+      h("div", { class: "sidebar-foot" }, "LandSandBoat", h("br"), "Site 0.10.0"));
     const scrim = h("div", { class: "scrim" });
     const toggle = h("button", { class: "icon-button menu-toggle", "aria-label": "Menu", "aria-controls": "sidebar", "aria-expanded": "false" }, icon("menu"));
     const theme = h("button", { class: "icon-button theme-toggle", "aria-label": "Switch theme", title: "Switch between Light and Dark" });
@@ -746,8 +747,8 @@
 
   // ---- the admin panel: players, bans and the log ----
 
-  const ACTION_LABEL = { ban: "Ban", unban: "Unban", gm_level: "GM level", site_role: "Website role", password_reset: "Password reset", totp_reset: "Two-step reset", password_change: "Password change", sign_in: "Sign-in", sign_in_failed: "Sign-in failed", news_create: "News draft", news_edit: "News edit", news_publish: "News published", news_unpublish: "News unpublished", news_pin: "News pinned", news_unpin: "News unpinned", news_delete: "News deleted", content_edit: "Content edit", content_reset: "Content reset" };
-  const ACTION_TONE = { ban: "bad", unban: "ok", gm_level: "gm", site_role: "info", password_reset: "busy", totp_reset: "busy", password_change: "info", sign_in: "off", sign_in_failed: "busy", news_publish: "ok", news_delete: "bad", news_unpublish: "busy" };
+  const ACTION_LABEL = { ban: "Ban", unban: "Unban", gm_level: "GM level", site_role: "Website role", password_reset: "Password reset", totp_reset: "Two-step reset", password_change: "Password change", sign_in: "Sign-in", sign_in_failed: "Sign-in failed", news_create: "News draft", news_edit: "News edit", news_publish: "News published", news_unpublish: "News unpublished", news_pin: "News pinned", news_unpin: "News unpinned", news_delete: "News deleted", content_edit: "Content edit", content_reset: "Content reset", ticket_reply: "Help desk reply", ticket_close: "Help desk close" };
+  const ACTION_TONE = { ban: "bad", unban: "ok", gm_level: "gm", site_role: "info", password_reset: "busy", totp_reset: "busy", password_change: "info", sign_in: "off", sign_in_failed: "busy", news_publish: "ok", news_delete: "bad", news_unpublish: "busy", ticket_reply: "ok", ticket_close: "off" };
 
   const pathId = () => location.pathname.split("/").pop();
   const fmtDT = (s) => (s ? new Date(s * 1000).toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "–");
@@ -776,6 +777,8 @@
       case "site_role": return { tone: "info", what: `Website role ${ROLE_NAME[d.before] || d.before} → ${ROLE_NAME[d.after] || d.after} by ${who}` };
       case "password_reset": return { tone: "info", what: `Password reset by ${who}` };
       case "totp_reset": return { tone: "info", what: `Two-step sign-in removed by ${who}` };
+      case "ticket_reply": return { tone: "ok", what: `Help desk ticket #${d.ticket} answered by ${who}` };
+      case "ticket_close": return { tone: "off", what: `Help desk ticket #${d.ticket} closed without a reply by ${who}` };
       case "news_create": case "news_edit": case "news_publish": case "news_unpublish": case "news_pin": case "news_unpin": case "news_delete":
         return { tone: "info", what: `${ACTION_LABEL[a.action]}: "${a.target_name || ""}" by ${who}` };
       case "content_edit": case "content_reset":
@@ -1216,6 +1219,90 @@
     });
     main.append(view.el,
       h("p", { class: "hint" }, "A ban sets the account's status to banned and keeps the dates and reason in ", h("code", {}, "accounts_banned"), ", so the login server refuses it even while this site is off. A ban that ends on its own is lifted by this site within a minute of its end, so it only ends while the site is running. A ban doesn't remove anyone who is already in game. To ban someone, open their account. Ended bans are in the ", h("a", { href: "/admin/log?action=unban" }, "admin log"), "."));
+    await view.load();
+  };
+
+  // ---- the help desk ----
+
+  const TICKET_STATE = (t) => t.closed ? (t.response ? ["off", "Read"] : ["off", "Closed"]) : t.response ? ["busy", "Answered"] : ["info", "Open"];
+  const REPLY_MAX = 1024;
+
+  function ticketDialog(t, done) {
+    const [tone, label] = TICKET_STATE(t);
+    const who = t.character ? h("a", { href: `/admin/characters/${t.charid}` }, t.character) : h("span", { class: "muted" }, `Deleted character ${t.charid}`);
+    const parts = [
+      facts([
+        ["Character", who],
+        ["Account", t.accid ? h("a", { href: `/admin/accounts/${t.accid}` }, t.login || t.accid) : "–"],
+        ["Filed", fmtDT(t.created)],
+        ["Status", h("span", { class: "badge " + tone }, label)],
+        ...(t.responded ? [["Answered", fmtDT(t.responded)]] : []),
+      ]),
+      h("h3", {}, "What they wrote"),
+      h("p", { class: "ticket-text" }, t.message || "(empty)"),
+    ];
+    if (t.response) parts.push(h("h3", {}, t.closed ? "The reply they read" : "The reply waiting for them"), h("p", { class: "ticket-text" }, t.response));
+    if (t.closed || t.response || !t.can_act) {
+      if (!t.can_act && !t.closed && !t.response) parts.push(h("p", { class: "hint" }, "This ticket was filed by a character on an account with a GM level as high as yours or higher, so only someone above them can answer it."));
+      return confirmDialog({ title: `Ticket #${t.id}`, icon: "helpdesk", body: parts, confirm: "Done", onSubmit: async (dlg) => dlg.close() });
+    }
+    const count = h("span", { class: "hint" });
+    const text = h("textarea", { id: "ticket-reply", rows: "6", maxlength: String(REPLY_MAX), placeholder: "Plain English letters, digits and punctuation" });
+    const bytes = () => new TextEncoder().encode(text.value.replace(/\r\n/g, "\n").trim()).length;
+    const recount = () => { count.textContent = `${bytes()} / ${REPLY_MAX}`; };
+    text.addEventListener("input", recount);
+    recount();
+    parts.push(h("label", { for: "ticket-reply" }, "Reply", " ", h("span", { class: "req" }, "*")), text,
+      h("p", { class: "hint" }, count, " · The player gets it the next time they change zones, in the game's Help Desk."));
+    parts.push(h("p", {}, h("button", { type: "button", onclick: () => { dlg.close(); closeTicketDialog(t, done); } }, "Close without a reply")));
+    const dlg = confirmDialog({
+      title: `Ticket #${t.id}`, icon: "helpdesk", body: parts, confirm: "Send reply",
+      onSubmit: async (d) => {
+        await api(`/admin/tickets/${t.id}/reply`, { method: "POST", body: { text: text.value } });
+        d.close();
+        done();
+      },
+    });
+    return dlg;
+  }
+
+  function closeTicketDialog(t, done) {
+    confirmDialog({
+      title: `Close ticket #${t.id}?`, icon: "helpdesk", confirm: "Close ticket",
+      body: [h("p", {}, "The ticket closes without a reply; the player isn't told."), ...reasonField("ticket-close-reason", "Note for the admin log", false, "Such as: sorted out in game")],
+      onSubmit: async (d) => {
+        await api(`/admin/tickets/${t.id}/close`, { method: "POST", body: { reason: d.querySelector("#ticket-close-reason").value } });
+        d.close();
+        done();
+      },
+    });
+  }
+
+  pages.helpdesk = async function (main) {
+    const reload = () => view.load();
+    const view = tableView({
+      endpoint: "/admin/tickets",
+      defaults: { q: "", status: "open", page: 1, per: 25 },
+      search: "Character or account",
+      noun: "tickets",
+      empty: "No tickets here.",
+      columns: [{ label: "#", cls: "num hide-phone" }, { label: "Character" }, { label: "Filed", cls: "hide-phone" }, { label: "Message" }, { label: "Status" }, { label: "" }],
+      toolbar: (ctx, d) => [segmented([["open", `Open ${d.counts.open}`], ["answered", `Answered ${d.counts.answered}`], ["read", `Read ${d.counts.read}`], ["closed", `Closed ${d.counts.closed}`], ["all", "All"]], ctx.st.status, (v) => ctx.set("status", v), "Status")],
+      row: (t) => {
+        const [tone, label] = TICKET_STATE(t);
+        const preview = t.message.length > 140 ? t.message.slice(0, 140) + "…" : t.message;
+        return h("tr", {},
+          h("td", { class: "num id hide-phone" }, t.id),
+          h("td", {}, t.character ? h("a", { href: `/admin/characters/${t.charid}` }, t.character) : h("span", { class: "muted" }, "Deleted"),
+            t.login ? h("div", { class: "hint" }, t.login) : null, t.gm > 0 ? [" ", gmBadge(t.gm)] : null),
+          h("td", { class: "hide-phone" }, t.created ? when(t.created) : "–"),
+          h("td", { class: "wrap" }, preview),
+          h("td", {}, h("span", { class: "badge " + tone }, label)),
+          h("td", { class: "row-actions" }, h("button", { type: "button", onclick: () => ticketDialog(t, reload) }, !t.closed && !t.response && t.can_act ? "Answer" : "View")));
+      },
+    });
+    main.append(view.el,
+      h("p", { class: "hint" }, "Players file these from the game's Help Desk. LSB sends a reply the next time the player changes zones, and a reply can't be changed once sent; it stays Answered until they delete it in game, then it is Read. Replies are plain ASCII, at most 1024 characters, because the game can't show more. Every reply and close goes in the ", h("a", { href: "/admin/log?action=ticket_reply" }, "admin log"), "."));
     await view.load();
   };
 

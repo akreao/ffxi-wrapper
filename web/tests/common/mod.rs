@@ -133,6 +133,17 @@ pub struct Data {
     /// (accid, charid) of every account-scoped character query, in order.
     pub char_queries: Vec<(i64, i64)>,
     pub account_queries: Vec<i64>,
+    pub tickets: Vec<FakeTicket>,
+}
+
+#[derive(Clone, Debug)]
+pub struct FakeTicket {
+    pub id: i64,
+    pub charid: i64,
+    pub message: String,
+    pub response: Option<String>,
+    pub responded: Option<i64>,
+    pub closed: Option<i64>,
 }
 
 #[derive(Clone, Default)]
@@ -180,6 +191,16 @@ impl Fake {
         let a = d.accounts.iter_mut().find(|a| a.id == id).unwrap();
         a.status = 2;
         a.ban = record;
+    }
+    /// An open ticket filed by `charid`; returns its id.
+    pub fn add_ticket(&self, charid: i64, message: &str) -> i64 {
+        let mut d = self.0.lock().unwrap();
+        let id = d.tickets.len() as i64 + 1;
+        d.tickets.push(FakeTicket { id, charid, message: message.into(), response: None, responded: None, closed: None });
+        id
+    }
+    pub fn ticket(&self, id: i64) -> FakeTicket {
+        self.0.lock().unwrap().tickets.iter().find(|t| t.id == id).unwrap().clone()
     }
     pub fn hash_of(&self, id: i64) -> String {
         self.0.lock().unwrap().accounts.iter().find(|a| a.id == id).unwrap().hash.clone()
@@ -514,6 +535,85 @@ impl Game for Fake {
             }
         }
         Ok(out)
+    }
+    async fn admin_tickets(&self, q: &TicketQuery) -> DbResult<Page<Ticket>> {
+        self.check()?;
+        let d = self.0.lock().unwrap();
+        let needle = q.q.to_lowercase();
+        let mut rows: Vec<Ticket> = d
+            .tickets
+            .iter()
+            .filter(|t| match q.filter {
+                TicketFilter::Open => t.closed.is_none() && t.response.is_none(),
+                TicketFilter::Answered => t.closed.is_none() && t.response.is_some(),
+                TicketFilter::Read => t.closed.is_some() && t.response.is_some(),
+                TicketFilter::Closed => t.closed.is_some() && t.response.is_none(),
+                TicketFilter::All => true,
+            })
+            .map(|t| fake_ticket(&d, t))
+            .filter(|t| needle.is_empty() || [&t.character, &t.login].iter().any(|s| s.as_deref().is_some_and(|s| s.to_lowercase().contains(&needle))))
+            .collect();
+        rows.sort_by_key(|t| std::cmp::Reverse(t.id));
+        let total = rows.len() as i64;
+        Ok(Page { items: rows.into_iter().skip(((q.page - 1) * q.per) as usize).take(q.per as usize).collect(), total })
+    }
+    async fn ticket_counts(&self) -> DbResult<TicketCounts> {
+        self.check()?;
+        let d = self.0.lock().unwrap();
+        let mut c = TicketCounts::default();
+        for t in &d.tickets {
+            match (t.response.is_some(), t.closed.is_some()) {
+                (false, false) => c.open += 1,
+                (true, false) => c.answered += 1,
+                (true, true) => c.read += 1,
+                (false, true) => c.closed += 1,
+            }
+        }
+        Ok(c)
+    }
+    async fn admin_ticket(&self, id: i64) -> DbResult<Option<Ticket>> {
+        self.check()?;
+        let d = self.0.lock().unwrap();
+        Ok(d.tickets.iter().find(|t| t.id == id).map(|t| fake_ticket(&d, t)))
+    }
+    async fn answer_ticket(&self, id: i64, reply: &str) -> DbResult<Acted> {
+        self.check()?;
+        let mut d = self.0.lock().unwrap();
+        let Some(t) = d.tickets.iter_mut().find(|t| t.id == id) else { return Ok(Acted::NotFound) };
+        if t.closed.is_some() || t.response.is_some() {
+            return Ok(Acted::NoChange);
+        }
+        t.response = Some(reply.into());
+        t.responded = Some(NOW);
+        Ok(Acted::Done)
+    }
+    async fn close_ticket(&self, id: i64) -> DbResult<Acted> {
+        self.check()?;
+        let mut d = self.0.lock().unwrap();
+        let Some(t) = d.tickets.iter_mut().find(|t| t.id == id) else { return Ok(Acted::NotFound) };
+        if t.closed.is_some() || t.response.is_some() {
+            return Ok(Acted::NoChange);
+        }
+        t.closed = Some(NOW);
+        Ok(Acted::Done)
+    }
+}
+
+fn fake_ticket(d: &Data, t: &FakeTicket) -> Ticket {
+    let c = d.chars.iter().find(|c| c.charid == t.charid);
+    let accid = c.map(|c| c.accid).filter(|a| *a != 0);
+    Ticket {
+        id: t.id,
+        charid: t.charid,
+        character: c.map(|c| c.name.clone()),
+        accid,
+        login: accid.and_then(|a| d.accounts.iter().find(|x| x.id == a)).map(|a| a.login.clone()),
+        gm: accid.map_or(0, |a| d.chars.iter().filter(|c| c.accid == a).map(|c| c.gm).max().unwrap_or(0)),
+        message: t.message.clone(),
+        response: t.response.clone(),
+        created: Some(NOW - 600),
+        responded: t.responded,
+        closed: t.closed,
     }
 }
 
