@@ -756,12 +756,15 @@ impl Game for MariaDb {
         let dir = if q.desc { "DESC" } else { "ASC" };
         let like = like_pattern(&q.q);
         let wh = "WHERE c.accid <> 0 AND (? = '' OR c.charname LIKE ? ESCAPE '|')
-                  AND (? = 0 OR EXISTS(SELECT 1 FROM accounts_sessions x WHERE x.charid = c.charid))";
+                  AND (? = 0 OR EXISTS(SELECT 1 FROM accounts_sessions x WHERE x.charid = c.charid))
+                  AND (? = 0 OR c.gmlevel > 0)";
         let online = q.online as i64;
+        let gm = q.gm as i64;
         let total: i64 = sqlx::query(&format!("SELECT CAST(COUNT(*) AS SIGNED) AS n FROM chars c JOIN accounts a ON a.id = c.accid {wh}"))
             .bind(&q.q)
             .bind(&like)
             .bind(online)
+            .bind(gm)
             .fetch_one(&self.pool)
             .await?
             .try_get("n")?;
@@ -769,6 +772,7 @@ impl Game for MariaDb {
             .bind(&q.q)
             .bind(&like)
             .bind(online)
+            .bind(gm)
             .bind(q.per)
             .bind((q.page - 1) * q.per)
             .fetch_all(&self.pool)

@@ -1135,17 +1135,18 @@
   pages.characters = async function (main) {
     const view = tableView({
       endpoint: "/admin/characters",
-      defaults: { q: "", online: "", sort: "name", dir: "asc", page: 1, per: 25 },
+      defaults: { q: "", online: "", gm: "", sort: "name", dir: "asc", page: 1, per: 25 },
       search: "Character name",
       noun: "characters",
       columns: [{ label: "Name", key: "name" }, { label: "Job" }, { label: "Zone" }, { label: "Account", key: "account", cls: "hide-phone" }, { label: "Nation", cls: "hide-phone" },
-        { label: "Play time", key: "playtime", cls: "num", firstDesc: true }],
-      toolbar: (ctx) => [h("label", { class: "editor-filter" }, h("input", { type: "checkbox", class: "switch", checked: ctx.st.online === "1", onchange: (e) => ctx.set("online", e.target.checked ? "1" : "") }), " Online only")],
+        { label: "GM", cls: "num" }, { label: "Play time", key: "playtime", cls: "num", firstDesc: true }],
+      toolbar: (ctx) => [["online", "Online only"], ["gm", "Game masters only"]].map(([k, label]) =>
+        h("label", { class: "editor-filter" }, h("input", { type: "checkbox", class: "switch", checked: ["1", "true"].includes(ctx.st[k]), onchange: (e) => ctx.set(k, e.target.checked ? "1" : "") }), " " + label)),
       row: (c) => h("tr", {},
-        h("td", {}, h("span", { class: "dot" + (c.online ? " ok" : "") }), h("a", { href: `/admin/characters/${c.charid}` }, c.name), c.gm > 0 ? [" ", gmBadge(c.gm)] : null),
+        h("td", {}, h("span", { class: "dot" + (c.online ? " ok" : "") }), h("a", { href: `/admin/characters/${c.charid}` }, c.name)),
         jobCell(c), h("td", { class: "zone" }, c.zone || "–"),
         h("td", { class: "hide-phone" }, h("a", { href: `/admin/accounts/${c.accid}` }, c.login)),
-        h("td", { class: "hide-phone" }, NATIONS[c.nation] || "–"), h("td", { class: "num" }, playtime(c.playtime))),
+        h("td", { class: "hide-phone" }, NATIONS[c.nation] || "–"), h("td", { class: "num" }, gmBadge(c.gm) || "–"), h("td", { class: "num" }, playtime(c.playtime))),
     });
     main.append(view.el);
     await view.load();

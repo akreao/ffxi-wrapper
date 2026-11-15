@@ -1,6 +1,7 @@
-//! Game masters: the accounts and characters in LSB's database, and setting
-//! a character's GM level. LSB keeps the level per character (`chars.gmlevel`,
-//! 0 to 5); GM commands such as `!promote` and `!goto` check it.
+//! Game masters: the characters with a GM level, read-only. LSB keeps the
+//! level per character (`chars.gmlevel`, 0 to 5); GM commands such as
+//! `!promote` and `!goto` check it. Levels are changed on the website, which
+//! checks who may change them and records each change in its audit log.
 
 use std::path::Path;
 
@@ -8,29 +9,31 @@ use serde::Serialize;
 
 use crate::stack;
 
-/// The highest level LSB's commands ask for.
-pub const MAX_LEVEL: u8 = 5;
+/// How many game masters the screen lists; the website has the full list.
+pub const SHOWN: usize = 50;
 
 /// Runs one statement in `xidb`; the statement comes in as `$0`, so the
 /// shell never reads it.
 const QUERY: &str = r#"MYSQL_PWD="$MARIADB_ROOT_PASSWORD" exec mariadb --user=root --batch --skip-column-names xidb -e "$0""#;
 
-/// Deleted characters keep their row with `accid` 0, so the join leaves them out.
-const LIST: &str = "SELECT a.id, a.login, c.charid, c.charname, c.gmlevel \
-     FROM accounts a LEFT JOIN chars c ON c.accid = a.id \
-     ORDER BY a.login, c.charname";
+/// Deleted characters keep their row with `accid` 0, so the join leaves them
+/// out. One row more than shown tells the screen there are more.
+const LIST: &str = "SELECT a.login, c.charname, c.gmlevel \
+     FROM chars c JOIN accounts a ON a.id = c.accid \
+     WHERE c.accid <> 0 AND c.gmlevel > 0 \
+     ORDER BY c.gmlevel DESC, c.charname LIMIT 51";
 
 #[derive(Serialize, Debug, PartialEq)]
-pub struct Account {
-    pub id: u32,
-    pub login: String,
+pub struct GameMasters {
     pub characters: Vec<Character>,
+    /// More than [`SHOWN`] characters have a GM level.
+    pub more: bool,
 }
 
 #[derive(Serialize, Debug, PartialEq)]
 pub struct Character {
-    pub id: u32,
     pub name: String,
+    pub login: String,
     pub gm_level: u8,
 }
 
@@ -46,35 +49,24 @@ fn query(dir: &Path, sql: &str) -> Result<String, String> {
     })
 }
 
-pub fn accounts(dir: &Path) -> Result<Vec<Account>, String> {
+pub fn list(dir: &Path) -> Result<GameMasters, String> {
     Ok(parse(&query(dir, LIST)?))
 }
 
-pub fn set_level(dir: &Path, character: u32, level: u8) -> Result<(), String> {
-    if level > MAX_LEVEL {
-        return Err(format!("GM levels go from 0 to {MAX_LEVEL}."));
-    }
-    // Both values are numbers, so they can go straight into the statement.
-    query(dir, &format!("UPDATE chars SET gmlevel = {level} WHERE charid = {character} AND accid <> 0"))?;
-    Ok(())
-}
-
-/// Reads `mariadb --batch` rows: tab-separated, NULL for an account with
-/// no characters, and tabs, newlines and backslashes escaped.
-fn parse(out: &str) -> Vec<Account> {
-    let mut accounts: Vec<Account> = Vec::new();
-    for line in out.lines() {
-        let cols: Vec<String> = line.split('\t').map(unescape).collect();
-        let [id, login, char_id, name, level] = &cols[..] else { continue };
-        let Ok(id) = id.parse() else { continue };
-        if accounts.last().is_none_or(|a| a.id != id) {
-            accounts.push(Account { id, login: login.clone(), characters: Vec::new() });
-        }
-        if let (Ok(char_id), Ok(gm_level)) = (char_id.parse(), level.parse()) {
-            accounts.last_mut().unwrap().characters.push(Character { id: char_id, name: name.clone(), gm_level });
-        }
-    }
-    accounts
+/// Reads `mariadb --batch` rows: tab-separated, with tabs, newlines and
+/// backslashes escaped.
+fn parse(out: &str) -> GameMasters {
+    let mut characters: Vec<Character> = out
+        .lines()
+        .filter_map(|line| {
+            let cols: Vec<String> = line.split('\t').map(unescape).collect();
+            let [login, name, level] = &cols[..] else { return None };
+            Some(Character { name: name.clone(), login: login.clone(), gm_level: level.parse().ok()? })
+        })
+        .collect();
+    let more = characters.len() > SHOWN;
+    characters.truncate(SHOWN);
+    GameMasters { characters, more }
 }
 
 fn unescape(s: &str) -> String {
@@ -101,26 +93,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn groups_characters_by_account() {
-        let out = "1000\tsteve\t21828\tAlpha\t5\n1000\tsteve\t21829\tBeta\t0\n1001\tnew\\tbie\tNULL\tNULL\tNULL\n";
+    fn reads_rows_and_unescapes_names() {
+        let out = "steve\tAlpha\t5\nnew\\tbie\tBeta\t1\n";
         assert_eq!(
             parse(out),
-            vec![
-                Account {
-                    id: 1000,
-                    login: "steve".into(),
-                    characters: vec![
-                        Character { id: 21828, name: "Alpha".into(), gm_level: 5 },
-                        Character { id: 21829, name: "Beta".into(), gm_level: 0 },
-                    ],
-                },
-                Account { id: 1001, login: "new\tbie".into(), characters: vec![] },
-            ]
+            GameMasters {
+                characters: vec![
+                    Character { name: "Alpha".into(), login: "steve".into(), gm_level: 5 },
+                    Character { name: "Beta".into(), login: "new\tbie".into(), gm_level: 1 },
+                ],
+                more: false,
+            }
         );
     }
 
     #[test]
-    fn refuses_levels_above_five() {
-        assert!(set_level(Path::new("/nonexistent"), 1, 6).unwrap_err().contains("0 to 5"));
+    fn the_extra_row_means_more() {
+        let out: String = (0..=SHOWN).map(|i| format!("a\tC{i}\t1\n")).collect();
+        let gms = parse(&out);
+        assert_eq!(gms.characters.len(), SHOWN);
+        assert!(gms.more);
     }
 }

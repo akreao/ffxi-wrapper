@@ -153,18 +153,27 @@ fn new_secret() -> Result<String, String> {
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
+/// The admin panel's character list, game masters only.
+pub const GAME_MASTERS_PAGE: &str = "/admin/characters?gm=1";
+
 /// The link that signs the owner in to the running site: its 127.0.0.1
 /// address (`WEB_LOCAL_PORT`) and a token good for a minute, once. Never the
 /// `WEB_BIND_IP` address: on a LAN that is plain HTTP, and the token and then
-/// the owner's session cookie would cross it unencrypted.
-pub fn owner_url(env: &EnvFile, now: u64) -> Result<String, String> {
+/// the owner's session cookie would cross it unencrypted. It lands on `next`
+/// (an admin panel path) instead of `/admin` when given; the site ignores any other path.
+pub fn owner_url(env: &EnvFile, now: u64, next: Option<&str>) -> Result<String, String> {
     if !load(env).enabled {
         return Err("Turn the website on first.".into());
     }
     let secret = env.get("ADMIN_SECRET").unwrap_or_default();
     let token = wrapper_core::owner_link::sign(&secret, now)
         .map_err(|_| "The website has no owner key yet. Save the settings once more, then restart the website.".to_owned())?;
-    Ok(format!("http://127.0.0.1:{}/auth/owner?t={token}", local_port(env)))
+    let next = next.map(|n| {
+        let encoded: String =
+            n.bytes().map(|b| if b.is_ascii_alphanumeric() { (b as char).to_string() } else { format!("%{b:02X}") }).collect();
+        format!("&next={encoded}")
+    });
+    Ok(format!("http://127.0.0.1:{}/auth/owner?t={token}{}", local_port(env), next.unwrap_or_default()))
 }
 
 #[cfg(test)]
@@ -302,7 +311,7 @@ mod tests {
     #[test]
     fn the_owner_link_is_the_sites_address_with_a_token_that_verifies() {
         let mut env = EnvFile::parse(&format!("COMPOSE_PROFILES=web\nADMIN_SECRET={KEY}\nWEB_BIND_IP=192.168.1.20\n"));
-        let url = owner_url(&env, 1_800_000_000).unwrap();
+        let url = owner_url(&env, 1_800_000_000, None).unwrap();
         // This computer's own port, never the LAN address the site is opened to.
         let token = url.strip_prefix("http://127.0.0.1:54081/auth/owner?t=").expect(&url);
         assert!(!token.contains(['&', '#', ' ']));
@@ -310,11 +319,13 @@ mod tests {
         assert!(wrapper_core::owner_link::verify(KEY, token, 1_800_000_100).is_err());
 
         env.set("WEB_LOCAL_PORT", "8443");
-        assert!(owner_url(&env, 1_800_000_000).unwrap().starts_with("http://127.0.0.1:8443/auth/owner?t="));
+        assert!(owner_url(&env, 1_800_000_000, None).unwrap().starts_with("http://127.0.0.1:8443/auth/owner?t="));
+        let deep = owner_url(&env, 1_800_000_000, Some(GAME_MASTERS_PAGE)).unwrap();
+        assert!(deep.ends_with("&next=%2Fadmin%2Fcharacters%3Fgm%3D1"), "{deep}");
 
         env.set("COMPOSE_PROFILES", "ahbot");
-        assert!(owner_url(&env, 1_800_000_000).is_err());
+        assert!(owner_url(&env, 1_800_000_000, None).is_err());
         let keyless = EnvFile::parse("COMPOSE_PROFILES=web\n");
-        assert!(owner_url(&keyless, 1_800_000_000).unwrap_err().contains("owner key"));
+        assert!(owner_url(&keyless, 1_800_000_000, None).unwrap_err().contains("owner key"));
     }
 }

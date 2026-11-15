@@ -326,10 +326,18 @@
     </div>
     <section class="card">
       <h2>Game masters</h2>
-      <p class="hint">GM levels belong to characters: pick a level for each character that should have GM commands such as <code>!goto</code> or <code>!additem</code>. Level 5 can use every command. A character in game gets the new level the next time it zones or logs in. The database has to be running, so start the server first.</p>
-      <p class="hint">GM levels only control in-game commands. They give no access to the website's admin panel: website roles (Moderator, Owner) belong to accounts and are set on the website, on each account's page.</p>
+      <p class="hint">Characters with a GM level can use GM commands such as <code>!goto</code> or <code>!additem</code>; level 5 can use every command. Change them on the website, which asks for a reason and logs each change made there. GM commands in game (such as <code>!promote</code>) can change levels too, and those changes aren't in the website's log. The list needs the database, so start the server first.</p>
+      <p class="hint">GM levels only control in-game commands. Website roles (Moderator, Owner) belong to accounts and are set on the website too, on each account's page.</p>
+      <div class="setting">
+        <div class="setting-text">
+          <span class="setting-title">Change GM levels</span>
+          <p class="hint">Opens the website's character list, game masters only, signed in as the owner. Pick a character there to change its level.</p>
+          <p id="gm-web-off" class="hint" hidden>The website is off. Turn it on in <a href="#" id="gm-web-settings">Website</a> first; it stays on this computer unless you pick otherwise.</p>
+        </div>
+        <button id="gm-manage" class="primary">Manage on the website</button>
+      </div>
       <p id="gm-state" class="hint"></p>
-      <ul id="gm-accounts"></ul>
+      <ul id="gm-list"></ul>
     </section>
   </main>
 

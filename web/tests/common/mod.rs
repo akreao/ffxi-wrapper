@@ -456,6 +456,7 @@ impl Game for Fake {
             .iter()
             .filter(|c| needle.is_empty() || c.name.to_lowercase().contains(&needle))
             .filter(|c| !q.online || c.online)
+            .filter(|c| !q.gm || c.gm > 0)
             .map(|c| AdminChar { summary: summary(c), accid: c.accid, login: d.accounts.iter().find(|a| a.id == c.accid).unwrap().login.clone(), gm: c.gm })
             .collect();
         rows.sort_by(|a, b| match q.sort {
