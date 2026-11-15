@@ -134,6 +134,9 @@ pub struct Data {
     pub char_queries: Vec<(i64, i64)>,
     pub account_queries: Vec<i64>,
     pub tickets: Vec<FakeTicket>,
+    pub items: Vec<ItemDetailRaw>,
+    /// Every item search the database was asked for.
+    pub item_queries: Vec<ItemQuery>,
 }
 
 #[derive(Clone, Debug)]
@@ -201,6 +204,9 @@ impl Fake {
     }
     pub fn ticket(&self, id: i64) -> FakeTicket {
         self.0.lock().unwrap().tickets.iter().find(|t| t.id == id).unwrap().clone()
+    }
+    pub fn add_item(&self, item: ItemDetailRaw) {
+        self.0.lock().unwrap().items.push(item);
     }
     pub fn hash_of(&self, id: i64) -> String {
         self.0.lock().unwrap().accounts.iter().find(|a| a.id == id).unwrap().hash.clone()
@@ -596,6 +602,32 @@ impl Game for Fake {
         }
         t.closed = Some(NOW);
         Ok(Acted::Done)
+    }
+    async fn items(&self, q: &ItemQuery) -> DbResult<Page<ItemRaw>> {
+        self.check()?;
+        let mut d = self.0.lock().unwrap();
+        d.item_queries.push(q.clone());
+        // What ITEM_WHERE does: `q.q` is already folded; LIKE is a substring match here.
+        let mut hits: Vec<ItemRaw> = d
+            .items
+            .iter()
+            .map(|i| i.item.clone())
+            .filter(|i| i.id > 0 && i.flags & 2 == 0)
+            .filter(|i| q.q.is_empty() || i.name.contains(&q.q))
+            .filter(|i| q.category == 0 || i.category == q.category)
+            .filter(|i| q.job_bit == 0 || i.jobs & q.job_bit != 0)
+            .filter(|i| q.slot_bit == 0 || i.slots & q.slot_bit != 0)
+            .filter(|i| q.min_level == 0 || i.level.is_some_and(|l| l >= q.min_level))
+            .filter(|i| q.max_level == 0 || i.level.is_some_and(|l| l <= q.max_level))
+            .collect();
+        hits.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
+        let total = hits.len() as i64;
+        let items = hits.into_iter().skip(((q.page - 1) * q.per) as usize).take(q.per as usize).collect();
+        Ok(Page { items, total })
+    }
+    async fn item(&self, id: i64) -> DbResult<Option<ItemDetailRaw>> {
+        self.check()?;
+        Ok(self.0.lock().unwrap().items.iter().find(|i| i.item.id == id && i.item.flags & 2 == 0).cloned())
     }
 }
 

@@ -109,6 +109,13 @@ pub trait Game: Send + Sync {
     async fn answer_ticket(&self, id: i64, reply: &str) -> DbResult<Acted>;
     /// Closes a ticket without a reply; `NoChange` unless it is open.
     async fn close_ticket(&self, id: i64) -> DbResult<Acted>;
+
+    // ---- the item database (static game data, any signed-in account) ----
+
+    /// Items by name then id; GM-only items are never listed.
+    async fn items(&self, q: &ItemQuery) -> DbResult<Page<ItemRaw>>;
+    /// `None` for a missing or GM-only item.
+    async fn item(&self, id: i64) -> DbResult<Option<ItemDetailRaw>>;
 }
 
 pub struct MariaDb {
@@ -969,6 +976,92 @@ impl Game for MariaDb {
             .rows_affected();
         self.ticket_outcome(id, done).await
     }
+
+    async fn items(&self, q: &ItemQuery) -> DbResult<Page<ItemRaw>> {
+        let like = like_pattern(&q.q);
+        let total: i64 = sqlx::query(&format!("SELECT CAST(COUNT(*) AS SIGNED) AS n FROM item_basic b LEFT JOIN item_equipment e ON e.itemId = b.itemid {ITEM_WHERE}"))
+            .bind(&q.q).bind(&like)
+            .bind(q.category).bind(q.category)
+            .bind(q.job_bit).bind(q.job_bit)
+            .bind(q.slot_bit).bind(q.slot_bit)
+            .bind(q.min_level).bind(q.min_level)
+            .bind(q.max_level).bind(q.max_level)
+            .fetch_one(&self.pool)
+            .await?
+            .try_get("n")?;
+        let rows = sqlx::query(&format!("{ITEM_SELECT} {ITEM_WHERE} ORDER BY b.name, b.itemid LIMIT ? OFFSET ?"))
+            .bind(&q.q).bind(&like)
+            .bind(q.category).bind(q.category)
+            .bind(q.job_bit).bind(q.job_bit)
+            .bind(q.slot_bit).bind(q.slot_bit)
+            .bind(q.min_level).bind(q.min_level)
+            .bind(q.max_level).bind(q.max_level)
+            .bind(q.per)
+            .bind((q.page - 1) * q.per)
+            .fetch_all(&self.pool)
+            .await?;
+        let items = rows.iter().map(item_row).collect::<Result<_, _>>()?;
+        Ok(Page { items, total })
+    }
+
+    async fn item(&self, id: i64) -> DbResult<Option<ItemDetailRaw>> {
+        let Some(r) = sqlx::query(&format!("{ITEM_SELECT} WHERE b.itemid = ? AND (b.flags & 2) = 0"))
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let item = item_row(&r)?;
+        let weapon = sqlx::query(
+            "SELECT CAST(skill AS SIGNED) AS skill, CAST(dmg AS SIGNED) AS dmg, CAST(delay AS SIGNED) AS delay
+             FROM item_weapon WHERE itemId = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(|w| Ok::<_, sqlx::Error>((w.try_get("skill")?, w.try_get("dmg")?, w.try_get("delay")?)))
+        .transpose()?;
+        let mods = sqlx::query("SELECT CAST(modId AS SIGNED) AS m, CAST(value AS SIGNED) AS v FROM item_mods WHERE itemId = ? ORDER BY modId")
+            .bind(id)
+            .fetch_all(&self.pool)
+            .await?
+            .iter()
+            .map(|m| Ok((m.try_get("m")?, m.try_get("v")?)))
+            .collect::<Result<_, sqlx::Error>>()?;
+        Ok(Some(ItemDetailRaw { item, weapon, mods }))
+    }
+}
+
+/// An item: `item_basic b`, and `item_equipment e` when it is equipment.
+const ITEM_SELECT: &str = "SELECT CAST(b.itemid AS SIGNED) AS id, b.name AS name, CAST(b.type AS SIGNED) AS kind,
+       CAST(b.aH AS SIGNED) AS category, CAST(b.stackSize AS SIGNED) AS stack, CAST(b.flags AS SIGNED) AS flags,
+       CAST(e.level AS SIGNED) AS level, CAST(e.ilevel AS SIGNED) AS ilevel,
+       CAST(COALESCE(e.jobs, 0) AS SIGNED) AS jobs, CAST(COALESCE(e.slot, 0) AS SIGNED) AS slots
+FROM item_basic b LEFT JOIN item_equipment e ON e.itemId = b.itemid";
+/// The item search's WHERE: name (2 binds), then category, job bit, slot bit, lowest and
+/// highest level, each bound twice (0 = any). GM-only items (flag 0x2) never show.
+const ITEM_WHERE: &str = "WHERE b.itemid > 0 AND (b.flags & 2) = 0
+         AND (? = '' OR b.name LIKE ? ESCAPE '|')
+         AND (? = 0 OR b.aH = ?)
+         AND (? = 0 OR (e.jobs & ?) <> 0)
+         AND (? = 0 OR (e.slot & ?) <> 0)
+         AND (? = 0 OR e.level >= ?)
+         AND (? = 0 OR e.level <= ?)";
+
+fn item_row(r: &sqlx::mysql::MySqlRow) -> Result<ItemRaw, sqlx::Error> {
+    Ok(ItemRaw {
+        id: r.try_get("id")?,
+        name: r.try_get("name")?,
+        kind: r.try_get("kind")?,
+        category: r.try_get("category")?,
+        stack: r.try_get("stack")?,
+        flags: r.try_get("flags")?,
+        level: r.try_get("level")?,
+        ilevel: r.try_get("ilevel")?,
+        jobs: r.try_get("jobs")?,
+        slots: r.try_get("slots")?,
+    })
 }
 
 impl MariaDb {

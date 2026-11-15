@@ -423,3 +423,50 @@ pub struct TicketCounts {
     pub read: i64,
     pub closed: i64,
 }
+
+// ---- the item database ----
+
+/// One item as the game data tables hold it (static data only: nothing about who owns it).
+#[derive(Debug, Clone, Default)]
+pub struct ItemRaw {
+    pub id: i64,
+    /// `item_basic.name`: lower case with underscores.
+    pub name: String,
+    /// `item_basic.type` (general, usable, equipment, weapon, ...).
+    pub kind: i64,
+    /// `item_basic.aH`, the auction house category (0 or 255: none).
+    pub category: i64,
+    pub stack: i64,
+    pub flags: i64,
+    /// From `item_equipment`, for equipment only.
+    pub level: Option<i64>,
+    pub ilevel: Option<i64>,
+    pub jobs: i64,
+    pub slots: i64,
+}
+
+/// What an item's own page adds: its weapon line and its stats.
+#[derive(Debug, Clone, Default)]
+pub struct ItemDetailRaw {
+    pub item: ItemRaw,
+    /// (skill, damage, delay) from `item_weapon`.
+    pub weapon: Option<(i64, i64, i64)>,
+    /// (mod id, value) from `item_mods`, by mod id.
+    pub mods: Vec<(i64, i64)>,
+}
+
+/// An item search. Zero means "any" for the numeric filters.
+#[derive(Debug, Clone, Default)]
+pub struct ItemQuery {
+    /// Name text, already folded to the `item_basic.name` spelling (spaces as underscores).
+    pub q: String,
+    pub category: i64,
+    /// One job's bit (1 << (job - 1)).
+    pub job_bit: i64,
+    /// One equipment slot's bit.
+    pub slot_bit: i64,
+    pub min_level: i64,
+    pub max_level: i64,
+    pub page: i64,
+    pub per: i64,
+}

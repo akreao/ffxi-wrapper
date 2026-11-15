@@ -107,6 +107,8 @@ fn signup_addr_key(addr: &str) -> (String, usize) {
     }
 }
 
+pub const ITEM_READS: (usize, i64) = (60, MIN);
+
 /// What sign-in is limited by (see the spec's rate-limit table).
 pub const FAIL_PAIR: (usize, i64) = (5, 15 * MIN);
 pub const FAIL_LOGIN: (usize, i64) = (20, HOUR);
@@ -159,11 +161,12 @@ pub struct Limiter {
     pub public_gets: Windows,
     pub writes: Windows,
     pub signups: Windows,
+    pub item_reads: Windows,
 }
 
 impl Limiter {
     pub fn new() -> Limiter {
-        Limiter { failures: Windows::default(), public_gets: Windows::default(), writes: Windows::default(), signups: Windows::default() }
+        Limiter { failures: Windows::default(), public_gets: Windows::default(), writes: Windows::default(), signups: Windows::default(), item_reads: Windows::default() }
     }
 
     pub fn sign_in_keys(addr: &str, target: &Target) -> SignInKeys {
@@ -215,8 +218,14 @@ impl Limiter {
         self.writes.allow(session, 30, MIN, now)
     }
 
+    /// 60 item database reads a minute per account (or per owner-link session).
+    pub fn item_read_allowed(&self, who: &str, now: i64) -> bool {
+        self.item_reads.allow(who, ITEM_READS.0, ITEM_READS.1, now)
+    }
+
     pub fn sweep(&self, now: i64) {
         self.failures.sweep(HOUR, now);
+        self.item_reads.sweep(MIN, now);
         self.public_gets.sweep(MIN, now);
         self.writes.sweep(MIN, now);
         self.signups.sweep(DAY, now);
