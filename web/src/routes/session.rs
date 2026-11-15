@@ -242,12 +242,12 @@ struct OwnerQuery {
 }
 
 /// `next` when it is a path inside the admin panel and nothing more: no
-/// scheme or host, no `//`, `..` or `\`, and only plain URL characters, so the
+/// scheme or host, no `//`, `..`, `\` or `%` escapes, and only plain URL characters, so the
 /// redirect can't leave the site or break the header.
 fn admin_next(next: Option<&str>) -> &str {
     let Some(n) = next else { return "/admin" };
     let in_panel = n == "/admin" || ["/admin/", "/admin?", "/admin#"].iter().any(|p| n.starts_with(p));
-    let plain = n.bytes().all(|b| b.is_ascii_alphanumeric() || b"/?=&-_.%#".contains(&b));
+    let plain = n.bytes().all(|b| b.is_ascii_alphanumeric() || b"/?=&-_.#".contains(&b));
     if in_panel && plain && !n.contains("//") && !n.contains("..") && n.len() <= 200 { n } else { "/admin" }
 }
 
@@ -309,7 +309,7 @@ mod tests {
         }
         for bad in [
             "", "/", "/me", "/adminx", "//evil.example", "/admin//evil", "https://evil.example/admin",
-            "/admin/\\evil", "/admin/x\r\nSet-Cookie: a=b", "/admin/ x", "admin", "/admin/@evil", "/admin/../me",
+            "/admin/\\evil", "/admin/x\r\nSet-Cookie: a=b", "/admin/ x", "admin", "/admin/@evil", "/admin/../me", "/admin/%2e%2e/me", "/admin/%252e%252e/me",
         ] {
             assert_eq!(admin_next(Some(bad)), "/admin", "{bad:?}");
         }

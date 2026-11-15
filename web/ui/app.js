@@ -1141,7 +1141,7 @@
       columns: [{ label: "Name", key: "name" }, { label: "Job" }, { label: "Zone" }, { label: "Account", key: "account", cls: "hide-phone" }, { label: "Nation", cls: "hide-phone" },
         { label: "GM", cls: "num" }, { label: "Play time", key: "playtime", cls: "num", firstDesc: true }],
       toolbar: (ctx) => [["online", "Online only"], ["gm", "Game masters only"]].map(([k, label]) =>
-        h("label", { class: "editor-filter" }, h("input", { type: "checkbox", class: "switch", checked: ctx.st[k] === "1", onchange: (e) => ctx.set(k, e.target.checked ? "1" : "") }), " " + label)),
+        h("label", { class: "editor-filter" }, h("input", { type: "checkbox", class: "switch", checked: ["1", "true"].includes(ctx.st[k]), onchange: (e) => ctx.set(k, e.target.checked ? "1" : "") }), " " + label)),
       row: (c) => h("tr", {},
         h("td", {}, h("span", { class: "dot" + (c.online ? " ok" : "") }), h("a", { href: `/admin/characters/${c.charid}` }, c.name)),
         jobCell(c), h("td", { class: "zone" }, c.zone || "–"),
