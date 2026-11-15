@@ -167,8 +167,8 @@ async fn accounts(State(state): State<Shared>, Staff(_): Staff, Query(p): Query<
         .items
         .into_iter()
         .map(|a| {
-            let row = stored.iter().find(|r| r.accid == a.id).map(|r| (r.role.as_str(), r.login.as_str()));
-            let role = auth::stored_role(row, &a.login);
+            let row = stored.iter().find(|r| r.accid == a.id).map(|r| (r.role.as_str(), r.login.as_str(), r.created));
+            let role = auth::stored_role(row, &a.login, a.created);
             let mut v = json!(a);
             v["role"] = json!(role.as_str());
             v
@@ -227,16 +227,18 @@ async fn account(State(state): State<Shared>, Staff(id): Staff, Path(accid): Pat
     let mut targets = vec![("account", accid)];
     targets.extend(acct.characters.iter().map(|c| ("character", c.summary.charid)));
     let history = state.store.history(&targets, 50).await?;
-    let role = roles::role_of(&state, accid, &acct.login).await?;
-    let can_act = auth::can_act_on(id.actor(), role);
+    let role = roles::account_role(&state, accid).await?;
+    // Moderators leave accounts with in-game GM characters to owners.
+    let gm_floor = gm_floor(id.actor(), acct.gm);
+    let can_act = auth::can_act_on(id.actor(), role) && !gm_floor;
     let own = id.accid() == Some(accid);
-    Ok(Json(json!({ "account": acct, "role": role.as_str(), "history": history, "can_act": can_act, "own": own })))
+    Ok(Json(json!({ "account": acct, "role": role.as_str(), "history": history, "can_act": can_act, "gm_floor": gm_floor, "own": own })))
 }
 
 async fn character(State(state): State<Shared>, Staff(id): Staff, Path(charid): Path<i64>) -> ApiResult<Json<Value>> {
     let c = state.game.admin_character(charid).await?.ok_or_else(ApiError::not_found)?;
     let history = state.store.history(&[("character", charid), ("account", c.accid)], 50).await?;
-    let role = roles::role_of(&state, c.accid, &c.login).await?;
+    let role = roles::account_role(&state, c.accid).await?;
     let can_act = auth::can_act_on(id.actor(), role);
     let own = id.accid() == Some(c.accid);
     Ok(Json(json!({ "character": c, "role": role.as_str(), "history": history, "can_act": can_act, "own": own })))
@@ -284,6 +286,16 @@ fn below_you() -> ApiError {
     ApiError::new(StatusCode::FORBIDDEN, "You can only change accounts whose website role is below yours.")
 }
 
+fn gm_only() -> ApiError {
+    ApiError::new(StatusCode::FORBIDDEN, "This account has a character with an in-game GM level: only an owner can ban or unban it.")
+}
+
+/// Does the GM floor stop `actor` here? Moderators don't ban or unban accounts that have a
+/// character with an in-game GM level; owners (and the owner link) do.
+fn gm_floor(actor: auth::Actor, target_gm: i64) -> bool {
+    actor.role < Role::Owner && !actor.owner_link && target_gm > 0
+}
+
 fn owners_only(id: &Identity) -> ApiResult<()> {
     if id.role == Role::Owner { Ok(()) } else { Err(ApiError::forbidden()) }
 }
@@ -296,6 +308,12 @@ async fn settle(state: &Shared, outcome: Acted, row: NewAction, none: &str) -> A
             Ok(())
         }
         Acted::NotFound => Err(ApiError::not_found()),
+        Acted::HasGm => {
+            let mut row = row;
+            row.result = "refused";
+            record(state, row).await;
+            Err(gm_only())
+        }
         Acted::NoChange => Err(ApiError::new(StatusCode::CONFLICT, none)),
     }
 }
@@ -326,13 +344,13 @@ async fn ban(
     let mut row = act(&id, &ip, "ban", "account", accid, &acct.login);
     row.reason = Some(reason.clone());
     row.detail = Some(json!({ "until": body.until }).to_string());
-    let _gate = state.role_gate.lock().await;
-    if !auth::can_act_on(id.actor(), roles::role_of(&state, accid, &acct.login).await?) {
+    let (_gate, actor) = roles::lock(&state, &id, Role::Moderator).await?;
+    if !auth::can_act_on(actor, roles::account_role(&state, accid).await?) {
         row.result = "refused";
         record(&state, row).await;
         return Err(below_you());
     }
-    let outcome = state.game.ban_account(accid, body.until, &reason).await?;
+    let outcome = state.game.ban_account(accid, body.until, &reason, actor.role < Role::Owner && !actor.owner_link).await?;
     settle(&state, outcome, row, "").await?;
     // A banned account's web sessions end at its next request anyway; end them now.
     state.store.end_account_sessions(accid, None).await?;
@@ -355,13 +373,13 @@ async fn unban(
     let acct = state.game.admin_account(accid).await?.ok_or_else(ApiError::not_found)?;
     let mut row = act(&id, &ip, "unban", "account", accid, &acct.login);
     row.reason = reason;
-    let _gate = state.role_gate.lock().await;
-    if !auth::can_act_on(id.actor(), roles::role_of(&state, accid, &acct.login).await?) {
+    let (_gate, actor) = roles::lock(&state, &id, Role::Moderator).await?;
+    if !auth::can_act_on(actor, roles::account_role(&state, accid).await?) {
         row.result = "refused";
         record(&state, row).await;
         return Err(below_you());
     }
-    let outcome = state.game.unban_account(accid).await?;
+    let outcome = state.game.unban_account(accid, actor.role < Role::Owner && !actor.owner_link).await?;
     settle(&state, outcome, row, "That account isn't banned.").await?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -409,8 +427,8 @@ async fn password(
     let acct = state.game.admin_account(accid).await?.ok_or_else(ApiError::not_found)?;
     let mut row = act(&id, &ip, "password_reset", "account", accid, &acct.login);
     row.reason = reason;
-    let _gate = state.role_gate.lock().await;
-    if !auth::can_act_on(id.actor(), roles::role_of(&state, accid, &acct.login).await?) {
+    let (_gate, actor) = roles::lock(&state, &id, Role::Owner).await?;
+    if !auth::can_act_on(actor, roles::account_role(&state, accid).await?) {
         row.result = "refused";
         record(&state, row).await;
         return Err(below_you());
@@ -441,8 +459,8 @@ async fn totp_reset(
     let acct = state.game.admin_account(accid).await?.ok_or_else(ApiError::not_found)?;
     let mut row = act(&id, &ip, "totp_reset", "account", accid, &acct.login);
     row.reason = reason;
-    let _gate = state.role_gate.lock().await;
-    if !auth::can_act_on(id.actor(), roles::role_of(&state, accid, &acct.login).await?) {
+    let (_gate, actor) = roles::lock(&state, &id, Role::Owner).await?;
+    if !auth::can_act_on(actor, roles::account_role(&state, accid).await?) {
         row.result = "refused";
         record(&state, row).await;
         return Err(below_you());
@@ -481,9 +499,9 @@ async fn gm_level(
     // GM levels are in-game only, but still an Owner's power: one Owner can't change the
     // characters of another Owner's account (the check is the account's role, not that
     // one character's level). Their own account's characters are theirs to change.
-    let _gate = state.role_gate.lock().await;
+    let (_gate, actor) = roles::lock(&state, &id, Role::Owner).await?;
     let own = id.accid() == Some(c.accid);
-    if !own && !auth::can_act_on(id.actor(), roles::role_of(&state, c.accid, &c.login).await?) {
+    if !own && !auth::can_act_on(actor, roles::account_role(&state, c.accid).await?) {
         row.result = "refused";
         record(&state, row).await;
         return Err(below_you());
@@ -518,8 +536,9 @@ async fn site_role(
     let new = Role::assignable(&body.role).ok_or_else(|| ApiError::bad_request("Pick player, moderator or owner."))?;
     let reason = clean_reason(body.reason.as_deref(), true)?;
     let acct = state.game.admin_account(accid).await?.ok_or_else(ApiError::not_found)?;
-    let _gate = state.role_gate.lock().await;
-    let before = roles::role_of(&state, accid, &acct.login).await?;
+    let (_gate, actor) = roles::lock(&state, &id, Role::Owner).await?;
+    let now = state.game.standing(accid).await?.ok_or_else(ApiError::not_found)?;
+    let before = roles::role_of(&state, accid, &now).await?;
     let mut row = act(&id, &ip, "site_role", "account", accid, &acct.login);
     row.reason = reason;
     row.detail = Some(json!({ "before": before.as_str(), "after": new.as_str() }).to_string());
@@ -528,7 +547,7 @@ async fn site_role(
         record(&state, row).await;
         return Err(ApiError::new(StatusCode::FORBIDDEN, "You can't change your own website role."));
     }
-    if !auth::can_act_on(id.actor(), before) {
+    if !auth::can_act_on(actor, before) {
         row.result = "refused";
         record(&state, row).await;
         return Err(below_you());
@@ -537,7 +556,7 @@ async fn site_role(
         return Err(ApiError::bad_request("That is already their role."));
     }
     let who = id.login().map(String::from).unwrap_or_else(|| "owner".into());
-    state.store.set_site_role(accid, &acct.login, new.as_str(), &who, state.now()).await?;
+    state.store.set_site_role(accid, &now.login, now.created, new.as_str(), &who, state.now()).await?;
     record(&state, row).await;
     // Their web sessions start over with the new role.
     state.store.end_account_sessions(accid, None).await?;

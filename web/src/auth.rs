@@ -48,11 +48,12 @@ impl Role {
     }
 }
 
-/// The role an account gets from its stored row, if any. The row must name the account's
-/// current login: a role never passes to a different account that later gets the same id.
-pub fn stored_role(row: Option<(&str, &str)>, login: &str) -> Role {
+/// The role an account gets from its stored row (role, login, creation time), if any. The
+/// row must name the account's current login and creation time: a role never passes to a
+/// different account that later gets the same id.
+pub fn stored_role(row: Option<(&str, &str, Option<i64>)>, login: &str, created: Option<i64>) -> Role {
     match row {
-        Some((role, stored_login)) if stored_login == login => Role::from_stored(role),
+        Some((role, stored_login, stored_created)) if stored_login == login && stored_created == created => Role::from_stored(role),
         _ => Role::Player,
     }
 }
@@ -205,11 +206,13 @@ mod tests {
 
     #[test]
     fn roles_come_from_the_stored_row_for_the_same_login() {
-        assert_eq!(stored_role(Some(("owner", "steven")), "steven"), Role::Owner);
-        assert_eq!(stored_role(Some(("moderator", "halvard")), "halvard"), Role::Moderator);
-        assert_eq!(stored_role(Some(("owner", "steven")), "someoneelse"), Role::Player);
-        assert_eq!(stored_role(Some(("admin", "x")), "x"), Role::Player);
-        assert_eq!(stored_role(None, "x"), Role::Player);
+        assert_eq!(stored_role(Some(("owner", "steven", Some(7))), "steven", Some(7)), Role::Owner);
+        assert_eq!(stored_role(Some(("moderator", "halvard", None)), "halvard", None), Role::Moderator);
+        assert_eq!(stored_role(Some(("owner", "steven", Some(7))), "someoneelse", Some(7)), Role::Player);
+        // Same id and login, but made later: a new account.
+        assert_eq!(stored_role(Some(("owner", "steven", Some(7))), "steven", Some(8)), Role::Player);
+        assert_eq!(stored_role(Some(("admin", "x", None)), "x", None), Role::Player);
+        assert_eq!(stored_role(None, "x", None), Role::Player);
         assert!(Role::Owner > Role::Moderator && Role::Moderator > Role::Player && Role::Player > Role::Visitor);
         assert!(!Role::Player.is_admin() && Role::Moderator.is_admin());
         assert_eq!(Role::assignable("visitor"), None);

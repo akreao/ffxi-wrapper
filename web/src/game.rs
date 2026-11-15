@@ -42,11 +42,11 @@ pub trait Game: Send + Sync {
     async fn account_by_login(&self, login: &str) -> DbResult<Option<AccountAuth>>;
     async fn account_by_id(&self, id: i64) -> DbResult<Option<AccountAuth>>;
     async fn totp(&self, accid: i64) -> DbResult<Option<TotpRow>>;
-    /// `accounts.status` and `accounts.login`, re-read on every request.
+    /// `accounts.status`, `login` and `timecreate`, re-read on every request.
     async fn standing(&self, accid: i64) -> DbResult<Option<Standing>>;
-    /// Every account with a character at GM level 3 or more: (id, login, highest level).
-    /// Only read once, for the one-time copy of the roles GM levels used to give.
-    async fn staff_by_gm_level(&self) -> DbResult<Vec<(i64, String, i64)>>;
+    /// Every account with a character at GM level 3 or more: (id, login, creation time,
+    /// highest level). Only read once, for the one-time copy of the roles GM levels used to give.
+    async fn staff_by_gm_level(&self) -> DbResult<Vec<(i64, String, Option<i64>, i64)>>;
 
     async fn my_account(&self, accid: i64) -> DbResult<Option<MyAccount>>;
     async fn my_characters(&self, accid: i64) -> DbResult<Vec<CharSummary>>;
@@ -83,11 +83,13 @@ pub trait Game: Send + Sync {
 
     /// The writes below each run in one transaction that locks the account row. Who may
     /// make them (by website role) is checked by the caller, under `AppState::role_gate`.
+    /// With `no_gm` (a Moderator acting), a ban or unban is refused (`HasGm`) when any of
+    /// the account's characters has an in-game GM level, read in the same transaction.
     ///
     /// Sets `status = 2`, drops the account's trust tokens and writes `accounts_banned`.
-    async fn ban_account(&self, id: i64, until: Option<i64>, reason: &str) -> DbResult<Acted>;
+    async fn ban_account(&self, id: i64, until: Option<i64>, reason: &str, no_gm: bool) -> DbResult<Acted>;
     /// Sets `status = 1` and removes the `accounts_banned` row; `NoChange` when not banned.
-    async fn unban_account(&self, id: i64) -> DbResult<Acted>;
+    async fn unban_account(&self, id: i64, no_gm: bool) -> DbResult<Acted>;
     async fn reset_password(&self, id: i64, hash: &str) -> DbResult<Acted>;
     /// Removes two-step sign-in and the trust tokens.
     async fn reset_totp(&self, id: i64) -> DbResult<Acted>;
@@ -322,25 +324,31 @@ impl Game for MariaDb {
     }
 
     async fn standing(&self, accid: i64) -> DbResult<Option<Standing>> {
-        let r = sqlx::query("SELECT CAST(status AS SIGNED) AS status, login FROM accounts WHERE id = ?")
+        let r = sqlx::query(
+            "SELECT CAST(status AS SIGNED) AS status, login,
+                    CAST(UNIX_TIMESTAMP(NULLIF(timecreate, '0000-00-00 00:00:00')) AS SIGNED) AS created
+             FROM accounts WHERE id = ?",
+        )
             .bind(accid)
             .fetch_optional(&self.pool)
             .await?;
         Ok(match r {
-            Some(r) => Some(Standing { status: r.try_get("status")?, login: r.try_get("login")? }),
+            Some(r) => Some(Standing { status: r.try_get("status")?, login: r.try_get("login")?, created: r.try_get("created")? }),
             None => None,
         })
     }
 
-    async fn staff_by_gm_level(&self) -> DbResult<Vec<(i64, String, i64)>> {
+    async fn staff_by_gm_level(&self) -> DbResult<Vec<(i64, String, Option<i64>, i64)>> {
         let rows = sqlx::query(
-            "SELECT CAST(a.id AS SIGNED) AS id, a.login, CAST(MAX(c.gmlevel) AS SIGNED) AS gm
+            "SELECT CAST(a.id AS SIGNED) AS id, a.login,
+                    CAST(UNIX_TIMESTAMP(NULLIF(a.timecreate, '0000-00-00 00:00:00')) AS SIGNED) AS created,
+                    CAST(MAX(c.gmlevel) AS SIGNED) AS gm
              FROM accounts a JOIN chars c ON c.accid = a.id
-             GROUP BY a.id, a.login HAVING MAX(c.gmlevel) >= 3",
+             GROUP BY a.id, a.login, a.timecreate HAVING MAX(c.gmlevel) >= 3",
         )
         .fetch_all(&self.pool)
         .await?;
-        rows.iter().map(|r| Ok((r.try_get("id")?, r.try_get("login")?, r.try_get("gm")?))).collect()
+        rows.iter().map(|r| Ok((r.try_get("id")?, r.try_get("login")?, r.try_get("created")?, r.try_get("gm")?))).collect()
     }
 
     async fn my_account(&self, accid: i64) -> DbResult<Option<MyAccount>> {
@@ -784,9 +792,10 @@ impl Game for MariaDb {
         Ok(Page { items, total })
     }
 
-    async fn ban_account(&self, id: i64, until: Option<i64>, reason: &str) -> DbResult<Acted> {
+    async fn ban_account(&self, id: i64, until: Option<i64>, reason: &str, no_gm: bool) -> DbResult<Acted> {
         let mut tx = self.pool.begin().await?;
         match lock_account(&mut tx, id).await? {
+            Locked::Ok { gm, .. } if no_gm && gm > 0 => return Ok(Acted::HasGm),
             Locked::Ok { .. } => {}
             Locked::Missing => return Ok(Acted::NotFound),
         }
@@ -807,10 +816,11 @@ impl Game for MariaDb {
         Ok(Acted::Done)
     }
 
-    async fn unban_account(&self, id: i64) -> DbResult<Acted> {
+    async fn unban_account(&self, id: i64, no_gm: bool) -> DbResult<Acted> {
         let mut tx = self.pool.begin().await?;
         match lock_account(&mut tx, id).await? {
-            Locked::Ok { status } if status & 1 == 0 => {}
+            Locked::Ok { gm, .. } if no_gm && gm > 0 => return Ok(Acted::HasGm),
+            Locked::Ok { status, .. } if status & 1 == 0 => {}
             Locked::Ok { .. } => return Ok(Acted::NoChange),
             Locked::Missing => return Ok(Acted::NotFound),
         }
@@ -909,16 +919,21 @@ async fn insert_account(conn: &mut sqlx::MySqlConnection, login: &str, hash: &st
 }
 
 enum Locked {
-    Ok { status: i64 },
+    /// `gm`: the highest in-game GM level among the account's characters.
+    Ok { status: i64, gm: i64 },
     Missing,
 }
 
-/// Locks an account row in the caller's transaction.
+/// Locks an account row (and reads its characters' GM levels) in the caller's transaction.
 async fn lock_account(tx: &mut sqlx::Transaction<'_, sqlx::MySql>, id: i64) -> DbResult<Locked> {
-    let r = sqlx::query("SELECT CAST(status AS SIGNED) AS status FROM accounts WHERE id = ? FOR UPDATE")
+    let r = sqlx::query(
+        "SELECT CAST(a.status AS SIGNED) AS status,
+                CAST(COALESCE((SELECT MAX(c.gmlevel) FROM chars c WHERE c.accid = a.id), 0) AS SIGNED) AS gm
+         FROM accounts a WHERE a.id = ? FOR UPDATE",
+    )
         .bind(id)
         .fetch_optional(&mut **tx)
         .await?;
     let Some(r) = r else { return Ok(Locked::Missing) };
-    Ok(Locked::Ok { status: r.try_get("status")? })
+    Ok(Locked::Ok { status: r.try_get("status")?, gm: r.try_get("gm")? })
 }

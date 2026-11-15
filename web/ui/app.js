@@ -1070,7 +1070,7 @@
               online.length ? [" ", h("span", { class: "badge info plain" }, `${online.length} ${online.length === 1 ? "character" : "characters"} in game`)] : null),
               h("div", { class: "sub" }, "Account ", h("code", {}, a.id), ` · created ${date(a.created)}`))),
           h("div", { class: "toolbar" }, actions)),
-        d.can_act ? null : h("div", { class: "update-bar lock" }, icon("lock"), h("p", {}, "This account's website role is the same as yours or higher, so you can look but not change it.")),
+        d.can_act ? null : h("div", { class: "update-bar lock" }, icon("lock"), h("p", {}, d.gm_floor ? "A character on this account has an in-game GM level, so only an owner can ban or unban it." : "This account's website role is the same as yours or higher, so you can look but not change it.")),
         banned ? h("div", { class: "update-bar lock" }, icon("bans"), h("p", {}, ban
           ? [h("strong", {}, ban.until ? `Banned until ${fmtDT(ban.until)}. ` : "Banned until someone lifts it. "), ban.reason || "No reason recorded."]
           : "Banned without a record (the ban was made outside this site).")) : null,

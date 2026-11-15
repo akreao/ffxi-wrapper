@@ -157,7 +157,7 @@ pub async fn resolve(state: &Shared, headers: &HeaderMap) -> ApiResult<Option<Id
         SessionKind::Account => {
             let accid = session.accid.unwrap_or(0);
             match state.game.standing(accid).await? {
-                Some(s) if s.status & 1 == 1 => crate::roles::role_of(state, accid, &s.login).await?,
+                Some(s) if s.status & 1 == 1 => crate::roles::role_of(state, accid, &s).await?,
                 _ => {
                     // Gone, banned or disabled: the session ends.
                     state.store.end_session(&session.id_hash).await?;

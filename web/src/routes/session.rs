@@ -164,7 +164,7 @@ async fn login(
     }
 
     state.limiter.sign_in_succeeded(&keys);
-    let role = crate::roles::role_of(&state, account.id, &account.login).await?;
+    let role = crate::roles::account_role(&state, account.id).await?;
     let ua = headers.get(header::USER_AGENT).and_then(|v| v.to_str().ok());
     let lifetime = auth::new_session_lifetime(role, &SessionKind::Account);
     let (cookie, csrf) = state

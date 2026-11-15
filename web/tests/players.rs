@@ -225,6 +225,55 @@ async fn roles_are_copied_from_gm_levels_once_then_gm_levels_give_none() {
 }
 
 #[tokio::test]
+async fn a_new_site_copies_no_roles_from_gm_levels() {
+    // A brand-new (or wiped) web data volume: in-game GMs get nothing; the owner link sets roles.
+    let mut cfg = ffxi_web::config::Config::for_tests();
+    cfg.admin_secret = SECRET.into();
+    let s = site_with_store(cfg, ffxi_web::store::Store::memory().await.unwrap()).await;
+    s.fake.add_account(4, "steven", "owner-pass", 5);
+    s.fake.add_account(3, "halvard", "gm-password", 3);
+    let o = owner(&s).await;
+    assert_eq!(s.send(Req::get("/api/me").cookie(&o.cookie)).await.json()["role"], "player");
+    assert_eq!(s.send(get(&o, "/api/admin/dashboard")).await.status, StatusCode::FORBIDDEN);
+    assert!(s.state.store.site_roles().await.unwrap().is_empty());
+    let link = owner_link_session(&s).await;
+    assert_eq!(s.send(post(&link, "/api/admin/accounts/4/role", json!({ "role": "owner", "reason": "me" }))).await.status, StatusCode::OK);
+    let o = owner(&s).await;
+    assert_eq!(s.send(get(&o, "/api/admin/dashboard")).await.status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn moderators_leave_accounts_with_gm_characters_to_owners() {
+    let s = site_with_people().await;
+    let o = owner(&s).await;
+    let m = moderator(&s).await;
+    // ravenna is a Player whose character gets GM 1 in game: still out of a Moderator's reach.
+    s.fake.add_char(21, 2, "RavennaGm", 1);
+    let d = s.send(get(&m, "/api/admin/accounts/2")).await.json();
+    assert_eq!((d["can_act"].clone(), d["gm_floor"].clone()), (json!(false), json!(true)));
+    let r = s.send(post(&m, "/api/admin/accounts/2/ban", json!({ "reason": "x" }))).await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    assert_eq!(s.fake.account(2).status, 1);
+    assert_eq!(s.send(post(&o, "/api/admin/accounts/2/ban", json!({ "reason": "owner can" }))).await.status, StatusCode::OK);
+    assert_eq!(s.send(post(&m, "/api/admin/accounts/2/unban", json!({ "reason": "x" }))).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(s.send(post(&o, "/api/admin/accounts/2/unban", json!({ "reason": "owner can" }))).await.status, StatusCode::OK);
+    // A plain player is still theirs.
+    assert_eq!(s.send(post(&m, "/api/admin/accounts/1/ban", json!({ "reason": "spam" }))).await.status, StatusCode::OK);
+    let log = s.send(get(&o, "/api/admin/log")).await.json();
+    assert!(log_actions(&log).iter().filter(|(a, r)| a == "ban" && r == "refused").count() >= 1);
+}
+
+#[tokio::test]
+async fn a_demoted_moderator_cannot_finish_a_change() {
+    let s = site_with_people().await;
+    let m = moderator(&s).await;
+    // The role is read again under the role lock, not only when the request began.
+    s.state.store.set_site_role(3, "halvard", fake_created(3), "player", "test", NOW).await.unwrap();
+    assert_eq!(s.send(post(&m, "/api/admin/accounts/1/ban", json!({ "reason": "x" }))).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(s.fake.account(1).status, 1);
+}
+
+#[tokio::test]
 async fn only_an_owner_sets_website_roles_within_the_rules() {
     let s = site_with_people().await;
     let o = owner(&s).await;

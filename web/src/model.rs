@@ -13,12 +13,13 @@ pub struct AccountAuth {
     pub password: String,
 }
 
-/// What every request re-reads: the account's standing and login (a stored website role
-/// only counts for the login it was given to).
+/// What every request re-reads: the account's standing, login and creation time (a stored
+/// website role only counts for the account it was given to, not a later one with its id).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Standing {
     pub status: i64,
     pub login: String,
+    pub created: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -226,6 +227,8 @@ pub struct BanRow {
 pub enum Acted {
     Done,
     NotFound,
+    /// A Moderator's ban or unban of an account with an in-game GM character: owners only.
+    HasGm,
     /// The change doesn't apply (for instance unbanning someone who isn't banned).
     NoChange,
 }

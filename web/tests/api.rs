@@ -149,7 +149,7 @@ async fn a_ban_or_demotion_takes_effect_on_the_next_request() {
     s.fake.set_gm(4, 0);
     assert_eq!(s.send(Req::get("/api/admin/dashboard").cookie(&cookie)).await.status, StatusCode::OK);
     // ...a change of the stored website role is, at once.
-    s.state.store.set_site_role(4, "steven", "player", "test", NOW).await.unwrap();
+    s.state.store.set_site_role(4, "steven", fake_created(4), "player", "test", NOW).await.unwrap();
     assert_eq!(s.send(Req::get("/api/admin/dashboard").cookie(&cookie)).await.status, StatusCode::FORBIDDEN);
     assert_eq!(s.send(Req::get("/api/me").cookie(&cookie)).await.json()["role"], "player");
     s.fake.set_status(4, 2);
