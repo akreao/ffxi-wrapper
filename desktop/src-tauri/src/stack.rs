@@ -2,10 +2,11 @@
 
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::Mutex;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
@@ -294,11 +295,38 @@ struct Publisher {
 /// The order services start in, which the app lists them in.
 const ORDER: [&str; 9] = ["db", "db-init", "meshes", "world", "connect", "search", "map", "ahbot", "web"];
 
+type ListKey = (Option<SystemTime>, Option<SystemTime>);
+
+/// The service names last read, per stack folder, with the modified times
+/// of the files they come from.
+static SERVICE_NAMES: Mutex<Vec<(PathBuf, ListKey, String)>> = Mutex::new(Vec::new());
+
+fn list_key(dir: &Path) -> ListKey {
+    let modified = |f: &str| fs::metadata(dir.join(f)).and_then(|m| m.modified()).ok();
+    (modified("compose.yaml"), modified(".env"))
+}
+
+/// The output of `config --services`, which only changes when compose.yaml
+/// or .env do, so it is read again only then.
+fn service_names(dir: &Path, read: impl FnOnce() -> Result<String, String>) -> Result<String, String> {
+    let key = list_key(dir);
+    let mut cache = SERVICE_NAMES.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, _, names)) = cache.iter().find(|(d, k, _)| d == dir && *k == key) {
+        return Ok(names.clone());
+    }
+    let names = read()?;
+    cache.retain(|(d, _, _)| d != dir);
+    cache.push((dir.to_owned(), key, names.clone()));
+    Ok(names)
+}
+
 /// Every service in compose.yaml with its container's state.
 pub fn status(dir: &Path) -> Result<Vec<ServiceStatus>, String> {
-    let mut services = compose(dir);
-    services.args(["config", "--services"]);
-    let names = output(services)?;
+    let names = service_names(dir, || {
+        let mut services = compose(dir);
+        services.args(["config", "--services"]);
+        output(services)
+    })?;
 
     let mut ps = compose(dir);
     ps.args(["ps", "--all", "--format", "json"]);
@@ -469,6 +497,34 @@ mod tests {
         for new in ["2.24.0", "v2.40.3-desktop.1", "5.6.1\n", "", "unknown"] {
             assert!(!too_old(new), "{new}");
         }
+    }
+
+    #[test]
+    fn service_names_are_read_again_only_when_the_files_change() {
+        let dir = std::env::temp_dir().join(format!("ffxi-names-{}", std::process::id()));
+        write(&dir.join("compose.yaml"), "a");
+        let mut reads = 0;
+        let mut names = |dir: &Path| {
+            service_names(dir, || {
+                reads += 1;
+                Ok(format!("read {reads}"))
+            })
+            .unwrap()
+        };
+        assert_eq!(names(&dir), "read 1");
+        assert_eq!(names(&dir), "read 1");
+        write(&dir.join(".env"), "COMPOSE_PROFILES=web");
+        assert_eq!(names(&dir), "read 2");
+        assert_eq!(names(&dir), "read 2");
+        // A changed file is noticed even when the new time is older.
+        let env = fs::File::options().write(true).open(dir.join(".env")).unwrap();
+        env.set_modified(SystemTime::UNIX_EPOCH).unwrap();
+        assert_eq!(names(&dir), "read 3");
+        // A failed read isn't cached.
+        env.set_modified(SystemTime::now()).unwrap();
+        assert!(service_names(&dir, || Err("down".into())).is_err());
+        assert_eq!(names(&dir), "read 4");
+        fs::remove_dir_all(&dir).ok();
     }
 
     fn write(path: &Path, text: &str) {
