@@ -316,7 +316,7 @@ pub const SETTINGS: &[Setting] = &[
     on("search", "OMIT_NO_HISTORY", AUCTION, "Hide items never sold", "Leave items with no sales history out of the auction house lists.", false),
     // Logins and accounts
     switch("login", "MAINT_MODE", LOGINS, "Maintenance mode", "Only GM characters can log in, and no new characters can be made.", false),
-    on("login", "ACCOUNT_CREATION", LOGINS, "New accounts", "Players can make an account from the game's login.", true),
+    on("login", "ACCOUNT_CREATION", LOGINS, "New accounts", "Players can make an account from the game's login screen. The website's sign-up has its own switch in its admin panel.", true),
     on("login", "CHARACTER_CREATION", LOGINS, "New characters", "", true),
     on("login", "CHARACTER_DELETION", LOGINS, "Character deletion", "", true),
     whole("login", "LOGIN_LIMIT", LOGINS, "Games per address", "How many can play from one IP address at once. 0 is no limit.", (0.0, 100.0, 0.0), "", 0.0),

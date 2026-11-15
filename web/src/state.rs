@@ -31,8 +31,6 @@ pub struct AppState {
     pub bcrypt_cost: u32,
     /// At most this many bcrypt checks or hashes run at once; a burst of sign-ins queues.
     pub bcrypt_slots: tokio::sync::Semaphore,
-    /// What LSB's `login.ACCOUNT_CREATION` was when last looked up (time, value); `None` = unknown.
-    pub account_creation: Mutex<Option<(i64, Option<bool>)>>,
     pub public_cache: PublicCache,
     /// Set once the one-time copy of GM-level roles into `site_roles` is known to be done.
     pub roles_seeded: std::sync::atomic::AtomicBool,
@@ -74,21 +72,10 @@ impl AppState {
         (self.clock)()
     }
 
-    /// Does LSB's login server allow new accounts? Looked up at most once a minute; a folder
-    /// that can't be read, or a setting that can't be understood, counts as no.
+    /// Is sign-up open? Only the owner's switch on the site decides; it starts closed, and a
+    /// database that can't be read counts as closed.
     pub async fn signup_open(&self) -> bool {
-        let now = self.now();
-        if let Some((at, v)) = *self.account_creation.lock().unwrap() {
-            if (0..60).contains(&(now - at)) {
-                return v == Some(true);
-            }
-        }
-        let value = match self.cfg.lsb_settings.clone() {
-            Some(dir) => tokio::task::spawn_blocking(move || crate::lsb_settings::account_creation(&dir)).await.ok().flatten(),
-            None => None,
-        };
-        *self.account_creation.lock().unwrap() = Some((now, value));
-        value == Some(true)
+        self.store.signup_open().await.unwrap_or(false)
     }
 
     pub fn system_clock() -> Clock {

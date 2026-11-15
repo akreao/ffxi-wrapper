@@ -19,9 +19,6 @@ pub struct Config {
     /// Where the site's own SQLite file lives (`/data` in the container).
     pub data_dir: PathBuf,
     pub listen: String,
-    /// LSB's settings folder (`overrides/settings`, mounted read-only): where sign-up reads
-    /// `login.ACCOUNT_CREATION` from. Unset: sign-up stays closed.
-    pub lsb_settings: Option<PathBuf>,
     /// Debug builds serve `web/ui` from this folder instead of the embedded copy.
     pub ui_dir: Option<PathBuf>,
 }
@@ -56,7 +53,6 @@ impl Config {
             trusted_proxy: get("WEB_TRUSTED_PROXY").trim().to_string(),
             data_dir: PathBuf::from(or("DATA_DIR", "/data")),
             listen: or("WEB_LISTEN", "0.0.0.0:8080"),
-            lsb_settings: std::env::var("WEB_LSB_SETTINGS").ok().filter(|s| !s.trim().is_empty()).map(PathBuf::from),
             ui_dir: std::env::var("WEB_UI_DIR").ok().filter(|s| !s.is_empty()).map(PathBuf::from),
         })
     }
@@ -80,7 +76,6 @@ impl Config {
             trusted_proxy: String::new(),
             data_dir: PathBuf::from("."),
             listen: "127.0.0.1:0".into(),
-            lsb_settings: None,
             ui_dir: None,
         }
     }

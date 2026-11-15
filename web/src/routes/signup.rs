@@ -1,7 +1,9 @@
 //! Creating a game account on the site, and the owner's invite codes.
 //!
 //! The account is made exactly as LSB's login server makes one (`LOGIN_CREATE`), and only while
-//! LSB's own `login.ACCOUNT_CREATION` is on. Order of a sign-up, so nothing leaks to someone
+//! the owner has sign-up open on the site. LSB's own `login.ACCOUNT_CREATION` is not read: it
+//! only governs accounts made from the game's login screen, so it can be off with the site as
+//! the only way in. Order of a sign-up, so nothing leaks to someone
 //! who hasn't earned it: closed? -> plain HTTP from the internet? -> input shape -> limits ->
 //! bcrypt (always, so every answer takes as long) -> invite code -> login free? -> insert.
 //! "That login is taken" is only ever said to someone holding a working invite code, or on a
@@ -109,6 +111,16 @@ async fn hash_for_signup(state: &Shared, password: &str) -> ApiResult<String> {
 /// No account came of this sign-up: the day's count and any invite use are given back.
 async fn give_back(state: &Shared, invite_id: Option<i64>) {
     state.limiter.signup_not_created();
+    return_invite(state, invite_id).await;
+}
+
+/// Nothing at all came of this sign-up: every count it took (once each) and any invite use.
+async fn undo(state: &Shared, ip: &str, invite_id: Option<i64>) {
+    state.limiter.signup_undo(ip);
+    return_invite(state, invite_id).await;
+}
+
+async fn return_invite(state: &Shared, invite_id: Option<i64>) {
     if let Some(id) = invite_id {
         if let Err(e) = state.store.invite_return(id).await {
             tracing::warn!("couldn't give an invite use back: {e}");
@@ -147,11 +159,20 @@ async fn finish(state: Shared, ip: String, login: String, password: String, invi
     let hash = match hash_for_signup(&state, &password).await {
         Ok(h) => h,
         Err(e) => {
-            give_back(&state, invite_id).await;
-            state.limiter.signup_undo(&ip);
+            undo(&state, &ip, invite_id).await;
             return Err(e);
         }
     };
+    // The switches may have changed during the hash: look again, so closing sign-up (or
+    // starting to ask for codes) also stops the sign-ups already waiting. Unreadable = closed.
+    let invite_now = match invite_id {
+        Some(_) => Ok(false),
+        None => state.store.invite_required().await,
+    };
+    if !state.signup_open().await || !matches!(invite_now, Ok(false)) {
+        undo(&state, &ip, invite_id).await;
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "Sign-up is closed on this server.").with(json!({ "closed": true })));
+    }
     let accid = match state.game.create_account(&login, &hash).await {
         Ok(crate::model::Created::Account(id)) => id,
         Ok(crate::model::Created::Taken) => {
@@ -242,7 +263,7 @@ async fn overview(state: &Shared) -> ApiResult<Value> {
     Ok(json!({
         "items": state.store.invites().await?.iter().map(|i| invite_json(i, now)).collect::<Vec<_>>(),
         "invite_required": state.store.invite_required().await?,
-        "lsb_open": state.signup_open().await,
+        "open": state.signup_open().await,
         "max_note": MAX_NOTE, "max_uses": MAX_USES,
     }))
 }
@@ -318,23 +339,31 @@ async fn invite_revoke(State(state): State<Shared>, Owner(id): Owner, ClientIp(i
 }
 
 async fn settings(State(state): State<Shared>, Owner(_): Owner) -> ApiResult<Json<Value>> {
-    Ok(Json(json!({ "invite_required": state.store.invite_required().await?, "lsb_open": state.signup_open().await })))
+    Ok(Json(json!({ "open": state.store.signup_open().await?, "invite_required": state.store.invite_required().await? })))
 }
 
+/// Either switch, or both; one left out stays as it is.
 #[derive(Deserialize)]
 struct SettingsBody {
-    invite_required: bool,
+    open: Option<bool>,
+    invite_required: Option<bool>,
 }
 
 async fn set_settings(State(state): State<Shared>, Owner(id): Owner, ClientIp(ip): ClientIp, Json(b): Json<SettingsBody>) -> ApiResult<Json<Value>> {
-    let before = state.store.invite_required().await?;
-    state.store.set_setting("signup_needs_invite", if b.invite_required { "1" } else { "0" }, &who(&id), state.now()).await?;
-    if before != b.invite_required {
-        let mut a = act(&id, &ip, "signup_setting", None, "Sign-up needs an invite code", json!({ "before": before, "after": b.invite_required }));
-        a.target_kind = Some("setting");
-        record(&state, a).await;
+    let switches = [
+        ("signup_open", "Sign-up open", b.open, state.store.signup_open().await?),
+        ("signup_needs_invite", "Sign-up needs an invite code", b.invite_required, state.store.invite_required().await?),
+    ];
+    for (key, label, after, before) in switches {
+        let Some(after) = after else { continue };
+        state.store.set_setting(key, if after { "1" } else { "0" }, &who(&id), state.now()).await?;
+        if before != after {
+            let mut a = act(&id, &ip, "signup_setting", None, label, json!({ "before": before, "after": after }));
+            a.target_kind = Some("setting");
+            record(&state, a).await;
+        }
     }
-    Ok(Json(json!({ "invite_required": b.invite_required })))
+    Ok(Json(json!({ "open": state.store.signup_open().await?, "invite_required": state.store.invite_required().await? })))
 }
 
 #[cfg(test)]
