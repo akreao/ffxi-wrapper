@@ -22,7 +22,7 @@ pub const ENV_EXAMPLE: &str = include_str!("../../../.env.example");
 /// into `.env`, where it then stayed through app updates; a `.env` still
 /// holding one of these follows the app's pin instead. Add the old pin here
 /// whenever it moves. A commit someone typed in themselves is left alone.
-const APP_LSB_PINS: [&str; 10] = [
+const APP_LSB_PINS: [&str; 11] = [
     "6cc5715c79331addb38e2bd20445d1b3d3e48504",
     "226b3b7b699fee9daa8ec70d88b7b0834ef0f7ef",
     "6c02b556f1ce1a8d0acf38e14cb7be6ddadb9988",
@@ -33,6 +33,7 @@ const APP_LSB_PINS: [&str; 10] = [
     "59d348f5683e4e734ddbd1c71a23deaa5bf73a2b",
     "e42afb435436c6304c166fa41867d987357e021f",
     "b1537aa6e14c6a46e1528db204f26de9cf961bd1",
+    "c4c28a33ed9ab7a40479f7b81a4ec0e118ad8ccc",
 ];
 
 /// Empties a `LSB_COMMIT` in `env` that an older setup copied from the app's
