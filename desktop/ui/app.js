@@ -25,12 +25,29 @@ function show(el, on) {
   el.hidden = !on;
 }
 
+// Lines are collected and added once per frame, so a burst of output
+// costs one layout read instead of one per line.
+const pending = new Map();
+
 function append(pre, line) {
-  const atBottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 40;
-  pre.append(line + "\n");
-  // Keep the pane from growing without end during a long build.
-  while (pre.childNodes.length > MAX_LINES) pre.firstChild.remove();
-  if (atBottom) pre.scrollTop = pre.scrollHeight;
+  let lines = pending.get(pre);
+  if (!lines) {
+    lines = [];
+    pending.set(pre, lines);
+    if (pending.size === 1) requestAnimationFrame(flushLines);
+  }
+  lines.push(line);
+}
+
+function flushLines() {
+  for (const [pre, lines] of pending) {
+    const atBottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 40;
+    pre.append(...lines.map((l) => l + "\n"));
+    // Keep the pane from growing without end during a long build.
+    while (pre.childNodes.length > MAX_LINES) pre.firstChild.remove();
+    if (atBottom) pre.scrollTop = pre.scrollHeight;
+  }
+  pending.clear();
 }
 
 function message(err) {
@@ -475,6 +492,7 @@ async function followLogs(service) {
   selectedService = service;
   $("log-service").textContent = service;
   $("logs").replaceChildren();
+  pending.delete($("logs"));
   selectTab("logs");
   drawServices();
   try {
@@ -1594,7 +1612,18 @@ const appUpdate = (() => {
 // ---------- start ----------
 
 refresh();
-setInterval(refreshServices, 3000);
+// Every 3 seconds while the window is shown, every 30 when it is in the tray
+// (the tray still shows the state).
+let pollTimer;
+function pollServices() {
+  clearInterval(pollTimer);
+  pollTimer = setInterval(refreshServices, document.hidden ? 30000 : 3000);
+}
+document.addEventListener("visibilitychange", () => {
+  pollServices();
+  if (!document.hidden) refreshServices();
+});
+pollServices();
 // Docker may be started after the app (Docker Desktop on Windows).
 setInterval(() => {
   if (overview && overview.docker_error) refresh();
