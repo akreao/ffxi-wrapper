@@ -22,9 +22,20 @@ async fn site_with_items() -> Site {
         mods: vec![(1, 2), (11, 1), (60_000, 3)],
     });
     s.fake.add_item(ItemDetailRaw { item: ItemRaw { level: Some(30), jobs: 1 << 21, slots: 0b11 << 11, ..item(13000, "fighters_earring", 24, 0) }, ..Default::default() });
-    // GM-only: never shown.
-    s.fake.add_item(ItemDetailRaw { item: item(10, "gm_sword", 3, 2), ..Default::default() });
+    add_hidden(&s);
     s
+}
+
+/// Items players can't have: never listed, and their pages answer like missing ones.
+const HIDDEN: [i64; 3] = [10, 65535, 2190];
+
+fn add_hidden(s: &Site) {
+    // LSB's GM-only flag (the Judge's set).
+    s.fake.add_item(ItemDetailRaw { item: item(10, "judges_sword", 3, 2), ..Default::default() });
+    // Gil: currency (type 8) that LSB keeps as an item.
+    s.fake.add_item(ItemDetailRaw { item: ItemRaw { kind: 8, stack: 0, ..item(65535, "gil", 0, 0) }, ..Default::default() });
+    // An unknown retail item LSB has only a placeholder row for.
+    s.fake.add_item(ItemDetailRaw { item: item(2190, "???_sword", 0, 0x40 | 0x1000 | 0x2000), ..Default::default() });
 }
 
 #[tokio::test]
@@ -73,12 +84,42 @@ async fn shows_static_data_and_nothing_internal() {
     assert_eq!(d["stats"][1]["name"], "AGI");
     assert_eq!(d["stats"][2]["name"], "Mod 60000");
 
-    // GM-only and missing items answer alike.
-    assert_eq!(s.send(Req::get("/api/items/10").cookie(&c)).await.status, StatusCode::NOT_FOUND);
+    // Hidden and missing items answer alike, and searches never count them.
+    for id in HIDDEN {
+        let r = s.send(Req::get(&format!("/api/items/{id}")).cookie(&c)).await;
+        assert_eq!((id, r.status, r.json()), (id, StatusCode::NOT_FOUND, serde_json::json!({ "error": "Not found." })));
+    }
+    for q in ["judges", "gil", "???", "%3F%3F%3F", "sword"] {
+        let j = s.send(Req::get(&format!("/api/items?q={q}")).cookie(&c)).await.json();
+        let ids: Vec<i64> = j["items"].as_array().unwrap().iter().map(|i| i["id"].as_i64().unwrap()).collect();
+        assert!(ids.iter().all(|id| !HIDDEN.contains(id)), "{q}: {ids:?}");
+        assert_eq!(j["total"].as_i64().unwrap(), ids.len() as i64, "{q}");
+    }
     assert_eq!(s.send(Req::get("/api/items/9999").cookie(&c)).await.status, StatusCode::NOT_FOUND);
     assert_eq!(s.send(Req::get("/api/items/0").cookie(&c)).await.status, StatusCode::NOT_FOUND);
     assert_eq!(s.send(Req::get("/api/items/-1").cookie(&c)).await.status, StatusCode::NOT_FOUND);
-    assert_eq!(s.send(Req::get("/api/items?q=gm").cookie(&c)).await.json()["total"], 0);
+    // Signed-in data: no shared cache keeps it.
+    for path in ["/api/items", "/api/items/4096"] {
+        assert_eq!(s.send(Req::get(path).cookie(&c)).await.header("cache-control").as_deref(), Some("private, no-store"), "{path}");
+    }
+}
+
+#[tokio::test]
+async fn gear_past_the_servers_max_level_is_hidden() {
+    let mut cfg = ffxi_web::config::Config::for_tests();
+    cfg.lsb_settings = Some(std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/settings-era")));
+    let s = site_with(cfg).await;
+    s.fake.add_account(1, "kaelyn", "hunter22", 0);
+    for (id, name, level) in [(1, "level_75_body", 75), (2, "level_99_body", 99)] {
+        s.fake.add_item(ItemDetailRaw { item: ItemRaw { level: Some(level), jobs: 1, slots: 32, ..item(id, name, 18, 0) }, ..Default::default() });
+    }
+    s.fake.add_item(ItemDetailRaw { item: item(3, "fire_crystal", 35, 0), ..Default::default() });
+    let (c, _) = s.sign_in("kaelyn", "hunter22").await;
+    let j = s.send(Req::get("/api/items").cookie(&c)).await.json();
+    assert_eq!(j["total"], 2);
+    assert_eq!(s.fake.0.lock().unwrap().item_queries.last().unwrap().level_cap, 75);
+    assert_eq!(s.send(Req::get("/api/items/1").cookie(&c)).await.status, StatusCode::OK);
+    assert_eq!(s.send(Req::get("/api/items/2").cookie(&c)).await.status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -102,8 +143,6 @@ async fn filters_and_paging_are_checked_and_capped() {
     let asked = s.fake.0.lock().unwrap().item_queries.last().unwrap().clone();
     assert_eq!(asked.q.chars().count(), 40);
     assert_eq!(asked.per, 100);
-    // Search text with LIKE wildcards is data, not a pattern (the database escapes it; here it just matches nothing).
-    assert_eq!(s.send(Req::get("/api/items?q=%25").cookie(&c)).await.json()["total"], 0);
 }
 
 #[tokio::test]
@@ -123,6 +162,25 @@ async fn reads_are_limited_per_account() {
     assert_eq!(s.send(Req::get("/api/items").cookie(&m)).await.status, StatusCode::OK);
     s.advance(61);
     assert_eq!(s.send(Req::get("/api/items").cookie(&a)).await.status, StatusCode::OK);
+}
+
+#[test]
+fn search_text_is_never_a_like_pattern() {
+    use ffxi_web::game::like_pattern;
+    assert_eq!(like_pattern("a%b_c|d"), "%a|%b|_c||d%");
+    assert_eq!(like_pattern(""), "%%");
+}
+
+#[test]
+fn the_level_cap_is_read_like_lsb_loads_it() {
+    use ffxi_web::routes::items::server_max_level;
+    use std::path::Path;
+    let fixture = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/settings-era"));
+    // main.lua says 60 (its commented 10 and the mob range don't count); zz_app.lua, read last, says 75.
+    assert_eq!(server_max_level(Some(fixture)), 75);
+    // No settings folder, or one that isn't there: LSB's default.
+    assert_eq!(server_max_level(None), 99);
+    assert_eq!(server_max_level(Some(Path::new("/no/such/folder"))), 99);
 }
 
 #[test]

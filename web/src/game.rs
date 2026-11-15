@@ -112,10 +112,10 @@ pub trait Game: Send + Sync {
 
     // ---- the item database (static game data, any signed-in account) ----
 
-    /// Items by name then id; GM-only items are never listed.
+    /// Items by name then id; only items players can have (see `ITEM_SHOWN`) are listed.
     async fn items(&self, q: &ItemQuery) -> DbResult<Page<ItemRaw>>;
-    /// `None` for a missing or GM-only item.
-    async fn item(&self, id: i64) -> DbResult<Option<ItemDetailRaw>>;
+    /// `None` for a missing item or one `ITEM_SHOWN` leaves out (with `level_cap` as there).
+    async fn item(&self, id: i64, level_cap: i64) -> DbResult<Option<ItemDetailRaw>>;
 }
 
 pub struct MariaDb {
@@ -979,7 +979,8 @@ impl Game for MariaDb {
 
     async fn items(&self, q: &ItemQuery) -> DbResult<Page<ItemRaw>> {
         let like = like_pattern(&q.q);
-        let total: i64 = sqlx::query(&format!("SELECT CAST(COUNT(*) AS SIGNED) AS n FROM item_basic b LEFT JOIN item_equipment e ON e.itemId = b.itemid {ITEM_WHERE}"))
+        let total: i64 = sqlx::query(&format!("SELECT CAST(COUNT(*) AS SIGNED) AS n FROM item_basic b LEFT JOIN item_equipment e ON e.itemId = b.itemid WHERE {ITEM_SHOWN} {ITEM_FILTERS}"))
+            .bind(q.level_cap)
             .bind(&q.q).bind(&like)
             .bind(q.category).bind(q.category)
             .bind(q.job_bit).bind(q.job_bit)
@@ -989,7 +990,8 @@ impl Game for MariaDb {
             .fetch_one(&self.pool)
             .await?
             .try_get("n")?;
-        let rows = sqlx::query(&format!("{ITEM_SELECT} {ITEM_WHERE} ORDER BY b.name, b.itemid LIMIT ? OFFSET ?"))
+        let rows = sqlx::query(&format!("{ITEM_SELECT} WHERE {ITEM_SHOWN} {ITEM_FILTERS} ORDER BY b.name, b.itemid LIMIT ? OFFSET ?"))
+            .bind(q.level_cap)
             .bind(&q.q).bind(&like)
             .bind(q.category).bind(q.category)
             .bind(q.job_bit).bind(q.job_bit)
@@ -1004,9 +1006,10 @@ impl Game for MariaDb {
         Ok(Page { items, total })
     }
 
-    async fn item(&self, id: i64) -> DbResult<Option<ItemDetailRaw>> {
-        let Some(r) = sqlx::query(&format!("{ITEM_SELECT} WHERE b.itemid = ? AND (b.flags & 2) = 0"))
+    async fn item(&self, id: i64, level_cap: i64) -> DbResult<Option<ItemDetailRaw>> {
+        let Some(r) = sqlx::query(&format!("{ITEM_SELECT} WHERE b.itemid = ? AND {ITEM_SHOWN}"))
             .bind(id)
+            .bind(level_cap)
             .fetch_optional(&self.pool)
             .await?
         else {
@@ -1039,10 +1042,15 @@ const ITEM_SELECT: &str = "SELECT CAST(b.itemid AS SIGNED) AS id, b.name AS name
        CAST(e.level AS SIGNED) AS level, CAST(e.ilevel AS SIGNED) AS ilevel,
        CAST(COALESCE(e.jobs, 0) AS SIGNED) AS jobs, CAST(COALESCE(e.slot, 0) AS SIGNED) AS slots
 FROM item_basic b LEFT JOIN item_equipment e ON e.itemId = b.itemid";
-/// The item search's WHERE: name (2 binds), then category, job bit, slot bit, lowest and
-/// highest level, each bound twice (0 = any). GM-only items (flag 0x2) never show.
-const ITEM_WHERE: &str = "WHERE b.itemid > 0 AND (b.flags & 2) = 0
-         AND (? = '' OR b.name LIKE ? ESCAPE '|')
+/// Items players can have, given the server's level cap (1 bind). Left out: LSB's GM-only flag
+/// (0x2: the Judge's set), currency (type 8: gil, id 65535, which LSB keeps as an item), LSB's
+/// `???_...` placeholder rows (unknown retail items), and equipment above the server's
+/// `MAX_LEVEL` (gear from past the server's era).
+const ITEM_SHOWN: &str = "b.itemid > 0 AND (b.flags & 2) = 0 AND b.type <> 8 AND b.name NOT LIKE '???%'
+         AND (e.level IS NULL OR e.level <= ?)";
+/// The item search's filters: name (2 binds), then category, job bit, slot bit, lowest and
+/// highest level, each bound twice (0 = any).
+const ITEM_FILTERS: &str = "AND (? = '' OR b.name LIKE ? ESCAPE '|')
          AND (? = 0 OR b.aH = ?)
          AND (? = 0 OR (e.jobs & ?) <> 0)
          AND (? = 0 OR (e.slot & ?) <> 0)

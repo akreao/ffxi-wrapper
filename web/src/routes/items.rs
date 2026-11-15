@@ -10,8 +10,11 @@ use axum::extract::{Path, Query, State};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::json;
+use axum::http::header;
+use axum::response::IntoResponse;
 use std::collections::HashMap;
+use std::path::Path as FsPath;
 use std::sync::LazyLock;
 
 pub fn api() -> Router<Shared> {
@@ -107,6 +110,42 @@ pub fn fold_search(q: Option<&str>) -> String {
     q.unwrap_or("").trim().chars().filter(|c| !c.is_control()).take(Q_MAX).collect::<String>().to_lowercase().replace(' ', "_")
 }
 
+/// LSB's default `MAX_LEVEL` (`settings/default/main.lua`).
+const LSB_MAX_LEVEL: i64 = 99;
+
+/// The server's `MAX_LEVEL` as LSB will load it: the settings files in `dir` in name order
+/// (the desktop app's `zz_app.lua` last), the last plain number set for it winning, LSB's
+/// default when none is. Read on each request: the files are tiny and an edit takes effect
+/// without restarting the site.
+pub fn server_max_level(dir: Option<&FsPath>) -> i64 {
+    let Some(rd) = dir.and_then(|d| std::fs::read_dir(d).ok()) else { return LSB_MAX_LEVEL };
+    let mut files: Vec<_> = rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|x| x == "lua")).collect();
+    files.sort();
+    let mut level = LSB_MAX_LEVEL;
+    for f in files {
+        for line in std::fs::read_to_string(&f).unwrap_or_default().lines() {
+            if let Some(v) = max_level_in(line) {
+                level = v;
+            }
+        }
+    }
+    level
+}
+
+/// `MAX_LEVEL = 75` (also `xi.settings.main.MAX_LEVEL = 75,`) on a line, after any `--` comment is cut.
+fn max_level_in(line: &str) -> Option<i64> {
+    let code = line.split("--").next()?;
+    let (at, _) = code.match_indices("MAX_LEVEL").find(|(i, _)| !code[..*i].ends_with(|c: char| c.is_alphanumeric() || c == '_'))?;
+    let rest = code[at + "MAX_LEVEL".len()..].trim_start().strip_prefix('=')?.trim_start();
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    Some(digits.parse::<i64>().ok()?.clamp(1, 99))
+}
+
+/// Static data, but only for signed-in viewers: no shared cache may keep it.
+fn private<T: IntoResponse>(body: T) -> impl IntoResponse {
+    ([(header::CACHE_CONTROL, "private, no-store")], body)
+}
+
 /// One read counted against the viewer's account (or their owner-link session).
 fn throttle(state: &Shared, id: &Identity) -> ApiResult<()> {
     let who = match id.accid() {
@@ -120,7 +159,7 @@ fn throttle(state: &Shared, id: &Identity) -> ApiResult<()> {
     }
 }
 
-async fn list(State(state): State<Shared>, Signed(id): Signed, Query(p): Query<ItemParams>) -> ApiResult<Json<Value>> {
+async fn list(State(state): State<Shared>, Signed(id): Signed, Query(p): Query<ItemParams>) -> ApiResult<impl IntoResponse> {
     throttle(&state, &id)?;
     let bad = || ApiError::bad_request("That filter isn't one of the choices.");
     let job_bit = match p.job.as_deref().filter(|j| !j.is_empty()) {
@@ -140,10 +179,11 @@ async fn list(State(state): State<Shared>, Signed(id): Signed, Query(p): Query<I
     let level = |v: Option<i64>| v.unwrap_or(0).clamp(0, 99);
     let page = p.page.unwrap_or(1).clamp(1, PAGE_MAX);
     let per = p.per.unwrap_or(PER_DEFAULT).clamp(10, PER_MAX);
-    let query = ItemQuery { q: fold_search(p.q.as_deref()), category, job_bit, slot_bit, min_level: level(p.min), max_level: level(p.max), page, per };
+    let level_cap = server_max_level(state.cfg.lsb_settings.as_deref());
+    let query = ItemQuery { q: fold_search(p.q.as_deref()), category, job_bit, slot_bit, min_level: level(p.min), max_level: level(p.max), level_cap, page, per };
     let found = state.game.items(&query).await?;
     let items: Vec<ItemOut> = found.items.iter().map(item_out).collect();
-    Ok(Json(json!({ "items": items, "total": found.total, "page": page, "per": per })))
+    Ok(private(Json(json!({ "items": items, "total": found.total, "page": page, "per": per }))))
 }
 
 #[derive(Serialize)]
@@ -152,17 +192,17 @@ struct StatOut {
     value: i64,
 }
 
-async fn detail(State(state): State<Shared>, Signed(id): Signed, Path(itemid): Path<i64>) -> ApiResult<Json<Value>> {
+async fn detail(State(state): State<Shared>, Signed(id): Signed, Path(itemid): Path<i64>) -> ApiResult<impl IntoResponse> {
     throttle(&state, &id)?;
     if !(1..=65535).contains(&itemid) {
         return Err(ApiError::not_found());
     }
-    let d = state.game.item(itemid).await?.ok_or_else(ApiError::not_found)?;
+    let d = state.game.item(itemid, server_max_level(state.cfg.lsb_settings.as_deref())).await?.ok_or_else(ApiError::not_found)?;
     let stats: Vec<StatOut> = d
         .mods
         .iter()
         .map(|(m, v)| StatOut { name: MOD_NAMES.get(m).map_or_else(|| format!("Mod {m}"), |n| n.replace('_', " ")), value: *v })
         .collect();
     let weapon = d.weapon.map(|(skill, dmg, delay)| json!({ "skill": skill, "dmg": dmg, "delay": delay }));
-    Ok(Json(json!({ "item": item_out(&d.item), "ilevel": d.item.ilevel.filter(|l| *l > 0), "weapon": weapon, "stats": stats })))
+    Ok(private(Json(json!({ "item": item_out(&d.item), "ilevel": d.item.ilevel.filter(|l| *l > 0), "weapon": weapon, "stats": stats }))))
 }

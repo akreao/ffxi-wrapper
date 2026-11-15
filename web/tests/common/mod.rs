@@ -612,7 +612,7 @@ impl Game for Fake {
             .items
             .iter()
             .map(|i| i.item.clone())
-            .filter(|i| i.id > 0 && i.flags & 2 == 0)
+            .filter(|i| shown(i, q.level_cap))
             .filter(|i| q.q.is_empty() || i.name.contains(&q.q))
             .filter(|i| q.category == 0 || i.category == q.category)
             .filter(|i| q.job_bit == 0 || i.jobs & q.job_bit != 0)
@@ -625,10 +625,15 @@ impl Game for Fake {
         let items = hits.into_iter().skip(((q.page - 1) * q.per) as usize).take(q.per as usize).collect();
         Ok(Page { items, total })
     }
-    async fn item(&self, id: i64) -> DbResult<Option<ItemDetailRaw>> {
+    async fn item(&self, id: i64, level_cap: i64) -> DbResult<Option<ItemDetailRaw>> {
         self.check()?;
-        Ok(self.0.lock().unwrap().items.iter().find(|i| i.item.id == id && i.item.flags & 2 == 0).cloned())
+        Ok(self.0.lock().unwrap().items.iter().find(|i| i.item.id == id && shown(&i.item, level_cap)).cloned())
     }
+}
+
+/// What ITEM_SHOWN lets through.
+fn shown(i: &ItemRaw, level_cap: i64) -> bool {
+    i.id > 0 && i.flags & 2 == 0 && i.kind != 8 && !i.name.starts_with("???") && i.level.is_none_or(|l| l <= level_cap)
 }
 
 fn fake_ticket(d: &Data, t: &FakeTicket) -> Ticket {

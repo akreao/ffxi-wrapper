@@ -21,6 +21,9 @@ pub struct Config {
     pub listen: String,
     /// Debug builds serve `web/ui` from this folder instead of the embedded copy.
     pub ui_dir: Option<PathBuf>,
+    /// LSB's settings overrides (`overrides/settings`, read-only): the item pages read the
+    /// server's `MAX_LEVEL` there.
+    pub lsb_settings: Option<PathBuf>,
 }
 
 impl Config {
@@ -54,6 +57,7 @@ impl Config {
             data_dir: PathBuf::from(or("DATA_DIR", "/data")),
             listen: or("WEB_LISTEN", "0.0.0.0:8080"),
             ui_dir: std::env::var("WEB_UI_DIR").ok().filter(|s| !s.is_empty()).map(PathBuf::from),
+            lsb_settings: std::env::var("WEB_LSB_SETTINGS").ok().filter(|s| !s.trim().is_empty()).map(PathBuf::from),
         })
     }
 
@@ -77,6 +81,7 @@ impl Config {
             data_dir: PathBuf::from("."),
             listen: "127.0.0.1:0".into(),
             ui_dir: None,
+            lsb_settings: None,
         }
     }
 }

@@ -467,6 +467,8 @@ pub struct ItemQuery {
     pub slot_bit: i64,
     pub min_level: i64,
     pub max_level: i64,
+    /// The server's `MAX_LEVEL`: equipment above it is past the server's era and never shown.
+    pub level_cap: i64,
     pub page: i64,
     pub per: i64,
 }

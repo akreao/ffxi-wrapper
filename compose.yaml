@@ -243,8 +243,11 @@ services:
       SERVER_NAME: ${SERVER_NAME:-}
       # Phase 4: the address players use, and the proxy it may trust.
       WEB_PUBLIC_URL: ${WEB_PUBLIC_URL:-}
+      WEB_LSB_SETTINGS: /lsb-settings
     volumes:
       - ${DATA_DIR:-./data}/web:/data
+      # The Item database hides gear above the server's MAX_LEVEL, read from these (read-only).
+      - ./overrides/settings:/lsb-settings:ro
     ports:
       - "${WEB_BIND_IP:-127.0.0.1}:${WEB_PORT:-54080}:8080"
     healthcheck:
