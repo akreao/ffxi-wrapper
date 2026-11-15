@@ -70,8 +70,13 @@ async fn lists_what_is_for_sale_without_hidden_items() {
     assert_eq!(j["total"], 2);
     let fire = &j["items"].as_array().unwrap().iter().find(|i| i["id"] == 4096).unwrap();
     assert_eq!(fire["name"], "Fire Crystal");
-    assert_eq!((fire["singles"].as_i64(), fire["single_low"].as_i64()), (Some(2), Some(250)));
-    assert_eq!((fire["stacks"].as_i64(), fire["stack_low"].as_i64()), (Some(1), Some(3000)));
+    // Players get counts, never asking prices (buying in game is a blind bid).
+    assert_eq!((fire["singles"].as_i64(), fire["stacks"].as_i64()), (Some(2), Some(1)));
+    assert!(fire.get("single_low").is_none() && fire.get("stack_low").is_none(), "{fire}");
+    let (m, _) = s.sign_in("halvard", "gm-password").await;
+    let j = s.send(Req::get("/api/auction").cookie(&m)).await.json();
+    let fire = &j["items"].as_array().unwrap().iter().find(|i| i["id"] == 4096).unwrap();
+    assert_eq!((fire["single_low"].as_i64(), fire["stack_low"].as_i64()), (Some(250), Some(3000)));
     // The item search's filters apply.
     assert_eq!(s.send(Req::get("/api/auction?q=sword").cookie(&c)).await.json()["total"], 1);
     assert_eq!(s.send(Req::get("/api/auction?job=nope").cookie(&c)).await.status, StatusCode::BAD_REQUEST);
@@ -82,7 +87,7 @@ async fn lists_what_is_for_sale_without_hidden_items() {
 }
 
 #[tokio::test]
-async fn players_see_prices_and_the_bot_but_no_names() {
+async fn players_see_counts_and_sales_but_no_asking_prices_or_names() {
     let s = site_with_auction().await;
     let (c, _) = s.sign_in("kaelyn", "hunter22").await;
     let r = s.send(Req::get("/api/auction/4096").cookie(&c)).await;
@@ -92,19 +97,16 @@ async fn players_see_prices_and_the_bot_but_no_names() {
     let single = &j["sides"][0];
     assert_eq!(single["stack"], false);
     assert_eq!(single["listed"], 2);
-    // Cheapest first, the bot's marked.
-    assert_eq!(single["listings"][0]["price"], 250);
-    assert_eq!(single["listings"][0]["seller"], serde_json::json!({ "bot": true }));
-    assert_eq!(single["listings"][1]["seller"], serde_json::json!({ "bot": false }));
-    assert!(single["listings"][0].get("buyer").is_none());
+    // No listings, so no asking prices: only how many are up.
+    assert!(single.get("listings").is_none(), "{single}");
     // Newest sale first.
     assert_eq!(single["sales"][0]["price"], 260);
     assert_eq!(single["sales"][0]["buyer"], serde_json::json!({ "bot": false }));
     assert_eq!(single["sales"][1]["buyer"], serde_json::json!({ "bot": true }));
     assert_eq!(j["sides"][1]["stack"], true);
-    assert_eq!(j["sides"][1]["listings"][0]["price"], 3000);
-    // No character names or ids anywhere.
-    for secret in ["Pipiru", "Kaelyn", "M.H.M.U.", "21828", "21900", "charid", "\"name\""] {
+    assert_eq!(j["sides"][1]["listed"], 1);
+    // No asking prices (300, 250, 3000), character names or ids anywhere.
+    for secret in ["300", "250", "3000", "listings", "Pipiru", "Kaelyn", "M.H.M.U.", "21828", "21900", "charid", "\"name\""] {
         assert!(!body.contains(secret), "{secret} in {body}");
     }
 
@@ -120,6 +122,10 @@ async fn staff_see_names_and_character_links() {
     let j = s.send(Req::get("/api/auction/4096").cookie(&m)).await.json();
     assert_eq!(j["names"], true);
     let single = &j["sides"][0];
+    // Cheapest first, with asking prices; a listing has no buyer.
+    assert_eq!(single["listings"][0]["price"], 250);
+    assert!(single["listings"][0].get("buyer").is_none());
+    assert_eq!(j["sides"][1]["listings"][0]["price"], 3000);
     assert_eq!(single["listings"][0]["seller"], serde_json::json!({ "bot": true, "name": "M.H.M.U." }));
     assert_eq!(single["listings"][1]["seller"], serde_json::json!({ "bot": false, "name": "Pipiru", "charid": 21828 }));
     assert_eq!(single["sales"][0]["buyer"], serde_json::json!({ "bot": false, "name": "Kaelyn", "charid": 21900 }));

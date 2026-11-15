@@ -1,6 +1,8 @@
 //! The auction house, read-only: what is up for sale, and each item's listings and recent
-//! sales, for any signed-in account. Prices, counts and dates only: who is selling or buying
-//! (names, and links to the character) is for Moderators and the owner. Rows the auction house
+//! sales. Players see what the game shows them: how many are for sale and the sale history
+//! (prices and dates), never a listing's asking price, since buying in game is a blind bid.
+//! Moderators and the owner also see the listings with their prices, and who sold and bought
+//! (names, and links to the character). Rows the auction house
 //! bot wrote are marked as the bot's for everyone. Only items the item database shows
 //! (`ITEM_SHOWN`) appear. Nothing here changes a listing: cancelling one would race the bot
 //! and need the item sent back. The bot's settings stay in the desktop app.
@@ -30,8 +32,11 @@ struct ListedOut {
     #[serde(flatten)]
     item: ItemOut,
     singles: i64,
+    /// Staff only: the cheapest asking price.
+    #[serde(skip_serializing_if = "Option::is_none")]
     single_low: Option<i64>,
     stacks: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
     stack_low: Option<i64>,
 }
 
@@ -39,10 +44,11 @@ async fn list(State(state): State<Shared>, Signed(id): Signed, Query(p): Query<I
     throttle(&state, &id)?;
     let query = item_query(&state, p).await?;
     let found = state.game.auction_listed(&query).await?;
+    let staff = id.role.is_admin();
     let items: Vec<ListedOut> = found
         .items
         .iter()
-        .map(|l| ListedOut { item: item_out(&l.item), singles: l.singles, single_low: l.single_low, stacks: l.stacks, stack_low: l.stack_low })
+        .map(|l| ListedOut { item: item_out(&l.item), singles: l.singles, single_low: l.single_low.filter(|_| staff), stacks: l.stacks, stack_low: l.stack_low.filter(|_| staff) })
         .collect();
     Ok(private(Json(json!({ "items": items, "total": found.total, "page": query.page, "per": query.per }))))
 }
@@ -98,13 +104,17 @@ async fn detail(State(state): State<Shared>, Signed(id): Signed, Path(itemid): P
     let mut sides = Vec::new();
     // Stacks only for items that stack; LSB refuses stack listings of the others.
     for stack in [false, true].into_iter().filter(|s| !s || item.stack > 1) {
-        let side = state.game.auction_side(itemid, stack, LISTINGS_MAX, SALES_MAX).await?;
-        sides.push(json!({
+        let side = state.game.auction_side(itemid, stack, if staff { LISTINGS_MAX } else { 0 }, SALES_MAX).await?;
+        let mut out = json!({
             "stack": stack,
             "listed": side.listed,
-            "listings": side.listings.iter().map(|r| row_out(r, false, staff)).collect::<Vec<_>>(),
             "sales": side.sales.iter().map(|r| row_out(r, true, staff)).collect::<Vec<_>>(),
-        }));
+        });
+        // Asking prices are staff-only: players only learn how many are up, as in game.
+        if staff {
+            out["listings"] = json!(side.listings.iter().map(|r| row_out(r, false, true)).collect::<Vec<_>>());
+        }
+        sides.push(out);
     }
     Ok(private(Json(json!({ "item": item_out(&item), "names": staff, "sides": sides }))))
 }
