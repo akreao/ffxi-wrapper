@@ -49,7 +49,7 @@ async fn needs_a_sign_in_and_any_role_will_do() {
     let j = s.send(Req::get("/api/items").cookie(&player)).await.json();
     assert_eq!(j["total"], 3);
     assert_eq!(s.send(Req::get("/items").cookie(&player)).await.status, StatusCode::OK);
-    // The admin copy (where "Give item" will go) stays staff-only.
+    // The admin copy (where owners get "Give item") stays staff-only.
     assert_eq!(s.send(Req::get("/admin/items").cookie(&player)).await.status, StatusCode::NOT_FOUND);
 
     let (m, _) = s.sign_in("halvard", "gm-password").await;

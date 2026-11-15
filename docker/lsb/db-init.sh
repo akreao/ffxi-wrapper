@@ -65,7 +65,8 @@ if [ -n "${DB_ROOT_PASSWORD:-}" ] && [ -n "${WEB_DB_PASSWORD:-}" ]; then
         grants="$grants GRANT SELECT ON \`$db\`.\`$t\` TO 'xiweb'@'%';"
     done
     # What the admin pages write (web/src/game.rs): ban, unban, the timed-ban
-    # lifter, two-step reset, password reset, GM level, help desk replies. Column-level where the
+    # lifter, two-step reset, password reset, GM level, help desk replies, giving an item (a new
+    # delivery_box row: LSB's trigger picks its slot; the SELECT locks, counts waiting rows and finds a Rare item already waiting). Column-level where the
     # code names columns (MariaDB wants UPDATE on every inserted column of an
     # INSERT ... ON DUPLICATE KEY UPDATE, the key accid too); scripts/test_web_grants.py checks the list against the SQL.
     admin_grants="
@@ -76,7 +77,9 @@ if [ -n "${DB_ROOT_PASSWORD:-}" ] && [ -n "${WEB_DB_PASSWORD:-}" ]; then
         GRANT INSERT (accid, timebann, timeunbann, banncomment), UPDATE (accid, timebann, timeunbann, banncomment)
             ON \`$db\`.\`accounts_banned\` TO 'xiweb'@'%';
         GRANT UPDATE (gmlevel) ON \`$db\`.\`chars\` TO 'xiweb'@'%';
-        GRANT UPDATE (response, responded_at, deleted_at) ON \`$db\`.\`help_desk\` TO 'xiweb'@'%';"
+        GRANT UPDATE (response, responded_at, deleted_at) ON \`$db\`.\`help_desk\` TO 'xiweb'@'%';
+        GRANT SELECT (charid, box, slot, itemid), INSERT (charid, box, itemid, quantity, senderid, sender)
+            ON \`$db\`.\`delivery_box\` TO 'xiweb'@'%';"
     if MYSQL_PWD="$DB_ROOT_PASSWORD" mariadb --skip-ssl-verify-server-cert -h"$XI_NETWORK_SQL_HOST" -P"$XI_NETWORK_SQL_PORT" -uroot -e "
         CREATE USER IF NOT EXISTS 'xiweb'@'%' IDENTIFIED BY '$web_pw';
         ALTER USER 'xiweb'@'%' IDENTIFIED BY '$web_pw';

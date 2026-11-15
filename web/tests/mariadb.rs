@@ -3,9 +3,10 @@
 //!
 //! 1. Start `mariadb:12.3` with a database `xidb`, load LSB's `sql/` tables at the
 //!    pinned commit (accounts, chars, char_stats, char_jobs, char_exp, char_flags,
-//!    char_skills, accounts_sessions, zone_settings) and `tests/fixtures/public.sql`.
+//!    char_skills, char_inventory, accounts_sessions, zone_settings, delivery_box and its
+//!    `delivery_box_insert` trigger from `triggers.sql`) and `tests/fixtures/public.sql`.
 //! 2. Create the website's user with the grants from `docker/lsb/db-init.sh`
-//!    (read-only on those tables), so a missing grant fails here.
+//!    (the xiweb block), so a missing grant fails here.
 //! 3. `WEB_TEST_DB_PORT=33307 WEB_TEST_DB_PASSWORD=... cargo test --test mariadb -- --ignored`
 //!    (`WEB_TEST_DB_HOST` defaults to 127.0.0.1, `WEB_TEST_DB_USER` to xiweb).
 
@@ -21,6 +22,22 @@ fn db() -> MariaDb {
     cfg.db_user = env("WEB_TEST_DB_USER", "xiweb");
     cfg.db_password = env("WEB_TEST_DB_PASSWORD", "");
     MariaDb::connect(&cfg)
+}
+
+/// A plain connection as the site's user.
+async fn xiweb() -> sqlx::MySqlConnection {
+    use sqlx::mysql::MySqlConnectOptions;
+    use sqlx::ConnectOptions;
+    let env = |k: &str, d: &str| std::env::var(k).unwrap_or_else(|_| d.to_string());
+    MySqlConnectOptions::new()
+        .host(&env("WEB_TEST_DB_HOST", "127.0.0.1"))
+        .port(env("WEB_TEST_DB_PORT", "3306").parse().unwrap())
+        .username(&env("WEB_TEST_DB_USER", "xiweb"))
+        .password(&env("WEB_TEST_DB_PASSWORD", ""))
+        .database("xidb")
+        .connect()
+        .await
+        .unwrap()
 }
 
 fn names(rows: &[RankRow]) -> Vec<&str> {
@@ -88,19 +105,47 @@ async fn the_boards_rank_what_they_say() {
 #[tokio::test]
 #[ignore = "needs the fixture database, see the file header"]
 async fn the_site_user_can_read_what_the_queries_need_and_write_nothing() {
-    use sqlx::mysql::MySqlConnectOptions;
-    use sqlx::{ConnectOptions, Connection};
-    let env = |k: &str, d: &str| std::env::var(k).unwrap_or_else(|_| d.to_string());
-    let mut conn = MySqlConnectOptions::new()
-        .host(&env("WEB_TEST_DB_HOST", "127.0.0.1"))
-        .port(env("WEB_TEST_DB_PORT", "3306").parse().unwrap())
-        .username(&env("WEB_TEST_DB_USER", "xiweb"))
-        .password(&env("WEB_TEST_DB_PASSWORD", ""))
-        .database("xidb")
-        .connect()
-        .await
-        .unwrap();
+    use sqlx::Connection;
+    let mut conn = xiweb().await;
     assert!(sqlx::query("UPDATE chars SET playtime = 0").execute(&mut conn).await.is_err());
     assert!(sqlx::query("DELETE FROM char_skills").execute(&mut conn).await.is_err());
     conn.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "needs the fixture database, see the file header"]
+async fn gives_queue_in_the_delivery_box_without_deadlocks() {
+    use std::sync::Arc;
+    let db = Arc::new(db());
+    let mut conn = xiweb().await;
+    // A character with an empty incoming box if the fixture still has one: that's where two
+    // transactions holding only gap locks used to deadlock.
+    let charid: i64 = sqlx::query_scalar(
+        "SELECT CAST(c.charid AS SIGNED) FROM chars c WHERE c.accid <> 0
+         ORDER BY (SELECT COUNT(*) FROM delivery_box d WHERE d.charid = c.charid AND d.box = 1), c.charid LIMIT 1",
+    )
+    .fetch_one(&mut conn)
+    .await
+    .unwrap();
+    let before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM delivery_box WHERE charid = ? AND box = 1").bind(charid).fetch_one(&mut conn).await.unwrap();
+
+    let gives = (0..8).map(|_| {
+        let db = db.clone();
+        tokio::spawn(async move { db.give_item(charid, 4096, 1, "GM", false).await })
+    });
+    for g in gives.collect::<Vec<_>>() {
+        assert_eq!(g.await.unwrap().unwrap(), Given::Done);
+    }
+    let slots: Vec<i64> = sqlx::query_scalar("SELECT CAST(slot AS SIGNED) FROM delivery_box WHERE charid = ? AND box = 1").bind(charid).fetch_all(&mut conn).await.unwrap();
+    assert_eq!(slots.len() as i64, before + 8);
+    assert!(slots.iter().all(|s| *s >= 8), "gives queue behind the 8 visible slots: {slots:?}");
+
+    // A Rare item goes once; an item id nothing else uses, so reruns start clean.
+    let rare = 20_000 + (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() % 40_000) as i64;
+    assert_eq!(db.give_item(charid, rare, 1, "GM", true).await.unwrap(), Given::Done);
+    assert_eq!(db.give_item(charid, rare, 1, "GM", true).await.unwrap(), Given::AlreadyHas);
+    assert_eq!(db.give_item(-1, 4096, 1, "GM", false).await.unwrap(), Given::NoCharacter);
+    // Still no way to change or remove what is in a box.
+    assert!(sqlx::query("DELETE FROM delivery_box WHERE charid = ?").bind(charid).execute(&mut conn).await.is_err());
+    assert!(sqlx::query("UPDATE delivery_box SET quantity = 99 WHERE charid = ?").bind(charid).execute(&mut conn).await.is_err());
 }

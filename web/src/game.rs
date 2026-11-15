@@ -130,7 +130,24 @@ pub trait Game: Send + Sync {
     /// The names of an account's characters, deleted ones included (LSB deletes a character
     /// by moving its account id to `original_accid`).
     async fn account_char_names(&self, accid: i64) -> DbResult<Vec<String>>;
+
+    // ---- giving items (owner only) ----
+
+    /// Puts `quantity` of `itemid` in the character's incoming delivery box the way LSB's own
+    /// `SendItemToDeliveryBox` does (box 1, `senderid` the character itself, so a returned item
+    /// comes back to them). LSB's `delivery_box_insert` trigger picks the slot: 8 and up queue
+    /// behind the 8 the box shows, and the player sees it the next time they open the box, in
+    /// game or not. One transaction that locks the character's row first (so two gives to one
+    /// character queue instead of deadlocking on the gap locks of an empty box), then their
+    /// incoming rows, so the count and the trigger's `MAX(slot)` can't move under it. A `rare`
+    /// item is refused when they already hold one or one waits in their box: LSB wouldn't let
+    /// them take a second, and returning it would only put it back in their own box.
+    async fn give_item(&self, charid: i64, itemid: i64, quantity: i64, sender: &str, rare: bool) -> DbResult<Given>;
 }
+
+/// The most items a character's delivery box may have waiting (slot 8 and up) before a give is
+/// refused: LSB's default `map.DELIVERY_BOX_MAX_INFLIGHT`, the cap its player-to-player sends use.
+pub const DBOX_WAITING_MAX: usize = 128;
 
 pub struct MariaDb {
     pool: MySqlPool,
@@ -1018,6 +1035,47 @@ impl Game for MariaDb {
             .await?;
         let items = rows.iter().map(item_row).collect::<Result<_, _>>()?;
         Ok(Page { items, total })
+    }
+
+    async fn give_item(&self, charid: i64, itemid: i64, quantity: i64, sender: &str, rare: bool) -> DbResult<Given> {
+        let mut tx = self.pool.begin().await?;
+        if sqlx::query("SELECT charid FROM chars WHERE charid = ? AND accid <> 0 FOR UPDATE").bind(charid).fetch_optional(&mut *tx).await?.is_none() {
+            return Ok(Given::NoCharacter);
+        }
+        let rows = sqlx::query("SELECT CAST(slot AS SIGNED) AS slot, CAST(itemid AS SIGNED) AS itemid FROM delivery_box WHERE charid = ? AND box = 1 FOR UPDATE")
+            .bind(charid)
+            .fetch_all(&mut *tx)
+            .await?;
+        let mut waiting = 0;
+        let mut boxed = false;
+        for r in &rows {
+            waiting += usize::from(r.try_get::<i64, _>("slot")? >= 8);
+            boxed |= r.try_get::<i64, _>("itemid")? == itemid;
+        }
+        if waiting >= DBOX_WAITING_MAX {
+            return Ok(Given::BoxFull);
+        }
+        if rare {
+            let held = sqlx::query("SELECT charid FROM char_inventory WHERE charid = ? AND itemId = ? LIMIT 1")
+                .bind(charid)
+                .bind(itemid)
+                .fetch_optional(&mut *tx)
+                .await?
+                .is_some();
+            if held || boxed {
+                return Ok(Given::AlreadyHas);
+            }
+        }
+        sqlx::query("INSERT INTO delivery_box (charid, box, itemid, quantity, senderid, sender) VALUES (?, 1, ?, ?, ?, ?)")
+            .bind(charid)
+            .bind(itemid)
+            .bind(quantity)
+            .bind(charid)
+            .bind(sender)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(Given::Done)
     }
 
     async fn item(&self, id: i64, level_cap: i64) -> DbResult<Option<ItemDetailRaw>> {

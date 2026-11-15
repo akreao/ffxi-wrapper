@@ -50,6 +50,7 @@
     search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>',
     lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
     key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M15 8l2 2"/>',
+    gift: '<rect x="3" y="8" width="18" height="4" rx="1"/><path d="M12 8v13M19 12v9H5v-9M7.5 8a2.5 2.5 0 0 1 0-5C11 3 12 8 12 8s1-5 4.5-5a2.5 2.5 0 0 1 0 5"/>',
     back: '<path d="M15 5l-7 7 7 7"/>',
   };
   function icon(name) {
@@ -184,8 +185,8 @@
   }
 
   // The admin panel: dark sidebar + title bar. Entries for later phases carry a "Later" tag.
-  // Items is the read-only item database players also have at /items; "Give item" will
-  // join this admin copy later, owner-only, reusing its search.
+  // Items is the item database players also have at /items; in this admin copy an item's
+  // dialog has "Give item" for owners.
   const ADMIN_NAV = [
     ["Server", [["dashboard", "Dashboard", "/admin"], ["settings", "Settings", null]]],
     ["Players", [["accounts", "Accounts", "/admin/accounts"], ["characters", "Characters", "/admin/characters"], ["bans", "Bans", "/admin/bans"], ["helpdesk", "Help desk", "/admin/help-desk"]]],
@@ -205,7 +206,7 @@
         items.map(([id, label, href]) => href
           ? h("a", { class: "nav-item" + (current === id ? " active" : ""), href, title: label, "aria-current": current === id ? "page" : false }, icon(id), h("span", {}, label))
           : h("a", { class: "nav-item soon", "aria-disabled": "true", title: `${label}: later` }, icon(id), h("span", {}, label), h("em", {}, "Later"))))),
-      h("div", { class: "sidebar-foot" }, "LandSandBoat", h("br"), "Site 0.12.0"));
+      h("div", { class: "sidebar-foot" }, "LandSandBoat", h("br"), "Site 0.13.0"));
     const scrim = h("div", { class: "scrim" });
     const toggle = h("button", { class: "icon-button menu-toggle", "aria-label": "Menu", "aria-controls": "sidebar", "aria-expanded": "false" }, icon("menu"));
     const theme = h("button", { class: "icon-button theme-toggle", "aria-label": "Switch theme", title: "Switch between Light and Dark" });
@@ -753,8 +754,8 @@
 
   // ---- the admin panel: players, bans and the log ----
 
-  const ACTION_LABEL = { ban: "Ban", unban: "Unban", gm_level: "GM level", site_role: "Website role", password_reset: "Password reset", totp_reset: "Two-step reset", password_change: "Password change", sign_in: "Sign-in", sign_in_failed: "Sign-in failed", news_create: "News draft", news_edit: "News edit", news_publish: "News published", news_unpublish: "News unpublished", news_pin: "News pinned", news_unpin: "News unpinned", news_delete: "News deleted", content_edit: "Content edit", content_reset: "Content reset", ticket_reply: "Help desk reply", ticket_close: "Help desk close", audit_read: "Audit log search" };
-  const ACTION_TONE = { ban: "bad", unban: "ok", gm_level: "gm", site_role: "info", password_reset: "busy", totp_reset: "busy", password_change: "info", sign_in: "off", sign_in_failed: "busy", news_publish: "ok", news_delete: "bad", news_unpublish: "busy", ticket_reply: "ok", ticket_close: "off", audit_read: "off" };
+  const ACTION_LABEL = { ban: "Ban", unban: "Unban", gm_level: "GM level", site_role: "Website role", password_reset: "Password reset", totp_reset: "Two-step reset", password_change: "Password change", sign_in: "Sign-in", sign_in_failed: "Sign-in failed", news_create: "News draft", news_edit: "News edit", news_publish: "News published", news_unpublish: "News unpublished", news_pin: "News pinned", news_unpin: "News unpinned", news_delete: "News deleted", content_edit: "Content edit", content_reset: "Content reset", ticket_reply: "Help desk reply", ticket_close: "Help desk close", audit_read: "Audit log search", give_item: "Give item" };
+  const ACTION_TONE = { ban: "bad", unban: "ok", gm_level: "gm", site_role: "info", password_reset: "busy", totp_reset: "busy", password_change: "info", sign_in: "off", sign_in_failed: "busy", news_publish: "ok", news_delete: "bad", news_unpublish: "busy", ticket_reply: "ok", ticket_close: "off", audit_read: "off", give_item: "info" };
 
   const pathId = () => location.pathname.split("/").pop();
   const fmtDT = (s) => (s ? new Date(s * 1000).toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "–");
@@ -784,6 +785,11 @@
       case "password_reset": return { tone: "info", what: `Password reset by ${who}` };
       case "totp_reset": return { tone: "info", what: `Two-step sign-in removed by ${who}` };
       case "ticket_reply": return { tone: "ok", what: `Help desk ticket #${d.ticket} answered by ${who}` };
+      case "give_item": {
+        // A give is logged as pending before it runs: say when it didn't go through.
+        const state = { ok: "", refused: " (refused)", failed: " (failed)", pending: " (unconfirmed)" }[a.result] ?? ` (${a.result})`;
+        return { tone: a.result === "ok" ? "info" : "busy", what: `Give ${d.quantity} × ${d.item_name} (item ${d.item}) by ${who}${state}` };
+      }
       case "ticket_close": return { tone: "off", what: `Help desk ticket #${d.ticket} closed without a reply by ${who}` };
       case "audit_read": return { tone: "off", what: `${a.target_name || "Audit"} log searched by ${who}, ${fmtDT(d.from)} to ${fmtDT(d.to)}` };
       case "news_create": case "news_edit": case "news_publish": case "news_unpublish": case "news_pin": case "news_unpin": case "news_delete":
@@ -1746,10 +1752,60 @@
             d.stats.length ? [h("h3", {}, "Stats"), facts(d.stats.map((s) => [s.name, (s.value > 0 ? "+" : "") + s.value]))] : null,
             h("p", { class: "hint" }, "Descriptions and latent effects are in the game client, not shown here.")]
             : h("p", { class: "error", role: "alert" }, d.error)),
-        h("div", { class: "dialog-foot" }, h("button", { type: "submit", class: "primary" }, "Close"))));
+        h("div", { class: "dialog-foot" },
+          // Owners give from the admin copy of the page; nobody else gets the button.
+          it && mayGive() ? h("button", { type: "button", onclick: () => giveDialog(it, sent) }, icon("gift"), "Give item") : null,
+          h("button", { type: "submit", class: "primary" }, "Close"))));
+    const sent = h("p", { class: "hint", role: "status", hidden: true });
+    dlg.querySelector(".dialog-body").append(sent);
     dlg.addEventListener("close", () => dlg.remove());
     document.body.append(dlg);
     dlg.showModal();
+  }
+
+  const mayGive = () => body.classList.contains("app") && me.role === "owner";
+
+  // Give item: pick a character by name, a quantity up to one stack, and a reason. The item
+  // goes to their delivery box; the server checks everything again and logs it.
+  function giveDialog(it, sent) {
+    const stack = Math.max(1, it.stack || 1);
+    const who = h("select", { id: "give-char", size: "5", required: true });
+    const find = h("input", { id: "give-find", type: "search", maxlength: "15", autocomplete: "off", placeholder: "Type part of a name" });
+    let seq = 0, timer = null;
+    const lookup = async () => {
+      const my = ++seq, text = find.value.trim();
+      if (!text) { who.replaceChildren(); return; }
+      let d;
+      try { d = await api(`/admin/characters?q=${encodeURIComponent(text)}&per=10`); } catch (ex) { if (my === seq) who.replaceChildren(h("option", { disabled: true }, ex.message)); return; }
+      if (my !== seq) return;
+      who.replaceChildren(...(d.items.length
+        ? d.items.map((c) => h("option", { value: c.charid }, `${c.name} · account ${c.login}${c.online ? " · in game" : ""}`))
+        : [h("option", { disabled: true }, "No characters match.")]));
+      if (d.items.length === 1) who.value = String(d.items[0].charid);
+    };
+    find.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(lookup, 250); });
+    const qty = h("input", { id: "give-qty", type: "number", min: "1", max: String(stack), step: "1", value: "1", disabled: stack === 1 });
+    confirmDialog({
+      title: `Give ${it.name}`, icon: "gift", confirm: "Give item",
+      body: [
+        h("p", {}, "It goes to the character's delivery box, sent by GM. They get it the next time they open the box, in game or not."),
+        h("label", { for: "give-find" }, "Character ", h("span", { class: "req" }, "*")), find, who,
+        h("label", { for: "give-qty" }, `Quantity (1 to ${stack})`), qty,
+        ...reasonField("give-reason", "Reason", true, "Why. Kept in the admin log."),
+      ],
+      onSubmit: async (dlg) => {
+        const charid = Number(who.value), quantity = Number(qty.value);
+        const reason = dlg.querySelector("#give-reason").value.trim();
+        if (!charid) throw new Error("Pick a character.");
+        if (!Number.isInteger(quantity) || quantity < 1 || quantity > stack) throw new Error(`Give between 1 and ${stack}.`);
+        if (!reason) throw new Error("Say why: a reason is needed.");
+        const r = await api(`/admin/items/${it.id}/give`, { method: "POST", body: { charid, quantity, reason } });
+        sent.textContent = `Sent ${r.quantity} × ${r.item} to ${r.name}'s delivery box.`;
+        sent.hidden = false;
+        dlg.close();
+      },
+    });
+    find.focus();
   }
 
   pages.items = async function (main) {

@@ -482,8 +482,9 @@ impl Store {
 
     // ---- action log ----
 
-    pub async fn log(&self, a: NewAction, now: i64) -> Result<(), sqlx::Error> {
-        sqlx::query(
+    /// Writes one row; its id.
+    pub async fn log(&self, a: NewAction, now: i64) -> Result<i64, sqlx::Error> {
+        let r = sqlx::query(
             "INSERT INTO action_log (at, actor_kind, actor_accid, actor_login, actor_role, ip, action,
                                      target_kind, target_id, target_name, reason, detail, result)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -503,6 +504,18 @@ impl Store {
         .bind(a.result)
         .execute(&self.pool)
         .await?;
+        Ok(r.last_insert_rowid())
+    }
+
+    /// The connection pool, for tests that need to break the store on purpose.
+    #[doc(hidden)]
+    pub fn pool(&self) -> &SqlitePool {
+        &self.pool
+    }
+
+    /// Settles a row written as `pending` before the change it records.
+    pub async fn set_result(&self, id: i64, result: &str) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE action_log SET result = ? WHERE id = ?").bind(result).bind(id).execute(&self.pool).await?;
         Ok(())
     }
 
