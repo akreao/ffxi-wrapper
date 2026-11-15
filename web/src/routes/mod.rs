@@ -1,9 +1,10 @@
 //! The routes. Add one by writing a handler in the module for its audience
-//! (`public`, `session`, `me`, `admin`) and one `.route(...)` line in that
+//! (`public`, `session`, `me`, `items`, `admin`) and one `.route(...)` line in that
 //! module's `router()`; a page needs a file in `web/ui/` and a line in `pages.rs`.
 
 pub mod admin;
 pub mod cms;
+pub mod items;
 pub mod me;
 pub mod pages;
 pub mod public;
@@ -23,6 +24,7 @@ pub fn router(state: Shared) -> Router {
         .merge(me::api())
         .merge(admin::api())
         .merge(cms::api())
+        .merge(items::api())
         .merge(public::api())
         .merge(signup::api())
         .route_layer(middleware::from_fn_with_state(state.clone(), http::guard_changes))

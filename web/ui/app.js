@@ -184,11 +184,13 @@
   }
 
   // The admin panel: dark sidebar + title bar. Entries for later phases carry a "Later" tag.
+  // Items is the read-only item database players also have at /items; "Give item" will
+  // join this admin copy later, owner-only, reusing its search.
   const ADMIN_NAV = [
     ["Server", [["dashboard", "Dashboard", "/admin"], ["settings", "Settings", null]]],
     ["Players", [["accounts", "Accounts", "/admin/accounts"], ["characters", "Characters", "/admin/characters"], ["bans", "Bans", "/admin/bans"], ["helpdesk", "Help desk", "/admin/help-desk"]]],
     ["Site", [["news", "News posts", "/admin/news"], ["content", "Site content", "/admin/content"], ["invites", "Invite codes", "/admin/invites"]]],
-    ["Economy", [["items", "Items", null], ["auction", "Auction house", null]]],
+    ["Economy", [["items", "Items", "/admin/items"], ["auction", "Auction house", null]]],
     ["Records", [["audit", "Audit logs", null], ["log", "Admin log", "/admin/log"]]],
   ];
 
@@ -203,7 +205,7 @@
         items.map(([id, label, href]) => href
           ? h("a", { class: "nav-item" + (current === id ? " active" : ""), href, title: label, "aria-current": current === id ? "page" : false }, icon(id), h("span", {}, label))
           : h("a", { class: "nav-item soon", "aria-disabled": "true", title: `${label}: later` }, icon(id), h("span", {}, label), h("em", {}, "Later"))))),
-      h("div", { class: "sidebar-foot" }, "LandSandBoat", h("br"), "Site 0.10.0"));
+      h("div", { class: "sidebar-foot" }, "LandSandBoat", h("br"), "Site 0.11.0"));
     const scrim = h("div", { class: "scrim" });
     const toggle = h("button", { class: "icon-button menu-toggle", "aria-label": "Menu", "aria-controls": "sidebar", "aria-expanded": "false" }, icon("menu"));
     const theme = h("button", { class: "icon-button theme-toggle", "aria-label": "Switch theme", title: "Switch between Light and Dark" });
@@ -222,7 +224,7 @@
   // The public pages and My account: a top bar.
   function siteShell() {
     const links = [["home", "Home", "/"], ["news", "News", "/news"], ["online", "Who's online", "/online"], ["rankings", "Rankings", "/rankings"], ["rules", "Rules", "/rules"]];
-    if (me.accid) links.push(["me", "My account", "/me"]);
+    if (me.accid) links.push(["items", "Items", "/items"], ["me", "My account", "/me"]);
     const active = page === "me-character" ? "me" : page === "post" ? "news" : page;
     const toggle = h("button", { class: "icon-button menu-toggle", "aria-label": "Menu", "aria-controls": "site-nav", "aria-expanded": "false" }, icon("menu"));
     const theme = h("button", { class: "icon-button theme-toggle", "aria-label": "Switch theme", title: "Switch between Light and Dark" });
@@ -1611,6 +1613,90 @@
             onSubmit: async () => { await api(`/admin/invites/${i.id}/revoke`, { method: "POST", body: {} }); reload(); },
           }) }, "Revoke") : null)))
           : h("tr", { class: "empty-row" }, h("td", { colspan: "7" }, "No codes yet.")))))));
+  };
+
+  // ---- the item database: read-only game data for any signed-in account ----
+
+  const ITEM_CATEGORIES = [
+    ["Weapons", [[1, "Hand-to-Hand"], [2, "Dagger"], [3, "Sword"], [4, "Great Sword"], [5, "Axe"], [6, "Great Axe"], [7, "Scythe"], [8, "Polearm"], [9, "Katana"], [10, "Great Katana"], [11, "Club"], [12, "Staff"], [13, "Ranged"], [14, "Instruments"], [15, "Ammunition"], [62, "Grips"], [47, "Fishing gear"], [48, "Pet items"]]],
+    ["Armor", [[16, "Shields"], [17, "Head"], [18, "Body"], [19, "Hands"], [20, "Legs"], [21, "Feet"], [22, "Neck"], [23, "Waist"], [24, "Earrings"], [25, "Rings"], [26, "Back"]]],
+    ["Scrolls", [[28, "White Magic"], [29, "Black Magic"], [30, "Summoning"], [31, "Ninjutsu"], [32, "Songs"], [45, "Geomancy"], [60, "Dice"]]],
+    ["Materials", [[38, "Smithing"], [39, "Goldsmithing"], [40, "Clothcraft"], [41, "Leathercraft"], [42, "Bonecraft"], [43, "Woodworking"], [44, "Alchemy"], [63, "Alchemy 2"]]],
+    ["Food", [[51, "Fish"], [52, "Meat & Eggs"], [53, "Seafood"], [54, "Vegetables"], [55, "Soups"], [56, "Breads & Rice"], [57, "Sweets"], [58, "Drinks"], [59, "Ingredients"]]],
+    ["Others", [[33, "Medicines"], [34, "Furnishings"], [35, "Crystals"], [36, "Cards"], [37, "Cursed items"], [49, "Ninja tools"], [50, "Beast-made"], [61, "Automaton"], [46, "Misc."], [64, "Misc. 2"], [65, "Misc. 3"]]],
+  ];
+  const CATEGORY_NAME = new Map(ITEM_CATEGORIES.flatMap(([, list]) => list));
+  // Equipment slots in LSB's bit order; "ear" and "ring" filter either of a pair.
+  const SLOT_NAMES = ["Main", "Sub", "Ranged", "Ammo", "Head", "Body", "Hands", "Legs", "Feet", "Neck", "Waist", "Ear", "Ear", "Ring", "Ring", "Back"];
+  const SLOT_FILTERS = [["main", "Main hand"], ["sub", "Sub / shield"], ["ranged", "Ranged"], ["ammo", "Ammo"], ["head", "Head"], ["body", "Body"], ["hands", "Hands"], ["legs", "Legs"], ["feet", "Feet"], ["neck", "Neck"], ["waist", "Waist"], ["ear", "Earring"], ["ring", "Ring"], ["back", "Back"]];
+  const SKILL_NAMES = { 1: "Hand-to-Hand", 2: "Dagger", 3: "Sword", 4: "Great Sword", 5: "Axe", 6: "Great Axe", 7: "Scythe", 8: "Polearm", 9: "Katana", 10: "Great Katana", 11: "Club", 12: "Staff", 22: "Automaton", 23: "Automaton", 24: "Automaton", 25: "Archery", 26: "Marksmanship", 27: "Throwing", 40: "Singing", 41: "String instrument", 42: "Wind instrument", 44: "Geomancy", 45: "Handbell", 48: "Fishing" };
+  const ALL_JOBS = (1 << 22) - 1;
+
+  const jobsText = (mask) => (!mask ? "–" : mask === ALL_JOBS ? "All jobs" : JOBS.filter((_, i) => mask & (1 << i)).join(" "));
+  const slotsText = (mask) => [...new Set(SLOT_NAMES.filter((_, i) => mask & (1 << i)))].join(", ");
+  // Rare/Ex gear usually has no auction house category; its slot says what it is.
+  const categoryText = (it) => CATEGORY_NAME.get(it.category) || slotsText(it.slots) || "–";
+  const itemBadges = (it) => [it.rare ? h("span", { class: "badge plain" }, "Rare") : null, it.ex ? h("span", { class: "badge plain" }, "Ex") : null];
+
+  async function itemDialog(id) {
+    let d;
+    try { d = await api(`/items/${id}`); } catch (ex) { d = { error: ex.message }; }
+    const it = d.item;
+    const rows = it ? [
+      ["Item ID", String(it.id)],
+      ["Category", categoryText(it)],
+      ["Stack", String(it.stack)],
+      it.level != null ? ["Level", d.ilevel ? `${it.level} (item level ${d.ilevel})` : String(it.level)] : null,
+      it.jobs ? ["Jobs", jobsText(it.jobs)] : null,
+      it.slots ? ["Slot", slotsText(it.slots)] : null,
+      d.weapon ? ["Skill", SKILL_NAMES[d.weapon.skill] || "–"] : null,
+      d.weapon && d.weapon.dmg ? ["Damage", String(d.weapon.dmg)] : null,
+      // Hand-to-hand weapons show the delay they add to the 480 every fist has.
+      d.weapon && d.weapon.delay ? ["Delay", d.weapon.skill === 1 ? `+${d.weapon.delay - 480}` : String(d.weapon.delay)] : null,
+    ].filter(Boolean) : [];
+    const dlg = h("dialog", { class: "dialog", "aria-label": it ? it.name : "Item" },
+      h("form", { method: "dialog" },
+        h("div", { class: "dialog-head" }, h("span", { class: "icon" }, icon("items")), h("h2", {}, it ? it.name : "Item"), it ? itemBadges(it) : null),
+        h("div", { class: "dialog-body" },
+          it ? [facts(rows),
+            d.stats.length ? [h("h3", {}, "Stats"), facts(d.stats.map((s) => [s.name, (s.value > 0 ? "+" : "") + s.value]))] : null,
+            h("p", { class: "hint" }, "Descriptions and latent effects are in the game client, not shown here.")]
+            : h("p", { class: "error", role: "alert" }, d.error)),
+        h("div", { class: "dialog-foot" }, h("button", { type: "submit", class: "primary" }, "Close"))));
+    dlg.addEventListener("close", () => dlg.remove());
+    document.body.append(dlg);
+    dlg.showModal();
+  }
+
+  pages.items = async function (main) {
+    const pick = (label, value, options, onchange) => h("select", { "aria-label": label, onchange: (e) => onchange(e.target.value) },
+      options.map((o) => (Array.isArray(o[1])
+        ? h("optgroup", { label: o[0] }, o[1].map(([v, t]) => h("option", { value: v, selected: String(v) === String(value) }, t)))
+        : h("option", { value: o[0], selected: String(o[0]) === String(value) }, o[1]))));
+    const lvl = (label, key, ctx) => h("input", { type: "number", min: "1", max: "99", inputmode: "numeric", placeholder: label, "aria-label": label, class: "level-input",
+      value: ctx.st[key] || "", onchange: (e) => ctx.set(key, Math.min(99, Math.max(0, parseInt(e.target.value, 10) || 0))) });
+    const view = tableView({
+      endpoint: "/items",
+      defaults: { q: "", category: 0, job: "", slot: "", min: 0, max: 0, page: 1, per: 25 },
+      search: "Item name",
+      noun: "items",
+      columns: [{ label: "Name" }, { label: "Category", cls: "hide-phone" }, { label: "Lv", cls: "num" }, { label: "Jobs", cls: "hide-phone" }, { label: "Stack", cls: "num hide-phone" }],
+      toolbar: (ctx) => [
+        pick("Category", ctx.st.category, [[0, "All categories"], ...ITEM_CATEGORIES], (v) => ctx.set("category", Number(v))),
+        pick("Job", ctx.st.job, [["", "Any job"], ...JOB_NAMES.map((n, i) => [JOBS[i].toLowerCase(), n])], (v) => ctx.set("job", v)),
+        pick("Slot", ctx.st.slot, [["", "Any slot"], ...SLOT_FILTERS], (v) => ctx.set("slot", v)),
+        lvl("Min level", "min", ctx), lvl("Max level", "max", ctx),
+      ],
+      empty: "No items match.",
+      row: (it) => h("tr", {},
+        h("td", {}, h("a", { href: `#item-${it.id}`, onclick: (e) => { e.preventDefault(); itemDialog(it.id); } }, it.name), " ", itemBadges(it)),
+        h("td", { class: "hide-phone" }, categoryText(it)),
+        h("td", { class: "num" }, it.level != null ? it.level : "–"),
+        h("td", { class: "hide-phone job" }, jobsText(it.jobs)),
+        h("td", { class: "num hide-phone" }, it.stack)),
+    });
+    main.append(view.el);
+    await view.load();
   };
 
   // ---- start ----

@@ -401,3 +401,6 @@ body.signin { align-items: center; justify-content: center; min-height: 100vh; h
 /* Help desk: ticket and reply text as the player or GM wrote it. */
 .ticket-text { white-space: pre-wrap; overflow-wrap: anywhere; margin: 4px 0 8px; padding: 8px 12px; border-radius: 4px; background: var(--raised); border: 1px solid var(--border); font-size: 13px; max-height: 40vh; overflow: auto; }
 .dialog-body h3 { font-size: 13px; margin: 12px 0 0; }
+
+/* Item database: the level range boxes in the toolbar. */
+.level-input { width: 7em; }

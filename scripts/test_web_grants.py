@@ -94,6 +94,14 @@ class WebGrants(unittest.TestCase):
             if priv != "SELECT":
                 self.assertIn(table, used[priv], f"{priv} on {table} is not used by the web code")
 
+    def test_item_database_is_read_only(self):
+        # The item pages show static game data to every signed-in player: SELECT and nothing else.
+        g = grants()
+        for t in ("item_basic", "item_equipment", "item_weapon", "item_mods"):
+            self.assertTrue(covered(g, "SELECT", t), t)
+            for priv in ("INSERT", "UPDATE", "DELETE"):
+                self.assertNotIn((priv, t), g, f"{priv} on {t}")
+
 
 if __name__ == "__main__":
     unittest.main()
