@@ -143,6 +143,8 @@ pub struct Data {
     pub audit: Vec<(AuditKind, AuditRow)>,
     /// Every audit search the database was asked for.
     pub audit_queries: Vec<AuditQuery>,
+    /// Delivery box rows the site wrote: (charid, itemid, quantity, sender).
+    pub gives: Vec<(i64, i64, i64, String)>,
 }
 
 #[derive(Clone, Debug)]
@@ -669,6 +671,21 @@ impl Game for Fake {
         self.check()?;
         let d = self.0.lock().unwrap();
         Ok(d.chars.iter().filter(|c| c.accid == accid || (c.accid == 0 && c.original_accid == accid)).map(|c| c.name.clone()).collect())
+    }
+    async fn give_item(&self, charid: i64, itemid: i64, quantity: i64, sender: &str, rare: bool) -> DbResult<Given> {
+        self.check()?;
+        let mut d = self.0.lock().unwrap();
+        if !d.chars.iter().any(|c| c.charid == charid && c.accid != 0) {
+            return Ok(Given::NoCharacter);
+        }
+        if d.gives.iter().filter(|g| g.0 == charid).count() >= ffxi_web::game::DBOX_WAITING_MAX {
+            return Ok(Given::BoxFull);
+        }
+        if rare && d.gives.iter().any(|g| g.0 == charid && g.1 == itemid) {
+            return Ok(Given::AlreadyHas);
+        }
+        d.gives.push((charid, itemid, quantity, sender.to_string()));
+        Ok(Given::Done)
     }
 }
 

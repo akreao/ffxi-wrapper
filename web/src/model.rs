@@ -233,6 +233,18 @@ pub enum Acted {
     NoChange,
 }
 
+/// What `Game::give_item` did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Given {
+    Done,
+    /// No such character, or a deleted one.
+    NoCharacter,
+    /// `DBOX_WAITING_MAX` items already wait in their box.
+    BoxFull,
+    /// A Rare item they already have, or that already waits in their box.
+    AlreadyHas,
+}
+
 /// The job columns of `char_jobs` and `char_exp`, in job id order (1-22).
 pub const JOBS: [&str; 22] = [
     "war", "mnk", "whm", "blm", "rdm", "thf", "pld", "drk", "bst", "brd", "rng", "sam", "nin",

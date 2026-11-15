@@ -219,11 +219,11 @@ services:
   # Off unless .env's COMPOSE_PROFILES includes web. Listens on this
   # computer only unless WEB_BIND_IP names another of its addresses.
   web:
-    image: ${WEB_IMAGE:-ghcr.io/akreao/ffxi-wrapper/web:0.12.0}
+    image: ${WEB_IMAGE:-ghcr.io/akreao/ffxi-wrapper/web:0.13.0}
     pull_policy: missing
     # Used only when the image can't be pulled, like db-init's.
     build:
-      context: ${WEB_REPO:-https://github.com/akreao/ffxi-wrapper.git}#web-v0.12.0
+      context: ${WEB_REPO:-https://github.com/akreao/ffxi-wrapper.git}#web-v0.13.0
       dockerfile: docker/web/Dockerfile
     profiles: [web]
     restart: on-failure

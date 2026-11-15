@@ -37,15 +37,20 @@ pub struct LoginBody {
 
 /// Logs a sign-in outcome; a failure to write the log never fails the request. An address that is
 /// the proxy's (Docker's gateway, loopback) is marked, since it names no one.
-pub async fn record(state: &Shared, mut a: NewAction) {
+pub async fn record(state: &Shared, a: NewAction) {
+    if let Err(e) = record_or_fail(state, a).await {
+        tracing::warn!("couldn't write the action log: {e}");
+    }
+}
+
+/// [`record`] for changes that must not happen unlogged: the row's id, or the error.
+pub async fn record_or_fail(state: &Shared, mut a: NewAction) -> Result<i64, sqlx::Error> {
     if let Some(ip) = &a.ip {
         if limits::is_proxy_addr(ip) {
             a.ip = Some(format!("{ip} (proxy)"));
         }
     }
-    if let Err(e) = state.store.log(a, state.now()).await {
-        tracing::warn!("couldn't write the action log: {e}");
-    }
+    state.store.log(a, state.now()).await
 }
 
 pub fn role_name(r: Role) -> &'static str {

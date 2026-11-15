@@ -112,6 +112,14 @@ class WebGrants(unittest.TestCase):
                 self.assertNotIn((priv, t), g, f"{priv} on {t}")
             self.assertIn(t, SRC, f"the web code never reads {t}")
 
+    def test_delivery_box_only_gets_new_rows(self):
+        # Giving an item adds a row; the site never changes or removes what is in someone's box.
+        g = grants()
+        self.assertTrue(covered(g, "INSERT", "delivery_box", ["charid", "box", "itemid", "quantity", "senderid", "sender"]))
+        self.assertEqual(g[("SELECT", "delivery_box")], {"charid", "box", "slot", "itemid"})
+        for priv in ("UPDATE", "DELETE"):
+            self.assertNotIn((priv, "delivery_box"), g, f"{priv} on delivery_box")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -9,7 +9,7 @@ use crate::auth::{self, Role};
 use crate::http::*;
 use crate::model::*;
 use crate::roles;
-use crate::routes::session::record;
+use crate::routes::session::{record, record_or_fail};
 use crate::state::Shared;
 use crate::store::{LogQuery, NewAction};
 use axum::extract::{Path, Query, State};
@@ -39,6 +39,7 @@ pub fn api() -> Router<Shared> {
         .route("/admin/tickets", get(tickets))
         .route("/admin/tickets/{id}/reply", post(reply_ticket))
         .route("/admin/tickets/{id}/close", post(close_ticket))
+        .route("/admin/items/{id}/give", post(give_item))
 }
 
 #[derive(Serialize)]
@@ -696,6 +697,78 @@ async fn close_ticket(
     let outcome = state.game.close_ticket(ticket).await?;
     settle(&state, outcome, row, "Only an open ticket can be closed: this one has a reply or is closed already.").await?;
     Ok(Json(json!({ "ok": true })))
+}
+
+// ---- giving items ----
+
+/// What the player's delivery box shows as the sender of a give.
+const GIVE_SENDER: &str = "GM";
+
+#[derive(Deserialize)]
+struct GiveBody {
+    charid: i64,
+    quantity: i64,
+    reason: Option<String>,
+}
+
+/// Puts an item in a character's delivery box. Owners (and the owner link) only. Any item the
+/// item database shows may be given (not GM-only items, gil or gear past the level cap), up to
+/// one stack, to any character that isn't deleted, online or not. Every give goes in the
+/// admin log with the item, quantity, character, account and reason.
+async fn give_item(
+    State(state): State<Shared>,
+    Staff(id): Staff,
+    ClientIp(ip): ClientIp,
+    Path(itemid): Path<i64>,
+    Json(body): Json<GiveBody>,
+) -> ApiResult<Json<Value>> {
+    owners_only(&id)?;
+    let reason = clean_reason(body.reason.as_deref(), true)?.unwrap_or_default();
+    let level_cap = crate::lsb_settings::max_level_async(state.cfg.lsb_settings.clone()).await;
+    let item = state.game.item(itemid, level_cap).await?.ok_or_else(ApiError::not_found)?.item;
+    if body.quantity < 1 || body.quantity > item.stack.max(1) {
+        return Err(ApiError::bad_request(&format!("Give between 1 and {} (one stack).", item.stack.max(1))));
+    }
+    let c = state.game.admin_character(body.charid).await?.ok_or_else(ApiError::not_found)?;
+    if !state.limiter.give_allowed(&id.rate_key(), state.now()) {
+        return Err(ApiError::too_many("Slow down: that's 20 gives in ten minutes."));
+    }
+    let name = crate::routes::items::display_name(&item.name);
+    let char_name = c.detail.summary.name.clone();
+    let mut row = act(&id, &ip, "give_item", "character", body.charid, &char_name);
+    row.reason = Some(reason);
+    row.detail = Some(json!({ "item": itemid, "item_name": name, "quantity": body.quantity, "accid": c.accid, "account": c.login }).to_string());
+    row.result = "pending";
+    let (charid, quantity, rare) = (body.charid, body.quantity, item.flags & 0x8000 != 0);
+    // Its own task, awaited: a browser that goes away can't cancel it between the give and its
+    // log row. The row is written first (as pending) and nothing is given without it.
+    let task = tokio::spawn(async move {
+        let _gate = roles::lock(&state, &id, Role::Owner).await?;
+        let log_id = record_or_fail(&state, row).await.map_err(|e| {
+            tracing::warn!("couldn't write the action log, so nothing was given: {e}");
+            ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "The admin log can't be written right now, so nothing was given.")
+        })?;
+        let outcome = state.game.give_item(charid, itemid, quantity, GIVE_SENDER, rare).await;
+        let result = match &outcome {
+            Ok(Given::Done) => "ok",
+            Ok(_) => "refused",
+            Err(_) => "failed",
+        };
+        if let Err(e) = state.store.set_result(log_id, result).await {
+            tracing::warn!("couldn't settle action log row {log_id} as {result}: {e}");
+        }
+        match outcome? {
+            Given::Done => Ok(()),
+            Given::NoCharacter => Err(ApiError::not_found()),
+            Given::BoxFull => Err(ApiError::new(
+                StatusCode::CONFLICT,
+                format!("Their delivery box already has {} items waiting: try again once they've taken some.", crate::game::DBOX_WAITING_MAX),
+            )),
+            Given::AlreadyHas => Err(ApiError::new(StatusCode::CONFLICT, "That's a Rare item they already have, or one is waiting in their delivery box.")),
+        }
+    });
+    task.await.map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "Something went wrong."))??;
+    Ok(Json(json!({ "ok": true, "item": name, "quantity": quantity, "name": char_name })))
 }
 
 // ---- timed bans ----

@@ -110,6 +110,7 @@ fn signup_addr_key(addr: &str) -> (String, usize) {
 pub const ITEM_READS: (usize, i64) = (60, MIN);
 /// Audit log searches are heavier (LSB's audit tables have no time index): fewer of them.
 pub const AUDIT_READS: (usize, i64) = (20, MIN);
+pub const GIVES: (usize, i64) = (20, 10 * MIN);
 
 /// What sign-in is limited by (see the spec's rate-limit table).
 pub const FAIL_PAIR: (usize, i64) = (5, 15 * MIN);
@@ -164,11 +165,12 @@ pub struct Limiter {
     pub writes: Windows,
     pub signups: Windows,
     pub item_reads: Windows,
+    pub gives: Windows,
 }
 
 impl Limiter {
     pub fn new() -> Limiter {
-        Limiter { failures: Windows::default(), public_gets: Windows::default(), writes: Windows::default(), signups: Windows::default(), item_reads: Windows::default() }
+        Limiter { failures: Windows::default(), public_gets: Windows::default(), writes: Windows::default(), signups: Windows::default(), item_reads: Windows::default(), gives: Windows::default() }
     }
 
     pub fn sign_in_keys(addr: &str, target: &Target) -> SignInKeys {
@@ -230,10 +232,16 @@ impl Limiter {
     pub fn audit_read_allowed(&self, who: &str, now: i64) -> bool {
         self.item_reads.allow(&format!("audit:{who}"), AUDIT_READS.0, AUDIT_READS.1, now)
     }
+    /// 20 item gives per 10 minutes per account (or per owner-link session): enough to
+    /// hand out a reward round, not to empty the item table into someone's box.
+    pub fn give_allowed(&self, who: &str, now: i64) -> bool {
+        self.gives.allow(who, GIVES.0, GIVES.1, now)
+    }
 
     pub fn sweep(&self, now: i64) {
         self.failures.sweep(HOUR, now);
         self.item_reads.sweep(MIN, now);
+        self.gives.sweep(GIVES.1, now);
         self.public_gets.sweep(MIN, now);
         self.writes.sweep(MIN, now);
         self.signups.sweep(DAY, now);

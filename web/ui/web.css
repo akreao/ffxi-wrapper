@@ -164,6 +164,8 @@ table.data { width: 100%; border-collapse: collapse; font-variant-numeric: tabul
 .pager .gap { align-self: center; padding: 0 2px; }
 .pager label { display: flex; align-items: center; gap: 6px; margin: 0; white-space: nowrap; }
 .pager select { width: auto; margin: 0; padding-top: 3px; padding-bottom: 3px; font-size: 12.5px; }
+/* A list box (several rows shown), such as Give item's character list: no dropdown arrow. */
+select[size] { background-image: none; padding-right: 10px; }
 .empty-row td { text-align: center; padding: 28px 12px; color: var(--muted); }
 
 /* ---- Key-value lists ---- */
