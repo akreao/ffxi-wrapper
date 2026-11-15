@@ -31,6 +31,9 @@ pub struct AppState {
     pub bcrypt_cost: u32,
     /// At most this many bcrypt checks or hashes run at once; a burst of sign-ins queues.
     pub bcrypt_slots: tokio::sync::Semaphore,
+    /// Audit log searches running at once (see `routes::audit`): each holds a database
+    /// connection for up to 5 s, so a few at once must not take the pool from the players.
+    pub audit_slots: std::sync::Arc<tokio::sync::Semaphore>,
     pub public_cache: PublicCache,
     /// Set once the one-time copy of GM-level roles into `site_roles` is known to be done.
     pub roles_seeded: std::sync::atomic::AtomicBool,

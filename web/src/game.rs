@@ -127,6 +127,9 @@ pub trait Game: Send + Sync {
 
     /// One page of one audit table, newest first.
     async fn audit(&self, q: &AuditQuery) -> DbResult<AuditPage>;
+    /// The names of an account's characters, deleted ones included (LSB deletes a character
+    /// by moving its account id to `original_accid`).
+    async fn account_char_names(&self, accid: i64) -> DbResult<Vec<String>>;
 }
 
 pub struct MariaDb {
@@ -1075,15 +1078,17 @@ impl Game for MariaDb {
                 either("a.gm_name", "a.gm_name")
             ),
             AuditKind::Trade | AuditKind::Bazaar | AuditKind::Dbox => {
-                let (table, from, to, price) = match q.kind {
-                    AuditKind::Trade => ("audit_trade", "sender_name", "receiver_name", "NULL"),
-                    AuditKind::Bazaar => ("audit_bazaar", "seller_name", "purchaser_name", "CAST(a.price AS SIGNED)"),
-                    _ => ("audit_dbox", "sender_name", "receiver_name", "CAST(a.price AS SIGNED)"),
+                // NPCs' ids start at 0x1000000; characters' never get that high. LSB never fills
+                // in `audit_dbox.price`, so it isn't read.
+                let (table, from, to, price, npc) = match q.kind {
+                    AuditKind::Trade => ("audit_trade", "sender_name", "receiver_name", "NULL", "a.receiver >= 16777216"),
+                    AuditKind::Bazaar => ("audit_bazaar", "seller_name", "purchaser_name", "CAST(a.price AS SIGNED)", "FALSE"),
+                    _ => ("audit_dbox", "sender_name", "receiver_name", "NULL", "FALSE"),
                 };
                 format!(
                     "{SLOW_LIMIT} SELECT CAST(a.date AS SIGNED) AS at, a.{from} AS who, a.{to} AS rcpt,
                             CAST(a.itemid AS SIGNED) AS item_id, b.name AS item, CAST(a.quantity AS SIGNED) AS quantity,
-                            {price} AS price
+                            {price} AS price, CAST({npc} AS SIGNED) AS npc
                      FROM {table} a LEFT JOIN item_basic b ON b.itemid = a.itemid
                      WHERE a.id >= ? AND a.id < ?
                        AND a.date >= ? AND a.date < ?
@@ -1137,6 +1142,15 @@ impl Game for MariaDb {
         let items = rows.iter().map(|r| audit_row(q.kind, r)).collect::<Result<_, _>>()?;
         Ok(AuditPage { items, more })
     }
+
+    async fn account_char_names(&self, accid: i64) -> DbResult<Vec<String>> {
+        let rows = sqlx::query("SELECT charname FROM chars WHERE accid = ? OR (accid = 0 AND original_accid = ?) ORDER BY charid")
+            .bind(accid)
+            .bind(accid)
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows.iter().map(|r| r.try_get("charname")).collect::<Result<_, _>>()?)
+    }
 }
 
 /// How long one audit search may run. Even within its id span, a search that matches little
@@ -1151,6 +1165,7 @@ fn audit_row(kind: AuditKind, r: &sqlx::mysql::MySqlRow) -> Result<AuditRow, sql
         at: r.try_get::<Option<i64>, _>("at")?.unwrap_or(0),
         who: r.try_get::<Option<String>, _>("who")?.unwrap_or_default(),
         to: if kind == AuditKind::Gm { None } else { r.try_get("rcpt")? },
+        to_npc: items && r.try_get::<i64, _>("npc")? != 0,
         channel: if text { r.try_get("channel")? } else { None },
         linkshell: if chat { r.try_get("ls")? } else { None },
         zone: if chat { r.try_get("zone")? } else { None },

@@ -6,7 +6,9 @@ use crate::auth::Role;
 use crate::http::*;
 use crate::model::*;
 use crate::routes::items::fold_search;
+use crate::routes::session::record;
 use crate::state::Shared;
+use crate::store::NewAction;
 use axum::extract::{Query, State};
 use axum::http::header;
 use axum::response::IntoResponse;
@@ -27,6 +29,10 @@ pub const PAGE_MAX: i64 = 40;
 const Q_MAX: usize = 64;
 /// LSB's character names are at most 15 characters.
 const NAME_MAX: usize = 15;
+/// Searches that may run at once, site-wide; the database pool has 8 connections.
+pub const RUNNING_MAX: usize = 2;
+/// How long a search waits for one of those places before giving up.
+const WAIT_SECS: u64 = 3;
 
 #[derive(Deserialize)]
 struct AuditParams {
@@ -46,7 +52,12 @@ struct AuditParams {
     per: Option<i64>,
 }
 
-async fn audit(State(state): State<Shared>, Staff(id): Staff, Query(p): Query<AuditParams>) -> ApiResult<impl IntoResponse> {
+async fn audit(
+    State(state): State<Shared>,
+    Staff(id): Staff,
+    ClientIp(ip): ClientIp,
+    Query(p): Query<AuditParams>,
+) -> ApiResult<impl IntoResponse> {
     if !state.limiter.audit_read_allowed(&id.rate_key(), state.now()) {
         return Err(ApiError::too_many("Slow down: too many log searches in a minute."));
     }
@@ -71,7 +82,7 @@ async fn audit(State(state): State<Shared>, Staff(id): Staff, Query(p): Query<Au
     let mut names = Vec::new();
     let mut nobody = false;
     if let Some(accid) = p.account {
-        names = state.game.my_characters(accid).await?.into_iter().map(|c| c.name).collect();
+        names = state.game.account_char_names(accid).await?;
         if !who.is_empty() {
             names.retain(|n| n.eq_ignore_ascii_case(&who));
         }
@@ -93,11 +104,29 @@ async fn audit(State(state): State<Shared>, Staff(id): Staff, Query(p): Query<Au
     let page = p.page.unwrap_or(1).clamp(1, PAGE_MAX);
     let per = p.per.unwrap_or(25).clamp(10, 100);
 
+    let query = AuditQuery { kind, channel, tells: owner, names, q, from, to, page, per };
+    // Each search is written to the admin log (what was asked, never what came back); a new
+    // search starts on page 1, so turning pages isn't logged again.
+    if page == 1 {
+        record(&state, logged(&id, &ip, &query, p.account)).await;
+    }
     let found = if nobody || from >= to {
         AuditPage::default()
     } else {
-        let query = AuditQuery { kind, channel, tells: owner, names, q, from, to, page, per };
-        state.game.audit(&query).await?
+        let slot = tokio::time::timeout(std::time::Duration::from_secs(WAIT_SECS), state.audit_slots.clone().acquire_owned())
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .ok_or_else(|| ApiError::too_many("Other log searches are still running. Try again in a moment."))?;
+        // Run to the end even if the browser goes away, holding the place until then: a
+        // dropped request must not free it while its query still runs in the database.
+        let game = state.game.clone();
+        tokio::spawn(async move {
+            let _slot = slot;
+            game.audit(&query).await
+        })
+        .await
+        .map_err(|e| ApiError::new(axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("The search failed: {e}")))??
     };
     let channels: Vec<&str> = CHAT_CHANNELS.iter().copied().filter(|c| owner || *c != "TELL").collect();
     Ok((
@@ -110,4 +139,47 @@ async fn audit(State(state): State<Shared>, Staff(id): Staff, Query(p): Query<Au
             "channels": channels,
         })),
     ))
+}
+
+/// The admin log row for a search: which log and which filters.
+fn logged(id: &Identity, ip: &str, q: &AuditQuery, account: Option<i64>) -> NewAction {
+    let log = match q.kind {
+        AuditKind::Chat => "Chat",
+        AuditKind::Gm => "GM commands",
+        AuditKind::Trade => "Trades",
+        AuditKind::Bazaar => "Bazaar sales",
+        AuditKind::Dbox => "Delivery box",
+    };
+    let mut filters = Vec::new();
+    if !q.channel.is_empty() {
+        filters.push(format!("channel {}", q.channel));
+    } else if q.kind == AuditKind::Chat && q.tells {
+        filters.push("any channel, tells included".to_owned());
+    }
+    if let Some(a) = account {
+        filters.push(format!("account {a}"));
+    }
+    if account.is_none() && !q.names.is_empty() {
+        filters.push(format!("character {}", q.names.join(", ")));
+    }
+    if !q.q.is_empty() {
+        filters.push(format!("text \"{}\"", q.q));
+    }
+    NewAction {
+        actor_kind: if id.owner_link() { "owner" } else { "account" },
+        actor_accid: id.accid(),
+        actor_login: id.login().map(String::from),
+        actor_role: id.role.as_str(),
+        ip: Some(ip.to_owned()),
+        action: "audit_read",
+        target_name: Some(log.to_owned()),
+        reason: (!filters.is_empty()).then(|| {
+            let all = filters.join("; ");
+            let mut c = all.chars();
+            c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+        }),
+        detail: Some(json!({ "from": q.from, "to": q.to }).to_string()),
+        result: "ok",
+        ..Default::default()
+    }
 }

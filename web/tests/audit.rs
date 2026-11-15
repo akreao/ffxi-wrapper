@@ -103,6 +103,10 @@ async fn an_account_filter_means_its_characters() {
     let j = s.send(Req::get("/api/admin/audit?account=1").cookie(&m)).await.json();
     assert_eq!(channels(&j), ["SAY"]);
     assert_eq!(s.fake.audit_queries().pop().unwrap().names, ["kaelynchar", "Kaelyn"]);
+    // A deleted character (LSB: accid 0, original_accid 1) still counts as the account's.
+    s.fake.delete_char(11);
+    s.send(Req::get("/api/admin/audit?account=1").cookie(&m)).await;
+    assert_eq!(s.fake.audit_queries().pop().unwrap().names, ["kaelynchar", "Kaelyn"]);
     // An account with no characters (or a name not on it) matches nothing, without a query.
     let before = s.fake.audit_queries().len();
     let j = s.send(Req::get("/api/admin/audit?account=99").cookie(&m)).await.json();
@@ -122,4 +126,37 @@ async fn searches_are_rate_limited() {
     assert_eq!(s.send(Req::get("/api/admin/audit").cookie(&m)).await.status, StatusCode::TOO_MANY_REQUESTS);
     s.advance(61);
     assert_eq!(s.send(Req::get("/api/admin/audit").cookie(&m)).await.status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn searches_go_in_the_admin_log_not_their_results() {
+    let s = site_with_logs().await;
+    let (o, _) = s.sign_in("steven", "owner-pass").await;
+    s.send(Req::get("/api/admin/audit?channel=TELL&who=Kaelyn&q=secret").cookie(&o)).await;
+    // Turning pages isn't a new search.
+    s.send(Req::get("/api/admin/audit?channel=TELL&who=Kaelyn&q=secret&page=2").cookie(&o)).await;
+    let log = s.send(Req::get("/api/admin/log?action=audit_read").cookie(&o)).await.json();
+    assert_eq!(log["total"], 1);
+    let row = &log["items"][0];
+    assert_eq!(row["actor_login"], "steven");
+    assert_eq!(row["target_name"], "Chat");
+    assert_eq!(row["reason"], "Channel TELL; character Kaelyn; text \"secret\"");
+    assert!(!row.to_string().contains("a private tell"));
+    // Moderators see that searches happened too, but they stay off the dashboard's recent actions.
+    let (m, _) = s.sign_in("halvard", "gm-password").await;
+    assert_eq!(s.send(Req::get("/api/admin/log?action=audit_read").cookie(&m)).await.json()["total"], 1);
+    let dash = s.send(Req::get("/api/admin/dashboard").cookie(&m)).await.text();
+    assert!(!dash.contains("audit_read"));
+}
+
+#[tokio::test]
+async fn only_a_few_searches_run_at_once() {
+    let s = site_with_logs().await;
+    let (m, _) = s.sign_in("halvard", "gm-password").await;
+    let held = s.state.audit_slots.clone().acquire_many_owned(ffxi_web::routes::audit::RUNNING_MAX as u32).await.unwrap();
+    let r = s.send(Req::get("/api/admin/audit").cookie(&m)).await;
+    assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS);
+    drop(held);
+    assert_eq!(s.send(Req::get("/api/admin/audit").cookie(&m)).await.status, StatusCode::OK);
+    assert_eq!(s.state.audit_slots.available_permits(), ffxi_web::routes::audit::RUNNING_MAX);
 }

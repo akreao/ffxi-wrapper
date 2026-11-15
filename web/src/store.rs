@@ -511,7 +511,7 @@ impl Store {
         let rows = sqlx::query(&format!(
             "SELECT {ACTION_COLS} FROM action_log
              WHERE (? IS NULL OR id < ?)
-               AND (? = 0 OR (actor_role IN ('owner', 'moderator', 'system') AND action NOT IN ('sign_in', 'sign_in_failed')))
+               AND (? = 0 OR (actor_role IN ('owner', 'moderator', 'system') AND action NOT IN ('sign_in', 'sign_in_failed', 'audit_read')))
                AND (? = 1 OR target_kind IS NULL OR target_kind NOT IN ('news', 'content', 'invite', 'setting'))
              ORDER BY id DESC LIMIT ?"
         ))

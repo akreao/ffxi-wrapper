@@ -753,8 +753,8 @@
 
   // ---- the admin panel: players, bans and the log ----
 
-  const ACTION_LABEL = { ban: "Ban", unban: "Unban", gm_level: "GM level", site_role: "Website role", password_reset: "Password reset", totp_reset: "Two-step reset", password_change: "Password change", sign_in: "Sign-in", sign_in_failed: "Sign-in failed", news_create: "News draft", news_edit: "News edit", news_publish: "News published", news_unpublish: "News unpublished", news_pin: "News pinned", news_unpin: "News unpinned", news_delete: "News deleted", content_edit: "Content edit", content_reset: "Content reset", ticket_reply: "Help desk reply", ticket_close: "Help desk close" };
-  const ACTION_TONE = { ban: "bad", unban: "ok", gm_level: "gm", site_role: "info", password_reset: "busy", totp_reset: "busy", password_change: "info", sign_in: "off", sign_in_failed: "busy", news_publish: "ok", news_delete: "bad", news_unpublish: "busy", ticket_reply: "ok", ticket_close: "off" };
+  const ACTION_LABEL = { ban: "Ban", unban: "Unban", gm_level: "GM level", site_role: "Website role", password_reset: "Password reset", totp_reset: "Two-step reset", password_change: "Password change", sign_in: "Sign-in", sign_in_failed: "Sign-in failed", news_create: "News draft", news_edit: "News edit", news_publish: "News published", news_unpublish: "News unpublished", news_pin: "News pinned", news_unpin: "News unpinned", news_delete: "News deleted", content_edit: "Content edit", content_reset: "Content reset", ticket_reply: "Help desk reply", ticket_close: "Help desk close", audit_read: "Audit log search" };
+  const ACTION_TONE = { ban: "bad", unban: "ok", gm_level: "gm", site_role: "info", password_reset: "busy", totp_reset: "busy", password_change: "info", sign_in: "off", sign_in_failed: "busy", news_publish: "ok", news_delete: "bad", news_unpublish: "busy", ticket_reply: "ok", ticket_close: "off", audit_read: "off" };
 
   const pathId = () => location.pathname.split("/").pop();
   const fmtDT = (s) => (s ? new Date(s * 1000).toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "–");
@@ -785,6 +785,7 @@
       case "totp_reset": return { tone: "info", what: `Two-step sign-in removed by ${who}` };
       case "ticket_reply": return { tone: "ok", what: `Help desk ticket #${d.ticket} answered by ${who}` };
       case "ticket_close": return { tone: "off", what: `Help desk ticket #${d.ticket} closed without a reply by ${who}` };
+      case "audit_read": return { tone: "off", what: `${a.target_name || "Audit"} log searched by ${who}, ${fmtDT(d.from)} to ${fmtDT(d.to)}` };
       case "news_create": case "news_edit": case "news_publish": case "news_unpublish": case "news_pin": case "news_unpin": case "news_delete":
         return { tone: "info", what: `${ACTION_LABEL[a.action]}: "${a.target_name || ""}" by ${who}` };
       case "content_edit": case "content_reset":
@@ -1373,7 +1374,7 @@
     gm: ["When", "GM", "Command", "Command line"],
     trade: ["When", "From", "To", "Item", "Quantity"],
     bazaar: ["When", "Seller", "Buyer", "Item", "Quantity", "Price"],
-    dbox: ["When", "From", "To", "Item", "Quantity", "Gil"],
+    dbox: ["When", "From", "To", "Item", "Quantity"],
   };
   // A local calendar day <-> Unix seconds at its start.
   const dayStart = (iso) => { const [y, m, d] = iso.split("-").map(Number); return Math.floor(new Date(y, m - 1, d).getTime() / 1000); };
@@ -1417,8 +1418,10 @@
           h("td", {}, charLink(r.who)), h("td", { class: "hide-phone" }, r.channel === "LINKSHELL" ? (r.linkshell || "") : charLink(r.to)),
           h("td", { class: "hide-phone" }, zoneLabel(r.zone)), h("td", { class: "wrap" }, r.text || ""));
         if (st.kind === "gm") return h("tr", {}, at, h("td", {}, charLink(r.who)), h("td", {}, r.channel || ""), h("td", { class: "wrap" }, r.text || ""));
-        return h("tr", {}, at, h("td", {}, charLink(r.who)), h("td", {}, charLink(r.to)), h("td", {}, itemName(r)), h("td", {}, num(r.quantity)),
-          st.kind === "trade" ? null : h("td", {}, num(r.price)));
+        // LSB logs trades with NPCs (quests, shops) as trades too.
+        const to = r.to_npc ? h("span", {}, r.to || "", " ", h("span", { class: "badge off plain" }, "NPC")) : charLink(r.to);
+        return h("tr", {}, at, h("td", {}, charLink(r.who)), h("td", {}, to), h("td", {}, itemName(r)), h("td", {}, num(r.quantity)),
+          st.kind === "bazaar" ? h("td", {}, num(r.price)) : null);
       },
     });
     main.append(view.el, h("p", { class: "muted" },

@@ -520,6 +520,9 @@ pub struct AuditRow {
     /// Tell recipient, receiver or buyer.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub to: Option<String>,
+    /// The receiver is an NPC (LSB logs quest and shop trades with NPCs as trades too).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub to_npc: bool,
     /// Chat channel; for a GM command, the command.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
