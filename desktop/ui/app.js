@@ -204,7 +204,7 @@ function showPage(next) {
   if (next === "gm") refreshGameMasters();
   if (next === "ah") loadAuctionBot();
   if (next === "web") loadWebsite();
-  if (next === "friends") refreshFriends();
+  if (next === "friends") refreshFriends().then(() => showPanel(friends && friends.public_ip_mode === "wan" ? "panel-friends-wan" : "panel-friends-ts"));
   if (next === "settings") {
     show($("settings-saved"), false);
     show($("settings-error"), false);
@@ -214,7 +214,7 @@ function showPage(next) {
 
 for (const [name, [nav]] of Object.entries(NAV)) $(nav).onclick = () => showPage(name);
 
-// Settings and Game client: one section at a time, per page.
+// Settings, Game client and Play with friends: one section at a time, per page.
 function showPanel(id) {
   const tab = document.querySelector(`.subtab[data-panel="${id}"]`);
   for (const other of tab.parentElement.querySelectorAll(".subtab")) {

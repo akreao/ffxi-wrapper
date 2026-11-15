@@ -237,8 +237,8 @@ aside { display: flex; flex-direction: column; gap: 16px; overflow: auto; }
 #services .state { text-align: right; }
 
 #game-page { padding-top: 0; }
-#client-page { padding-top: 0; }
-#client-page > .subtabs { padding-top: 12px; }
+#client-page, #friends-page { padding-top: 0; }
+#client-page > .subtabs, #friends-page > .subtabs { padding-top: 12px; }
 #settings-page > .subtabs { padding-top: 0; }
 /* The client's Settings: Save stays in reach while the page scrolls, in a
    framed bar like Server settings'. Never give it the page's fixed background
