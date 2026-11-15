@@ -705,6 +705,11 @@ impl Store {
         Ok(())
     }
 
+    /// Is sign-up open? Closed until the owner opens it.
+    pub async fn signup_open(&self) -> Result<bool, sqlx::Error> {
+        Ok(self.setting("signup_open").await?.as_deref() == Some("1"))
+    }
+
     /// Does sign-up need an invite code? On unless the owner switched it off.
     pub async fn invite_required(&self) -> Result<bool, sqlx::Error> {
         Ok(self.setting("signup_needs_invite").await?.as_deref() != Some("0"))

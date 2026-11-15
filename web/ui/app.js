@@ -202,7 +202,7 @@
         items.map(([id, label, href]) => href
           ? h("a", { class: "nav-item" + (current === id ? " active" : ""), href, title: label, "aria-current": current === id ? "page" : false }, icon(id), h("span", {}, label))
           : h("a", { class: "nav-item soon", "aria-disabled": "true", title: `${label}: later` }, icon(id), h("span", {}, label), h("em", {}, "Later"))))),
-      h("div", { class: "sidebar-foot" }, "LandSandBoat", h("br"), "Site 0.8.0"));
+      h("div", { class: "sidebar-foot" }, "LandSandBoat", h("br"), "Site 0.9.0"));
     const scrim = h("div", { class: "scrim" });
     const toggle = h("button", { class: "icon-button menu-toggle", "aria-label": "Menu", "aria-controls": "sidebar", "aria-expanded": "false" }, icon("menu"));
     const theme = h("button", { class: "icon-button theme-toggle", "aria-label": "Switch theme", title: "Switch between Light and Dark" });
@@ -1467,17 +1467,20 @@
     const fail = (ex) => { err.textContent = ex.message; err.hidden = false; };
     const reload = () => location.reload();
 
-    const need = h("input", { type: "checkbox", class: "switch", "aria-label": "Sign-up needs an invite code" });
-    need.checked = d.invite_required;
-    need.addEventListener("change", async () => {
-      try { await api("/admin/signup", { method: "PUT", body: { invite_required: need.checked } }); } catch (ex) { need.checked = !need.checked; fail(ex); }
-    });
+    const toggle = (label, key) => {
+      const box = h("input", { type: "checkbox", class: "switch", "aria-label": label });
+      box.checked = d[key];
+      box.addEventListener("change", async () => {
+        try { await api("/admin/signup", { method: "PUT", body: { [key]: box.checked } }); } catch (ex) { box.checked = !box.checked; fail(ex); }
+      });
+      return box;
+    };
     main.append(h("section", { class: "card pad" },
       h("h2", {}, "Sign-up"),
       h("dl", { class: "kv" },
-        h("dt", {}, "Server allows accounts"), h("dd", {}, h("span", { class: "badge " + (d.lsb_open ? "ok" : "off") }, d.lsb_open ? "Open" : "Closed")),
-        h("dt", {}, "Needs an invite code"), h("dd", {}, need)),
-      h("p", { class: "hint" }, "“Open” follows LSB's login.ACCOUNT_CREATION setting (Game settings in the desktop app). Without a code anyone who finds the page can make an account, up to 3 an hour per address and 30 a day.")));
+        h("dt", {}, "Sign-up open"), h("dd", {}, toggle("Sign-up open", "open")),
+        h("dt", {}, "Needs an invite code"), h("dd", {}, toggle("Sign-up needs an invite code", "invite_required"))),
+      h("p", { class: "hint" }, "Only these switches decide whether this site makes accounts. LSB's login.ACCOUNT_CREATION (New accounts in the desktop app's Game settings) only covers the game's login screen, so switch that off to make this page the only way to get an account. Without a code anyone who finds the page can make an account, up to 3 an hour per address and 30 a day.")));
 
     const note = h("input", { type: "text", maxlength: String(d.max_note), placeholder: "Who it is for", "aria-label": "Note" });
     const uses = h("input", { type: "number", min: "1", max: String(d.max_uses), value: "1", "aria-label": "Uses" });

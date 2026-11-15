@@ -8,29 +8,15 @@ use common::*;
 use ffxi_web::config::Config;
 use ffxi_web::routes::signup::SIGNUP_KEYS;
 use serde_json::{json, Value};
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
-static N: AtomicUsize = AtomicUsize::new(0);
-
-/// A settings folder with LSB's `login.ACCOUNT_CREATION` set as given (`None`: no file at all).
-fn settings_dir(file: Option<&str>) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("lsb-settings-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
-    std::fs::create_dir_all(&dir).unwrap();
-    if let Some(text) = file {
-        std::fs::write(dir.join("zz_app.lua"), text).unwrap();
-    }
-    dir
-}
-
-const OPEN: &str = "xi = xi or {}\nxi.settings = xi.settings or {}\nxi.settings.login = { ACCOUNT_CREATION = true }\n";
-const CLOSED: &str = "xi.settings.login = { ACCOUNT_CREATION = false }\n";
-
-async fn site_for(lua: Option<&str>) -> Site {
+/// A site whose owner has sign-up open, or not (the default).
+async fn site_for(open: bool) -> Site {
     let mut cfg = Config::for_tests();
     cfg.admin_secret = SECRET.into();
-    cfg.lsb_settings = Some(settings_dir(lua));
     let s = site_with(cfg).await;
+    if open {
+        s.state.store.set_setting("signup_open", "1", "test", 0).await.unwrap();
+    }
     s.fake.add_account(900, "kaelyn", "hunter22", 0);
     s.fake.add_account(901, "halvard", "gm-password", 3);
     s.fake.add_account(902, "steven", "owner-pass", 5);
@@ -39,7 +25,7 @@ async fn site_for(lua: Option<&str>) -> Site {
 
 /// An open site with the owner signed in.
 async fn open_site() -> (Site, (String, String)) {
-    let s = site_for(Some(OPEN)).await;
+    let s = site_for(true).await;
     let owner = s.sign_in("steven", "owner-pass").await;
     (s, owner)
 }
@@ -69,49 +55,44 @@ fn account_count(s: &Site) -> usize {
 
 // ---- open or closed ----
 
+async fn is_open(s: &Site) -> bool {
+    let info = s.send(Req::get("/api/public/signup")).await.json();
+    let home = s.send(Req::get("/api/public/home")).await.json();
+    assert_eq!(info["open"], home["signup_open"]);
+    info["open"].as_bool().unwrap()
+}
+
 #[tokio::test]
-async fn closed_until_lsb_allows_accounts() {
-    for (lua, label) in [(None, "no settings file: LSB's default is on"), (Some(OPEN), "on"), (Some(CLOSED), "off"), (Some("xi.settings.login.ACCOUNT_CREATION = maybe"), "unreadable")] {
-        let s = site_for(lua).await;
-        let expect_open = matches!(lua, None | Some(OPEN));
-        let info = s.send(Req::get("/api/public/signup")).await.json();
-        assert_eq!(info["open"], json!(expect_open), "{label}");
-        let home = s.send(Req::get("/api/public/home")).await.json();
-        assert_eq!(home["signup_open"], json!(expect_open), "{label}");
-        let r = s.send(signup("wren", "correct-horse", "")).await;
-        if !expect_open {
-            assert_eq!(r.status, StatusCode::FORBIDDEN, "{label}");
-            assert_eq!(r.json()["closed"], json!(true));
-            assert_eq!(account_named(&s, "wren").map(|a| a.id), None);
-        }
+async fn closed_until_the_owner_opens_it() {
+    let s = site_for(false).await;
+    let owner = s.sign_in("steven", "owner-pass").await;
+    s.send(Req::put("/api/admin/signup", json!({ "invite_required": false })).session(&owner.0, &owner.1)).await;
+    assert!(!is_open(&s).await, "closed on a new site");
+    let r = s.send(signup("wren", "correct-horse", "")).await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    assert_eq!(r.json()["closed"], json!(true));
+    assert_eq!(account_named(&s, "wren").map(|a| a.id), None);
+
+    let r = s.send(Req::put("/api/admin/signup", json!({ "open": true })).session(&owner.0, &owner.1)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(r.json(), json!({ "open": true, "invite_required": false }), "the other switch is left as it was");
+    assert!(is_open(&s).await);
+    assert_eq!(s.send(signup("wren", "correct-horse", "")).await.status, StatusCode::CREATED);
+
+    s.send(Req::put("/api/admin/signup", json!({ "open": false })).session(&owner.0, &owner.1)).await;
+    assert!(!is_open(&s).await, "closed again at once");
+    assert_eq!(s.send(signup("rook", "correct-horse", "")).await.status, StatusCode::FORBIDDEN);
+    let d = s.send(Req::get("/api/admin/invites").session(&owner.0, &owner.1)).await.json();
+    assert_eq!((d["open"].clone(), d["invite_required"].clone()), (json!(false), json!(false)));
+}
+
+#[tokio::test]
+async fn a_setting_other_than_on_is_closed() {
+    let s = site_for(false).await;
+    for v in ["0", "", "true", "yes", "2"] {
+        s.state.store.set_setting("signup_open", v, "test", 0).await.unwrap();
+        assert!(!is_open(&s).await, "{v:?}");
     }
-}
-
-#[tokio::test]
-async fn unknown_means_closed() {
-    // No settings folder configured at all.
-    let mut cfg = Config::for_tests();
-    cfg.admin_secret = SECRET.into();
-    let s = site_with(cfg).await;
-    assert_eq!(s.send(Req::get("/api/public/signup")).await.json()["open"], json!(false));
-    assert_eq!(s.send(signup("wren", "correct-horse", "")).await.status, StatusCode::FORBIDDEN);
-    // A folder that doesn't exist.
-    let mut cfg = Config::for_tests();
-    cfg.lsb_settings = Some(PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("no-such-folder"));
-    let s = site_with(cfg).await;
-    assert_eq!(s.send(Req::get("/api/public/signup")).await.json()["open"], json!(false));
-}
-
-#[tokio::test]
-async fn the_setting_is_looked_up_once_a_minute() {
-    let s = site_for(Some(OPEN)).await;
-    let dir = s.state.cfg.lsb_settings.clone().unwrap();
-    assert_eq!(s.send(Req::get("/api/public/signup")).await.json()["open"], json!(true));
-    std::fs::write(dir.join("zz_app.lua"), CLOSED).unwrap();
-    s.advance(59);
-    assert_eq!(s.send(Req::get("/api/public/signup")).await.json()["open"], json!(true), "still the answer from a minute ago");
-    s.advance(2);
-    assert_eq!(s.send(Req::get("/api/public/signup")).await.json()["open"], json!(false));
 }
 
 #[tokio::test]
@@ -163,7 +144,7 @@ async fn an_account_is_made_signed_in_and_logged_without_the_password() {
 
 #[tokio::test]
 async fn ids_continue_from_the_highest_and_start_at_1000() {
-    let s = site_for(Some(OPEN)).await;
+    let s = site_for(true).await;
     s.state.store.set_setting("signup_needs_invite", "0", "t", 0).await.unwrap();
     let r = s.send(signup("first", "correct-horse", "").peer(3)).await;
     assert_eq!(r.status, StatusCode::CREATED, "{}", r.text());
@@ -176,7 +157,7 @@ async fn ids_continue_from_the_highest_and_start_at_1000() {
 
 #[tokio::test]
 async fn logins_and_passwords_are_checked_before_anything_is_counted() {
-    let s = site_for(Some(OPEN)).await;
+    let s = site_for(true).await;
     s.state.store.set_setting("signup_needs_invite", "0", "t", 0).await.unwrap();
     for (login, pw) in [("ab", "correct-horse"), ("wren!", "correct-horse"), ("a-b-c", "correct-horse"), ("wren", "short"), ("wren", &"x".repeat(33)), ("wren", "bad\u{1}control")] {
         let r = s.send(signup(login, pw, "")).await;
@@ -347,7 +328,7 @@ async fn a_visitor_who_hangs_up_leaves_nothing_counted_that_made_no_account() {
 
 #[tokio::test]
 async fn three_an_hour_from_one_address() {
-    let s = site_for(Some(OPEN)).await;
+    let s = site_for(true).await;
     s.state.store.set_setting("signup_needs_invite", "0", "t", 0).await.unwrap();
     for i in 0..3 {
         assert_eq!(s.send(signup(&format!("user{i}"), "correct-horse", "")).await.status, StatusCode::CREATED);
@@ -373,7 +354,7 @@ async fn refused_tries_count_against_the_address_so_codes_cannot_be_guessed() {
 
 #[tokio::test]
 async fn thirty_accounts_a_day_for_the_whole_server() {
-    let s = site_for(Some(OPEN)).await;
+    let s = site_for(true).await;
     s.state.store.set_setting("signup_needs_invite", "0", "t", 0).await.unwrap();
     for i in 0..30u8 {
         let r = s.send(signup(&format!("user{i}"), "correct-horse", "").peer(100 + i)).await;
@@ -388,7 +369,7 @@ async fn thirty_accounts_a_day_for_the_whole_server() {
 
 #[tokio::test]
 async fn tries_that_make_no_account_leave_the_daily_count_alone() {
-    let s = site_for(Some(OPEN)).await;
+    let s = site_for(true).await;
     s.state.store.set_setting("signup_needs_invite", "0", "t", 0).await.unwrap();
     // 40 taken-login tries from 40 addresses: none of them is an account.
     for i in 0..40u8 {
@@ -399,7 +380,7 @@ async fn tries_that_make_no_account_leave_the_daily_count_alone() {
 
 #[tokio::test]
 async fn behind_the_gateway_address_everyone_shares_one_bucket() {
-    let s = site_for(Some(OPEN)).await;
+    let s = site_for(true).await;
     s.state.store.set_setting("signup_needs_invite", "0", "t", 0).await.unwrap();
     // 10.0.0.1 looks like Docker's gateway: nobody can be told apart.
     for i in 0..10 {
@@ -420,8 +401,10 @@ async fn only_the_owner_manages_codes() {
         assert_eq!(r.status, StatusCode::FORBIDDEN);
         let r = s.send(Req::post("/api/admin/invites", json!({ "max_uses": 1 })).session(&who.0, &who.1)).await;
         assert_eq!(r.status, StatusCode::FORBIDDEN);
-        let r = s.send(Req::put("/api/admin/signup", json!({ "invite_required": false })).session(&who.0, &who.1)).await;
-        assert_eq!(r.status, StatusCode::FORBIDDEN);
+        for body in [json!({ "invite_required": false }), json!({ "open": false })] {
+            let r = s.send(Req::put("/api/admin/signup", body).session(&who.0, &who.1)).await;
+            assert_eq!(r.status, StatusCode::FORBIDDEN);
+        }
     }
     assert_eq!(s.send(Req::get("/api/admin/invites")).await.status, StatusCode::UNAUTHORIZED);
     assert_eq!(s.send(Req::get("/api/admin/invites").session(&owner.0, &owner.1)).await.status, StatusCode::OK);
@@ -476,4 +459,5 @@ async fn the_store_upgrades_from_version_two() {
     s.state.store.set_setting("k", "v", "t", 1).await.unwrap();
     assert_eq!(s.state.store.setting("k").await.unwrap().as_deref(), Some("v"));
     assert!(s.state.store.invite_required().await.unwrap(), "on until switched off");
+    assert!(!s.state.store.signup_open().await.unwrap(), "closed until switched on");
 }
