@@ -42,8 +42,11 @@ pub trait Game: Send + Sync {
     async fn account_by_login(&self, login: &str) -> DbResult<Option<AccountAuth>>;
     async fn account_by_id(&self, id: i64) -> DbResult<Option<AccountAuth>>;
     async fn totp(&self, accid: i64) -> DbResult<Option<TotpRow>>;
-    /// `accounts.status` and the account's highest `chars.gmlevel`, in one round trip.
+    /// `accounts.status`, `login` and `timecreate`, re-read on every request.
     async fn standing(&self, accid: i64) -> DbResult<Option<Standing>>;
+    /// Every account with a character at GM level 3 or more: (id, login, creation time,
+    /// highest level). Only read once, for the one-time copy of the roles GM levels used to give.
+    async fn staff_by_gm_level(&self) -> DbResult<Vec<(i64, String, Option<i64>, i64)>>;
 
     async fn my_account(&self, accid: i64) -> DbResult<Option<MyAccount>>;
     async fn my_characters(&self, accid: i64) -> DbResult<Vec<CharSummary>>;
@@ -78,19 +81,20 @@ pub trait Game: Send + Sync {
     /// Banned accounts, newest ban first.
     async fn admin_bans(&self, q: &str, page: i64, per: i64) -> DbResult<Page<BanRow>>;
 
-    /// The writes below run in one transaction that locks the account, re-reads its
-    /// highest GM level and refuses (`TooHigh`) when that is not below `guard`
-    /// (`None`: no limit, for the owner link).
+    /// The writes below each run in one transaction that locks the account row. Who may
+    /// make them (by website role) is checked by the caller, under `AppState::role_gate`.
+    /// With `no_gm` (a Moderator acting), a ban or unban is refused (`HasGm`) when any of
+    /// the account's characters has an in-game GM level, read in the same transaction.
     ///
     /// Sets `status = 2`, drops the account's trust tokens and writes `accounts_banned`.
-    async fn ban_account(&self, id: i64, until: Option<i64>, reason: &str, guard: Option<i64>) -> DbResult<Acted>;
+    async fn ban_account(&self, id: i64, until: Option<i64>, reason: &str, no_gm: bool) -> DbResult<Acted>;
     /// Sets `status = 1` and removes the `accounts_banned` row; `NoChange` when not banned.
-    async fn unban_account(&self, id: i64, guard: Option<i64>) -> DbResult<Acted>;
-    async fn reset_password(&self, id: i64, hash: &str, guard: Option<i64>) -> DbResult<Acted>;
+    async fn unban_account(&self, id: i64, no_gm: bool) -> DbResult<Acted>;
+    async fn reset_password(&self, id: i64, hash: &str) -> DbResult<Acted>;
     /// Removes two-step sign-in and the trust tokens.
-    async fn reset_totp(&self, id: i64, guard: Option<i64>) -> DbResult<Acted>;
-    /// Sets one character's GM level; the guard is checked against that character's current level.
-    async fn set_gm_level(&self, charid: i64, level: i64, guard: Option<i64>) -> DbResult<Acted>;
+    async fn reset_totp(&self, id: i64) -> DbResult<Acted>;
+    /// Sets one character's in-game GM level.
+    async fn set_gm_level(&self, charid: i64, level: i64) -> DbResult<Acted>;
     /// Ends every ban whose end has passed (`now`, Unix seconds) and returns (account, login) of each.
     async fn lift_expired_bans(&self, now: i64) -> DbResult<Vec<(i64, String)>>;
 }
@@ -321,17 +325,30 @@ impl Game for MariaDb {
 
     async fn standing(&self, accid: i64) -> DbResult<Option<Standing>> {
         let r = sqlx::query(
-            "SELECT CAST(a.status AS SIGNED) AS status,
-                    CAST(COALESCE((SELECT MAX(c.gmlevel) FROM chars c WHERE c.accid = a.id), 0) AS SIGNED) AS gm
-             FROM accounts a WHERE a.id = ?",
+            "SELECT CAST(status AS SIGNED) AS status, login,
+                    CAST(UNIX_TIMESTAMP(NULLIF(timecreate, '0000-00-00 00:00:00')) AS SIGNED) AS created
+             FROM accounts WHERE id = ?",
         )
-        .bind(accid)
-        .fetch_optional(&self.pool)
-        .await?;
+            .bind(accid)
+            .fetch_optional(&self.pool)
+            .await?;
         Ok(match r {
-            Some(r) => Some(Standing { status: r.try_get("status")?, gm: r.try_get("gm")? }),
+            Some(r) => Some(Standing { status: r.try_get("status")?, login: r.try_get("login")?, created: r.try_get("created")? }),
             None => None,
         })
+    }
+
+    async fn staff_by_gm_level(&self) -> DbResult<Vec<(i64, String, Option<i64>, i64)>> {
+        let rows = sqlx::query(
+            "SELECT CAST(a.id AS SIGNED) AS id, a.login,
+                    CAST(UNIX_TIMESTAMP(NULLIF(a.timecreate, '0000-00-00 00:00:00')) AS SIGNED) AS created,
+                    CAST(MAX(c.gmlevel) AS SIGNED) AS gm
+             FROM accounts a JOIN chars c ON c.accid = a.id
+             GROUP BY a.id, a.login, a.timecreate HAVING MAX(c.gmlevel) >= 3",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(|r| Ok((r.try_get("id")?, r.try_get("login")?, r.try_get("created")?, r.try_get("gm")?))).collect()
     }
 
     async fn my_account(&self, accid: i64) -> DbResult<Option<MyAccount>> {
@@ -775,12 +792,12 @@ impl Game for MariaDb {
         Ok(Page { items, total })
     }
 
-    async fn ban_account(&self, id: i64, until: Option<i64>, reason: &str, guard: Option<i64>) -> DbResult<Acted> {
+    async fn ban_account(&self, id: i64, until: Option<i64>, reason: &str, no_gm: bool) -> DbResult<Acted> {
         let mut tx = self.pool.begin().await?;
-        match lock_account(&mut tx, id, guard).await? {
+        match lock_account(&mut tx, id).await? {
+            Locked::Ok { gm, .. } if no_gm && gm > 0 => return Ok(Acted::HasGm),
             Locked::Ok { .. } => {}
             Locked::Missing => return Ok(Acted::NotFound),
-            Locked::TooHigh => return Ok(Acted::TooHigh),
         }
         sqlx::query("UPDATE accounts SET status = 2 WHERE id = ?").bind(id).execute(&mut *tx).await?;
         sqlx::query("DELETE FROM accounts_trust_tokens WHERE accid = ?").bind(id).execute(&mut *tx).await?;
@@ -799,13 +816,13 @@ impl Game for MariaDb {
         Ok(Acted::Done)
     }
 
-    async fn unban_account(&self, id: i64, guard: Option<i64>) -> DbResult<Acted> {
+    async fn unban_account(&self, id: i64, no_gm: bool) -> DbResult<Acted> {
         let mut tx = self.pool.begin().await?;
-        match lock_account(&mut tx, id, guard).await? {
-            Locked::Ok { status } if status & 1 == 0 => {}
+        match lock_account(&mut tx, id).await? {
+            Locked::Ok { gm, .. } if no_gm && gm > 0 => return Ok(Acted::HasGm),
+            Locked::Ok { status, .. } if status & 1 == 0 => {}
             Locked::Ok { .. } => return Ok(Acted::NoChange),
             Locked::Missing => return Ok(Acted::NotFound),
-            Locked::TooHigh => return Ok(Acted::TooHigh),
         }
         sqlx::query("UPDATE accounts SET status = 1 WHERE id = ?").bind(id).execute(&mut *tx).await?;
         sqlx::query("DELETE FROM accounts_banned WHERE accid = ?").bind(id).execute(&mut *tx).await?;
@@ -813,24 +830,22 @@ impl Game for MariaDb {
         Ok(Acted::Done)
     }
 
-    async fn reset_password(&self, id: i64, hash: &str, guard: Option<i64>) -> DbResult<Acted> {
+    async fn reset_password(&self, id: i64, hash: &str) -> DbResult<Acted> {
         let mut tx = self.pool.begin().await?;
-        match lock_account(&mut tx, id, guard).await? {
+        match lock_account(&mut tx, id).await? {
             Locked::Ok { .. } => {}
             Locked::Missing => return Ok(Acted::NotFound),
-            Locked::TooHigh => return Ok(Acted::TooHigh),
         }
         sqlx::query("UPDATE accounts SET password = ? WHERE id = ?").bind(hash).bind(id).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(Acted::Done)
     }
 
-    async fn reset_totp(&self, id: i64, guard: Option<i64>) -> DbResult<Acted> {
+    async fn reset_totp(&self, id: i64) -> DbResult<Acted> {
         let mut tx = self.pool.begin().await?;
-        match lock_account(&mut tx, id, guard).await? {
+        match lock_account(&mut tx, id).await? {
             Locked::Ok { .. } => {}
             Locked::Missing => return Ok(Acted::NotFound),
-            Locked::TooHigh => return Ok(Acted::TooHigh),
         }
         sqlx::query("DELETE FROM accounts_totp WHERE accid = ?").bind(id).execute(&mut *tx).await?;
         sqlx::query("DELETE FROM accounts_trust_tokens WHERE accid = ?").bind(id).execute(&mut *tx).await?;
@@ -838,16 +853,14 @@ impl Game for MariaDb {
         Ok(Acted::Done)
     }
 
-    async fn set_gm_level(&self, charid: i64, level: i64, guard: Option<i64>) -> DbResult<Acted> {
+    async fn set_gm_level(&self, charid: i64, level: i64) -> DbResult<Acted> {
         let mut tx = self.pool.begin().await?;
         let r = sqlx::query("SELECT CAST(gmlevel AS SIGNED) AS gm FROM chars WHERE charid = ? AND accid <> 0 FOR UPDATE")
             .bind(charid)
             .fetch_optional(&mut *tx)
             .await?;
-        let Some(r) = r else { return Ok(Acted::NotFound) };
-        let gm: i64 = r.try_get("gm")?;
-        if guard.is_some_and(|g| gm >= g) {
-            return Ok(Acted::TooHigh);
+        if r.is_none() {
+            return Ok(Acted::NotFound);
         }
         sqlx::query("UPDATE chars SET gmlevel = ? WHERE charid = ? AND accid <> 0").bind(level).bind(charid).execute(&mut *tx).await?;
         tx.commit().await?;
@@ -906,25 +919,21 @@ async fn insert_account(conn: &mut sqlx::MySqlConnection, login: &str, hash: &st
 }
 
 enum Locked {
-    Ok { status: i64 },
+    /// `gm`: the highest in-game GM level among the account's characters.
+    Ok { status: i64, gm: i64 },
     Missing,
-    TooHigh,
 }
 
-/// Locks an account row and checks the guard against its highest GM level, in the caller's transaction.
-async fn lock_account(tx: &mut sqlx::Transaction<'_, sqlx::MySql>, id: i64, guard: Option<i64>) -> DbResult<Locked> {
+/// Locks an account row (and reads its characters' GM levels) in the caller's transaction.
+async fn lock_account(tx: &mut sqlx::Transaction<'_, sqlx::MySql>, id: i64) -> DbResult<Locked> {
     let r = sqlx::query(
         "SELECT CAST(a.status AS SIGNED) AS status,
                 CAST(COALESCE((SELECT MAX(c.gmlevel) FROM chars c WHERE c.accid = a.id), 0) AS SIGNED) AS gm
          FROM accounts a WHERE a.id = ? FOR UPDATE",
     )
-    .bind(id)
-    .fetch_optional(&mut **tx)
-    .await?;
+        .bind(id)
+        .fetch_optional(&mut **tx)
+        .await?;
     let Some(r) = r else { return Ok(Locked::Missing) };
-    let gm: i64 = r.try_get("gm")?;
-    if guard.is_some_and(|g| gm >= g) {
-        return Ok(Locked::TooHigh);
-    }
-    Ok(Locked::Ok { status: r.try_get("status")? })
+    Ok(Locked::Ok { status: r.try_get("status")?, gm: r.try_get("gm")? })
 }

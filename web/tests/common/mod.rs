@@ -218,7 +218,16 @@ impl Game for Fake {
     async fn standing(&self, accid: i64) -> DbResult<Option<Standing>> {
         self.check()?;
         let d = self.0.lock().unwrap();
-        Ok(d.accounts.iter().find(|a| a.id == accid).map(|a| Standing { status: a.status, gm: d.chars.iter().filter(|c| c.accid == accid).map(|c| c.gm).max().unwrap_or(0) }))
+        Ok(d.accounts.iter().find(|a| a.id == accid).map(|a| Standing { status: a.status, login: a.login.clone(), created: fake_created(a.id) }))
+    }
+    async fn staff_by_gm_level(&self) -> DbResult<Vec<(i64, String, Option<i64>, i64)>> {
+        self.check()?;
+        let d = self.0.lock().unwrap();
+        Ok(d.accounts
+            .iter()
+            .map(|a| (a.id, a.login.clone(), fake_created(a.id), d.chars.iter().filter(|c| c.accid == a.id).map(|c| c.gm).max().unwrap_or(0)))
+            .filter(|(_, _, _, gm)| *gm >= 3)
+            .collect())
     }
     async fn my_account(&self, accid: i64) -> DbResult<Option<MyAccount>> {
         self.check()?;
@@ -340,7 +349,7 @@ impl Game for Fake {
                     id: a.id,
                     login: a.login.clone(),
                     status: a.status,
-                    created: Some(NOW - 1000 * (1000 - a.id)),
+                    created: fake_created(a.id),
                     last_login: Some(NOW - 10 * a.id),
                     characters: chars.iter().map(|c| c.name.clone()).collect(),
                     gm: chars.iter().map(|c| c.gm).max().unwrap_or(0),
@@ -445,27 +454,25 @@ impl Game for Fake {
         let total = rows.len() as i64;
         Ok(Page { items: rows.into_iter().skip(((page - 1) * per) as usize).take(per as usize).collect(), total })
     }
-    async fn ban_account(&self, id: i64, until: Option<i64>, reason: &str, guard: Option<i64>) -> DbResult<Acted> {
+    async fn ban_account(&self, id: i64, until: Option<i64>, reason: &str, no_gm: bool) -> DbResult<Acted> {
         self.check()?;
         let mut d = self.0.lock().unwrap();
-        let gm = d.chars.iter().filter(|c| c.accid == id).map(|c| c.gm).max().unwrap_or(0);
-        let Some(a) = d.accounts.iter_mut().find(|a| a.id == id) else { return Ok(Acted::NotFound) };
-        if guard.is_some_and(|g| gm >= g) {
-            return Ok(Acted::TooHigh);
+        if no_gm && d.chars.iter().any(|c| c.accid == id && c.gm > 0) {
+            return Ok(Acted::HasGm);
         }
+        let Some(a) = d.accounts.iter_mut().find(|a| a.id == id) else { return Ok(Acted::NotFound) };
         a.status = 2;
         a.trust_tokens = false;
         a.ban = Some(BanRecord { banned_at: Some(NOW), until, reason: Some(reason.into()) });
         Ok(Acted::Done)
     }
-    async fn unban_account(&self, id: i64, guard: Option<i64>) -> DbResult<Acted> {
+    async fn unban_account(&self, id: i64, no_gm: bool) -> DbResult<Acted> {
         self.check()?;
         let mut d = self.0.lock().unwrap();
-        let gm = d.chars.iter().filter(|c| c.accid == id).map(|c| c.gm).max().unwrap_or(0);
-        let Some(a) = d.accounts.iter_mut().find(|a| a.id == id) else { return Ok(Acted::NotFound) };
-        if guard.is_some_and(|g| gm >= g) {
-            return Ok(Acted::TooHigh);
+        if no_gm && d.chars.iter().any(|c| c.accid == id && c.gm > 0) {
+            return Ok(Acted::HasGm);
         }
+        let Some(a) = d.accounts.iter_mut().find(|a| a.id == id) else { return Ok(Acted::NotFound) };
         if a.status & 1 == 1 {
             return Ok(Acted::NoChange);
         }
@@ -473,36 +480,25 @@ impl Game for Fake {
         a.ban = None;
         Ok(Acted::Done)
     }
-    async fn reset_password(&self, id: i64, hash: &str, guard: Option<i64>) -> DbResult<Acted> {
+    async fn reset_password(&self, id: i64, hash: &str) -> DbResult<Acted> {
         self.check()?;
         let mut d = self.0.lock().unwrap();
-        let gm = d.chars.iter().filter(|c| c.accid == id).map(|c| c.gm).max().unwrap_or(0);
         let Some(a) = d.accounts.iter_mut().find(|a| a.id == id) else { return Ok(Acted::NotFound) };
-        if guard.is_some_and(|g| gm >= g) {
-            return Ok(Acted::TooHigh);
-        }
         a.hash = hash.into();
         Ok(Acted::Done)
     }
-    async fn reset_totp(&self, id: i64, guard: Option<i64>) -> DbResult<Acted> {
+    async fn reset_totp(&self, id: i64) -> DbResult<Acted> {
         self.check()?;
         let mut d = self.0.lock().unwrap();
-        let gm = d.chars.iter().filter(|c| c.accid == id).map(|c| c.gm).max().unwrap_or(0);
         let Some(a) = d.accounts.iter_mut().find(|a| a.id == id) else { return Ok(Acted::NotFound) };
-        if guard.is_some_and(|g| gm >= g) {
-            return Ok(Acted::TooHigh);
-        }
         a.totp = None;
         a.trust_tokens = false;
         Ok(Acted::Done)
     }
-    async fn set_gm_level(&self, charid: i64, level: i64, guard: Option<i64>) -> DbResult<Acted> {
+    async fn set_gm_level(&self, charid: i64, level: i64) -> DbResult<Acted> {
         self.check()?;
         let mut d = self.0.lock().unwrap();
         let Some(c) = d.chars.iter_mut().find(|c| c.charid == charid && c.accid != 0) else { return Ok(Acted::NotFound) };
-        if guard.is_some_and(|g| c.gm >= g) {
-            return Ok(Acted::TooHigh);
-        }
         c.gm = level;
         Ok(Acted::Done)
     }
@@ -533,19 +529,36 @@ pub struct Site {
 }
 
 pub async fn site_with(cfg: Config) -> Site {
+    site_with_store(cfg, upgraded_store().await).await
+}
+
+pub async fn site_with_store(cfg: Config, store: Store) -> Site {
     let fake = Fake::default();
     let clock = Arc::new(AtomicI64::new(NOW));
     let c = clock.clone();
     let state = app_state(Parts {
         cfg,
         game: Arc::new(fake.clone()),
-        store: Store::memory().await.unwrap(),
+        store,
         probe: Arc::new(StaticProbe(vec![ServiceState { id: "world", name: "World", state: "up" }])),
         clock: Arc::new(move || c.load(Ordering::SeqCst)),
         dummy_hash: auth::hash_password("dummy", 4).unwrap(),
         bcrypt_cost: 4,
     });
     Site { router: ffxi_web::router(state.clone()), state, fake, clock }
+}
+
+/// The accounts' `timecreate`, as the fake reports it everywhere.
+pub fn fake_created(id: i64) -> Option<i64> {
+    Some(NOW - 1000 * (1000 - id))
+}
+
+/// A store that looks upgraded from before website roles, so the first role lookup copies
+/// roles from GM levels (as the existing tests expect). `Store::memory()` alone is a new store.
+pub async fn upgraded_store() -> Store {
+    let s = Store::memory().await.unwrap();
+    s.forget_roles_seeded().await.unwrap();
+    s
 }
 
 pub async fn site() -> Site {

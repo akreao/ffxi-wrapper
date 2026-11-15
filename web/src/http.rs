@@ -107,9 +107,8 @@ pub fn source(parts: &Parts, state: &Shared) -> Source {
 #[derive(Debug, Clone)]
 pub struct Identity {
     pub session: Session,
+    /// The website role: the account's stored one, Owner for the owner link.
     pub role: Role,
-    /// Highest GM level among the account's characters (5 for an owner link).
-    pub gm: i64,
 }
 
 impl Identity {
@@ -123,7 +122,7 @@ impl Identity {
         self.session.login.as_deref()
     }
     pub fn actor(&self) -> auth::Actor {
-        auth::Actor { role: self.role, gm: self.gm, owner_link: self.owner_link() }
+        auth::Actor { role: self.role, owner_link: self.owner_link() }
     }
 }
 
@@ -147,17 +146,18 @@ pub fn set_cookie(_state: &Shared, value: &str, max_age: i64) -> HeaderValue {
         .expect("cookie values are base64url")
 }
 
-/// Looks up the session and re-reads the account, so a ban or demotion takes effect at once.
+/// Looks up the session and re-reads the account and its website role, so a ban or a
+/// role change takes effect at once.
 pub async fn resolve(state: &Shared, headers: &HeaderMap) -> ApiResult<Option<Identity>> {
     let Some(cookie) = cookie_value(headers) else { return Ok(None) };
     let Some(session) = state.store.session(&cookie).await? else { return Ok(None) };
     let now = state.now();
-    let (role, gm) = match session.kind {
-        SessionKind::Owner => (Role::Owner, 5),
+    let role = match session.kind {
+        SessionKind::Owner => Role::Owner,
         SessionKind::Account => {
             let accid = session.accid.unwrap_or(0);
             match state.game.standing(accid).await? {
-                Some(s) if s.status & 1 == 1 => (auth::role_for_gm(s.gm), s.gm),
+                Some(s) if s.status & 1 == 1 => crate::roles::role_of(state, accid, &s).await?,
                 _ => {
                     // Gone, banned or disabled: the session ends.
                     state.store.end_session(&session.id_hash).await?;
@@ -171,7 +171,7 @@ pub async fn resolve(state: &Shared, headers: &HeaderMap) -> ApiResult<Option<Id
         return Ok(None);
     }
     state.store.touch(&session, now).await?;
-    Ok(Some(Identity { session, role, gm }))
+    Ok(Some(Identity { session, role }))
 }
 
 /// Anyone: the session if there is one.

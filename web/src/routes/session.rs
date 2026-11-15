@@ -164,8 +164,7 @@ async fn login(
     }
 
     state.limiter.sign_in_succeeded(&keys);
-    let gm = state.game.standing(account.id).await?.map(|s| s.gm).unwrap_or(0);
-    let role = auth::role_for_gm(gm);
+    let role = crate::roles::account_role(&state, account.id).await?;
     let ua = headers.get(header::USER_AGENT).and_then(|v| v.to_str().ok());
     let lifetime = auth::new_session_lifetime(role, &SessionKind::Account);
     let (cookie, csrf) = state

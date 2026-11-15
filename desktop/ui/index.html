@@ -317,6 +317,7 @@
     <section class="card">
       <h2>Game masters</h2>
       <p class="hint">GM levels belong to characters: pick a level for each character that should have GM commands such as <code>!goto</code> or <code>!additem</code>. Level 5 can use every command. A character in game gets the new level the next time it zones or logs in. The database has to be running, so start the server first.</p>
+      <p class="hint">GM levels only control in-game commands. They give no access to the website's admin panel: website roles (Moderator, Owner) belong to accounts and are set on the website, on each account's page.</p>
       <p id="gm-state" class="hint"></p>
       <ul id="gm-accounts"></ul>
     </section>
@@ -421,7 +422,7 @@
     </div>
     <form id="web-form" class="card group">
       <h2>Website</h2>
-      <p class="hint">A website for the server: a home page, <strong>My account</strong> for every game account, and an admin panel for game masters and you. It runs beside the server and starts and stops with it.</p>
+      <p class="hint">A website for the server: a home page, <strong>My account</strong> for every game account, and an admin panel for you and the moderators and owners you pick on the site. It runs beside the server and starts and stops with it.</p>
       <div class="setting">
         <div class="setting-text">
           <label for="web-enabled">Run the website</label>

@@ -182,7 +182,7 @@ async fn finish(state: Shared, ip: String, login: String, password: String, invi
     )
     .await;
 
-    // Signed in at once, as a Player (a new account has no characters, so no GM level).
+    // Signed in at once, as a Player (a new account has no website role).
     let lifetime = auth::new_session_lifetime(Role::Player, &SessionKind::Account);
     let (cookie, csrf) = state
         .store
