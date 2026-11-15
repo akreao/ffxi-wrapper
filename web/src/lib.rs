@@ -8,6 +8,7 @@ pub mod content;
 pub mod game;
 pub mod http;
 pub mod limits;
+pub mod lsb_settings;
 pub mod markdown;
 pub mod model;
 pub mod proxy;

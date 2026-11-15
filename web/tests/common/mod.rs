@@ -633,7 +633,7 @@ impl Game for Fake {
 
 /// What ITEM_SHOWN lets through.
 fn shown(i: &ItemRaw, level_cap: i64) -> bool {
-    i.id > 0 && i.flags & 2 == 0 && i.kind != 8 && !i.name.starts_with("???") && i.level.is_none_or(|l| l <= level_cap)
+    i.id > 0 && i.flags & 2 == 0 && i.kind != 8 && i.level.is_none_or(|l| l <= level_cap)
 }
 
 fn fake_ticket(d: &Data, t: &FakeTicket) -> Ticket {

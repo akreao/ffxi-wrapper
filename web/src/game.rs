@@ -1043,11 +1043,11 @@ const ITEM_SELECT: &str = "SELECT CAST(b.itemid AS SIGNED) AS id, b.name AS name
        CAST(COALESCE(e.jobs, 0) AS SIGNED) AS jobs, CAST(COALESCE(e.slot, 0) AS SIGNED) AS slots
 FROM item_basic b LEFT JOIN item_equipment e ON e.itemId = b.itemid";
 /// Items players can have, given the server's level cap (1 bind). Left out: LSB's GM-only flag
-/// (0x2: the Judge's set), currency (type 8: gil, id 65535, which LSB keeps as an item), LSB's
-/// `???_...` placeholder rows (unknown retail items), and equipment above the server's
-/// `MAX_LEVEL` (gear from past the server's era).
-const ITEM_SHOWN: &str = "b.itemid > 0 AND (b.flags & 2) = 0 AND b.type <> 8 AND b.name NOT LIKE '???%'
-         AND (e.level IS NULL OR e.level <= ?)";
+/// (0x2: the Judge's set), currency (type 8: gil, id 65535, which LSB keeps as an item), and
+/// equipment above the server's `MAX_LEVEL` (gear from past the server's era). Items named
+/// `???` stay: they are retail's unappraised items (Assault, Nyzul Isle and others), which
+/// players hold until an NPC appraises them.
+const ITEM_SHOWN: &str = "b.itemid > 0 AND (b.flags & 2) = 0 AND b.type <> 8 AND (e.level IS NULL OR e.level <= ?)";
 /// The item search's filters: name (2 binds), then category, job bit, slot bit, lowest and
 /// highest level, each bound twice (0 = any).
 const ITEM_FILTERS: &str = "AND (? = '' OR b.name LIKE ? ESCAPE '|')

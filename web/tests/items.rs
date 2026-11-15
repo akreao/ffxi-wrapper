@@ -27,15 +27,13 @@ async fn site_with_items() -> Site {
 }
 
 /// Items players can't have: never listed, and their pages answer like missing ones.
-const HIDDEN: [i64; 3] = [10, 65535, 2190];
+const HIDDEN: [i64; 2] = [10, 65535];
 
 fn add_hidden(s: &Site) {
     // LSB's GM-only flag (the Judge's set).
     s.fake.add_item(ItemDetailRaw { item: item(10, "judges_sword", 3, 2), ..Default::default() });
     // Gil: currency (type 8) that LSB keeps as an item.
     s.fake.add_item(ItemDetailRaw { item: ItemRaw { kind: 8, stack: 0, ..item(65535, "gil", 0, 0) }, ..Default::default() });
-    // An unknown retail item LSB has only a placeholder row for.
-    s.fake.add_item(ItemDetailRaw { item: item(2190, "???_sword", 0, 0x40 | 0x1000 | 0x2000), ..Default::default() });
 }
 
 #[tokio::test]
@@ -89,7 +87,7 @@ async fn shows_static_data_and_nothing_internal() {
         let r = s.send(Req::get(&format!("/api/items/{id}")).cookie(&c)).await;
         assert_eq!((id, r.status, r.json()), (id, StatusCode::NOT_FOUND, serde_json::json!({ "error": "Not found." })));
     }
-    for q in ["judges", "gil", "???", "%3F%3F%3F", "sword"] {
+    for q in ["judges", "gil", "sword"] {
         let j = s.send(Req::get(&format!("/api/items?q={q}")).cookie(&c)).await.json();
         let ids: Vec<i64> = j["items"].as_array().unwrap().iter().map(|i| i["id"].as_i64().unwrap()).collect();
         assert!(ids.iter().all(|id| !HIDDEN.contains(id)), "{q}: {ids:?}");
@@ -173,7 +171,7 @@ fn search_text_is_never_a_like_pattern() {
 
 #[test]
 fn the_level_cap_is_read_like_lsb_loads_it() {
-    use ffxi_web::routes::items::server_max_level;
+    use ffxi_web::lsb_settings::{last_max_level, max_level as server_max_level};
     use std::path::Path;
     let fixture = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/settings-era"));
     // main.lua says 60 (its commented 10 and the mob range don't count); zz_app.lua, read last, says 75.
@@ -181,6 +179,26 @@ fn the_level_cap_is_read_like_lsb_loads_it() {
     // No settings folder, or one that isn't there: LSB's default.
     assert_eq!(server_max_level(None), 99);
     assert_eq!(server_max_level(Some(Path::new("/no/such/folder"))), 99);
+    // Only code counts: not comments of either kind, not strings, not comparisons or expressions.
+    let src = r#"
+xi.settings.main = {
+    MAX_LEVEL = 75,
+    --[[ MAX_LEVEL = 50,
+    ]]
+    --[==[ old: MAX_LEVEL = 40 ]==]
+    -- MAX_LEVEL = 30
+    NOTE = "MAX_LEVEL = 20 -- not code",
+    OTHER = [[MAX_LEVEL = 10]],
+    NORMAL_MOB_MAX_LEVEL_RANGE_MAX = 5,
+}
+if xi.settings.main.MAX_LEVEL == 60 then end
+xi.settings.main.MAX_LEVEL = 70 + 1
+"#;
+    assert_eq!(last_max_level(src), Some(75));
+    assert_eq!(last_max_level("xi.settings.main.MAX_LEVEL = 75\nxi.settings.main.MAX_LEVEL = 65"), Some(65));
+    assert_eq!(last_max_level("x = { MAX_LEVEL = 60 }"), Some(60));
+    assert_eq!(last_max_level("--[[\nMAX_LEVEL = 50\n]] MAX_LEVEL = 55"), Some(55));
+    assert_eq!(last_max_level("--[[ unclosed\nMAX_LEVEL = 50"), None);
 }
 
 #[test]
@@ -189,4 +207,19 @@ fn names_read_like_the_game() {
     assert_eq!(display_name("pile_of_chocobo_bedding"), "Pile of Chocobo Bedding");
     assert_eq!(display_name("bronze_sword"), "Bronze Sword");
     assert_eq!(fold_search(Some("  Fire Crystal\u{0} ")), "fire_crystal");
+}
+
+#[test]
+fn a_changed_settings_file_is_read_again() {
+    use ffxi_web::lsb_settings::max_level;
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("items-settings");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("zz_app.lua");
+    std::fs::write(&file, "xi.settings.main.MAX_LEVEL = 60\n").unwrap();
+    assert_eq!(max_level(Some(&dir)), 60);
+    assert_eq!(max_level(Some(&dir)), 60);
+    std::fs::write(&file, "xi.settings.main.MAX_LEVEL = 75 -- raised\n").unwrap();
+    assert_eq!(max_level(Some(&dir)), 75);
+    std::fs::remove_file(&file).unwrap();
+    assert_eq!(max_level(Some(&dir)), 99);
 }
