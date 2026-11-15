@@ -111,6 +111,9 @@ async fn an_account_filter_means_its_characters() {
     let before = s.fake.audit_queries().len();
     let j = s.send(Req::get("/api/admin/audit?account=99").cookie(&m)).await.json();
     assert!(j["items"].as_array().unwrap().is_empty());
+    // Account 0 is where LSB keeps deleted characters, not an account.
+    let j = s.send(Req::get("/api/admin/audit?account=0").cookie(&m)).await.json();
+    assert!(j["items"].as_array().unwrap().is_empty());
     let j = s.send(Req::get("/api/admin/audit?account=1&who=Halvard").cookie(&m)).await.json();
     assert!(j["items"].as_array().unwrap().is_empty());
     assert_eq!(s.fake.audit_queries().len(), before);
@@ -142,11 +145,16 @@ async fn searches_go_in_the_admin_log_not_their_results() {
     assert_eq!(row["target_name"], "Chat");
     assert_eq!(row["reason"], "Channel TELL; character Kaelyn; text \"secret\"");
     assert!(!row.to_string().contains("a private tell"));
-    // Moderators see that searches happened too, but they stay off the dashboard's recent actions.
+    assert_eq!(row["result"], "ok");
+    // Owner only: the filters say who is being looked into. Moderators never see these rows,
+    // in the log, its filters or the dashboard; the dashboard leaves them out for the owner too.
     let (m, _) = s.sign_in("halvard", "gm-password").await;
-    assert_eq!(s.send(Req::get("/api/admin/log?action=audit_read").cookie(&m)).await.json()["total"], 1);
-    let dash = s.send(Req::get("/api/admin/dashboard").cookie(&m)).await.text();
-    assert!(!dash.contains("audit_read"));
+    s.send(Req::get("/api/admin/audit?who=Kaelyn").cookie(&m)).await;
+    assert_eq!(s.send(Req::get("/api/admin/log?action=audit_read").cookie(&m)).await.json()["total"], 0);
+    assert!(!s.send(Req::get("/api/admin/log").cookie(&m)).await.text().contains("audit_read"));
+    assert!(!s.send(Req::get("/api/admin/dashboard").cookie(&m)).await.text().contains("audit_read"));
+    assert!(!s.send(Req::get("/api/admin/dashboard").cookie(&o)).await.text().contains("audit_read"));
+    assert_eq!(s.send(Req::get("/api/admin/log?action=audit_read").cookie(&o)).await.json()["total"], 2);
 }
 
 #[tokio::test]
@@ -157,6 +165,9 @@ async fn only_a_few_searches_run_at_once() {
     let r = s.send(Req::get("/api/admin/audit").cookie(&m)).await;
     assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS);
     drop(held);
+    // Logged as refused, not as a search that ran.
+    let (o, _) = s.sign_in("steven", "owner-pass").await;
+    assert_eq!(s.send(Req::get("/api/admin/log?action=audit_read").cookie(&o)).await.json()["items"][0]["result"], "refused");
     assert_eq!(s.send(Req::get("/api/admin/audit").cookie(&m)).await.status, StatusCode::OK);
     assert_eq!(s.state.audit_slots.available_permits(), ffxi_web::routes::audit::RUNNING_MAX);
 }

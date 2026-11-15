@@ -82,7 +82,10 @@ async fn audit(
     let mut names = Vec::new();
     let mut nobody = false;
     if let Some(accid) = p.account {
-        names = state.game.account_char_names(accid).await?;
+        // Ids start at 1; account 0 is where LSB puts deleted characters.
+        if accid > 0 {
+            names = state.game.account_char_names(accid).await?;
+        }
         if !who.is_empty() {
             names.retain(|n| n.eq_ignore_ascii_case(&who));
         }
@@ -105,29 +108,22 @@ async fn audit(
     let per = p.per.unwrap_or(25).clamp(10, 100);
 
     let query = AuditQuery { kind, channel, tells: owner, names, q, from, to, page, per };
-    // Each search is written to the admin log (what was asked, never what came back); a new
-    // search starts on page 1, so turning pages isn't logged again.
-    if page == 1 {
-        record(&state, logged(&id, &ip, &query, p.account)).await;
+    // Each search is written to the owner's admin log once it has run, with how it ended
+    // (what was asked, never what came back); a new search starts on page 1, so turning pages
+    // isn't logged again.
+    let mut row = (page == 1).then(|| logged(&id, &ip, &query, p.account));
+    let found = if nobody || from >= to { Ok(AuditPage::default()) } else { run(&state, query).await };
+    if let Some(row) = row.as_mut() {
+        row.result = match &found {
+            Ok(_) => "ok",
+            Err(e) if e.status == axum::http::StatusCode::TOO_MANY_REQUESTS => "refused",
+            Err(_) => "failed",
+        };
     }
-    let found = if nobody || from >= to {
-        AuditPage::default()
-    } else {
-        let slot = tokio::time::timeout(std::time::Duration::from_secs(WAIT_SECS), state.audit_slots.clone().acquire_owned())
-            .await
-            .ok()
-            .and_then(Result::ok)
-            .ok_or_else(|| ApiError::too_many("Other log searches are still running. Try again in a moment."))?;
-        // Run to the end even if the browser goes away, holding the place until then: a
-        // dropped request must not free it while its query still runs in the database.
-        let game = state.game.clone();
-        tokio::spawn(async move {
-            let _slot = slot;
-            game.audit(&query).await
-        })
-        .await
-        .map_err(|e| ApiError::new(axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("The search failed: {e}")))??
-    };
+    if let Some(row) = row {
+        record(&state, row).await;
+    }
+    let found = found?;
     let channels: Vec<&str> = CHAT_CHANNELS.iter().copied().filter(|c| owner || *c != "TELL").collect();
     Ok((
         [(header::CACHE_CONTROL, "private, no-store")],
@@ -172,6 +168,9 @@ fn logged(id: &Identity, ip: &str, q: &AuditQuery, account: Option<i64>) -> NewA
         actor_role: id.role.as_str(),
         ip: Some(ip.to_owned()),
         action: "audit_read",
+        // Owner only in the admin log (like news and site content, see `store`): the filters say who is
+        // being looked into, and an owner's text search may quote a tell.
+        target_kind: Some("audit"),
         target_name: Some(log.to_owned()),
         reason: (!filters.is_empty()).then(|| {
             let all = filters.join("; ");
@@ -181,5 +180,29 @@ fn logged(id: &Identity, ip: &str, q: &AuditQuery, account: Option<i64>) -> NewA
         detail: Some(json!({ "from": q.from, "to": q.to }).to_string()),
         result: "ok",
         ..Default::default()
+    }
+}
+
+/// One search, in one of the [`RUNNING_MAX`] places.
+async fn run(state: &Shared, query: AuditQuery) -> ApiResult<AuditPage> {
+    let slot = tokio::time::timeout(std::time::Duration::from_secs(WAIT_SECS), state.audit_slots.clone().acquire_owned())
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .ok_or_else(|| ApiError::too_many("Other log searches are still running. Try again in a moment."))?;
+    // Run to the end even if the browser goes away, holding the place until then: a dropped
+    // request must not free it while its query still runs in the database.
+    let game = state.game.clone();
+    let done = tokio::spawn(async move {
+        let _slot = slot;
+        game.audit(&query).await
+    })
+    .await;
+    match done {
+        Ok(found) => Ok(found?),
+        Err(e) => {
+            tracing::error!("audit search task: {e}");
+            Err(ApiError::new(axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Something went wrong on the server."))
+        }
     }
 }
