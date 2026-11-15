@@ -116,11 +116,7 @@ fn private<T: IntoResponse>(body: T) -> impl IntoResponse {
 
 /// One read counted against the viewer's account (or their owner-link session).
 fn throttle(state: &Shared, id: &Identity) -> ApiResult<()> {
-    let who = match id.accid() {
-        Some(a) => format!("acct:{a}"),
-        None => format!("session:{}", id.session.id_hash.iter().map(|b| format!("{b:02x}")).collect::<String>()),
-    };
-    if state.limiter.item_read_allowed(&who, state.now()) {
+    if state.limiter.item_read_allowed(&id.rate_key(), state.now()) {
         Ok(())
     } else {
         Err(ApiError::too_many("Slow down: too many item searches in a minute."))

@@ -49,6 +49,7 @@ pub fn app_state(p: Parts) -> Shared {
         dummy_hash: p.dummy_hash,
         bcrypt_cost: p.bcrypt_cost,
         bcrypt_slots: tokio::sync::Semaphore::new(4),
+        audit_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(crate::routes::audit::RUNNING_MAX)),
         public_cache: Default::default(),
         roles_seeded: Default::default(),
         role_gate: Default::default(),

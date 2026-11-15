@@ -108,6 +108,8 @@ fn signup_addr_key(addr: &str) -> (String, usize) {
 }
 
 pub const ITEM_READS: (usize, i64) = (60, MIN);
+/// Audit log searches are heavier (LSB's audit tables have no time index): fewer of them.
+pub const AUDIT_READS: (usize, i64) = (20, MIN);
 
 /// What sign-in is limited by (see the spec's rate-limit table).
 pub const FAIL_PAIR: (usize, i64) = (5, 15 * MIN);
@@ -221,6 +223,12 @@ impl Limiter {
     /// 60 item database reads a minute per account (or per owner-link session).
     pub fn item_read_allowed(&self, who: &str, now: i64) -> bool {
         self.item_reads.allow(who, ITEM_READS.0, ITEM_READS.1, now)
+    }
+
+    /// 20 audit log searches a minute per account (or per owner-link session). Kept in the
+    /// item reads' windows under their own keys: same one-minute sweep.
+    pub fn audit_read_allowed(&self, who: &str, now: i64) -> bool {
+        self.item_reads.allow(&format!("audit:{who}"), AUDIT_READS.0, AUDIT_READS.1, now)
     }
 
     pub fn sweep(&self, now: i64) {

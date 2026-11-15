@@ -114,7 +114,8 @@ header a.status:hover { border-color: var(--gold); }
 .toolbar .search { position: relative; flex: 1 1 240px; max-width: 360px; }
 .toolbar .search input { margin: 0; padding-left: 32px; }
 .toolbar .search svg { position: absolute; left: 10px; top: 50%; width: 15px; height: 15px; margin-top: -7.5px; color: var(--muted); }
-.toolbar select { width: auto; margin: 0; }
+.toolbar select, .toolbar input[type=date] { width: auto; margin: 0; }
+.toolbar .who-filter { width: 10em; margin: 0; }
 .toolbar .spacer { flex: 1; }
 .table-wrap { overflow-x: auto; }
 table.data { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }

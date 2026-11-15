@@ -41,6 +41,8 @@ pub struct FakeChar {
     pub name: String,
     pub gm: i64,
     pub online: bool,
+    /// LSB's `original_accid`: the account a deleted character (accid 0) was on.
+    pub original_accid: i64,
 }
 
 /// A character as the public pages see the game database: every field a rule looks at.
@@ -137,6 +139,10 @@ pub struct Data {
     pub items: Vec<ItemDetailRaw>,
     /// Every item search the database was asked for.
     pub item_queries: Vec<ItemQuery>,
+    /// Audit rows by table, newest first; `channel` holds the chat type.
+    pub audit: Vec<(AuditKind, AuditRow)>,
+    /// Every audit search the database was asked for.
+    pub audit_queries: Vec<AuditQuery>,
 }
 
 #[derive(Clone, Debug)]
@@ -157,7 +163,7 @@ impl Fake {
         let hash = auth::hash_password(password, 4).unwrap();
         let mut d = self.0.lock().unwrap();
         d.accounts.push(FakeAccount { id, login: login.into(), hash, status: 1, totp: None, ban: None, trust_tokens: true });
-        d.chars.push(FakeChar { charid: id * 10, accid: id, name: format!("{login}char"), gm, online: false });
+        d.chars.push(FakeChar { charid: id * 10, accid: id, name: format!("{login}char"), gm, online: false, original_accid: 0 });
     }
     pub fn add_person(&self, p: Person) {
         self.0.lock().unwrap().people.push(p);
@@ -180,7 +186,13 @@ impl Fake {
         self.0.lock().unwrap().chars.iter_mut().find(|c| c.charid == charid).unwrap().online = online;
     }
     pub fn add_char(&self, charid: i64, accid: i64, name: &str, gm: i64) {
-        self.0.lock().unwrap().chars.push(FakeChar { charid, accid, name: name.into(), gm, online: false });
+        self.0.lock().unwrap().chars.push(FakeChar { charid, accid, name: name.into(), gm, online: false, original_accid: 0 });
+    }
+    /// Deletes a character the way LSB does: accid 0, the old one kept in `original_accid`.
+    pub fn delete_char(&self, charid: i64) {
+        let mut d = self.0.lock().unwrap();
+        let c = d.chars.iter_mut().find(|c| c.charid == charid).unwrap();
+        c.original_accid = std::mem::replace(&mut c.accid, 0);
     }
     pub fn account(&self, id: i64) -> FakeAccount {
         self.0.lock().unwrap().accounts.iter().find(|a| a.id == id).unwrap().clone()
@@ -207,6 +219,12 @@ impl Fake {
     }
     pub fn add_item(&self, item: ItemDetailRaw) {
         self.0.lock().unwrap().items.push(item);
+    }
+    pub fn add_audit(&self, kind: AuditKind, row: AuditRow) {
+        self.0.lock().unwrap().audit.push((kind, row));
+    }
+    pub fn audit_queries(&self) -> Vec<AuditQuery> {
+        self.0.lock().unwrap().audit_queries.clone()
     }
     pub fn hash_of(&self, id: i64) -> String {
         self.0.lock().unwrap().accounts.iter().find(|a| a.id == id).unwrap().hash.clone()
@@ -628,6 +646,29 @@ impl Game for Fake {
     async fn item(&self, id: i64, level_cap: i64) -> DbResult<Option<ItemDetailRaw>> {
         self.check()?;
         Ok(self.0.lock().unwrap().items.iter().find(|i| i.item.id == id && shown(&i.item, level_cap)).cloned())
+    }
+    async fn audit(&self, q: &AuditQuery) -> DbResult<AuditPage> {
+        self.check()?;
+        let mut d = self.0.lock().unwrap();
+        d.audit_queries.push(q.clone());
+        // What the MariaDB query filters on, minus the text search.
+        let hits: Vec<AuditRow> = d
+            .audit
+            .iter()
+            .filter(|(k, r)| *k == q.kind && r.at >= q.from && r.at < q.to)
+            .map(|(_, r)| r.clone())
+            .filter(|r| q.channel.is_empty() || r.channel.as_deref() == Some(q.channel.as_str()))
+            .filter(|r| q.tells || r.channel.as_deref() != Some("TELL"))
+            .filter(|r| q.names.is_empty() || q.names.iter().any(|n| *n == r.who || Some(n) == r.to.as_ref()))
+            .collect();
+        let start = ((q.page - 1) * q.per) as usize;
+        let more = hits.len() > start + q.per as usize;
+        Ok(AuditPage { items: hits.into_iter().skip(start).take(q.per as usize).collect(), more })
+    }
+    async fn account_char_names(&self, accid: i64) -> DbResult<Vec<String>> {
+        self.check()?;
+        let d = self.0.lock().unwrap();
+        Ok(d.chars.iter().filter(|c| c.accid == accid || (c.accid == 0 && c.original_accid == accid)).map(|c| c.name.clone()).collect())
     }
 }
 

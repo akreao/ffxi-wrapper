@@ -511,8 +511,8 @@ impl Store {
         let rows = sqlx::query(&format!(
             "SELECT {ACTION_COLS} FROM action_log
              WHERE (? IS NULL OR id < ?)
-               AND (? = 0 OR (actor_role IN ('owner', 'moderator', 'system') AND action NOT IN ('sign_in', 'sign_in_failed')))
-               AND (? = 1 OR target_kind IS NULL OR target_kind NOT IN ('news', 'content', 'invite', 'setting'))
+               AND (? = 0 OR (actor_role IN ('owner', 'moderator', 'system') AND action NOT IN ('sign_in', 'sign_in_failed', 'audit_read')))
+               AND (? = 1 OR target_kind IS NULL OR target_kind NOT IN ('news', 'content', 'invite', 'setting', 'audit'))
              ORDER BY id DESC LIMIT ?"
         ))
         .bind(before)
@@ -530,7 +530,7 @@ impl Store {
         let like = format!("%{}%", q.q.replace('|', "||").replace('%', "|%").replace('_', "|_"));
         let wh = "WHERE (? = '' OR target_name LIKE ? ESCAPE '|' OR reason LIKE ? ESCAPE '|' OR actor_login LIKE ? ESCAPE '|')
                     AND (? IS NULL OR actor_login = ?) AND (? IS NULL OR action = ?) AND (? IS NULL OR at >= ?)
-                    AND (? = 1 OR target_kind IS NULL OR target_kind NOT IN ('news', 'content', 'invite', 'setting'))";
+                    AND (? = 1 OR target_kind IS NULL OR target_kind NOT IN ('news', 'content', 'invite', 'setting', 'audit'))";
         let total: i64 = sqlx::query(&format!("SELECT COUNT(*) FROM action_log {wh}"))
             .bind(&q.q).bind(&like).bind(&like).bind(&like)
             .bind(&q.actor).bind(&q.actor).bind(&q.action).bind(&q.action).bind(q.since).bind(q.since).bind(q.owner as i64)
@@ -552,7 +552,7 @@ impl Store {
         let actors = sqlx::query("SELECT DISTINCT actor_login FROM action_log WHERE actor_login IS NOT NULL AND actor_role IN ('owner', 'moderator') ORDER BY actor_login")
             .fetch_all(&self.pool)
             .await?;
-        let actions = sqlx::query("SELECT DISTINCT action FROM action_log WHERE ? = 1 OR target_kind IS NULL OR target_kind NOT IN ('news', 'content', 'invite', 'setting') ORDER BY action").bind(owner as i64).fetch_all(&self.pool).await?;
+        let actions = sqlx::query("SELECT DISTINCT action FROM action_log WHERE ? = 1 OR target_kind IS NULL OR target_kind NOT IN ('news', 'content', 'invite', 'setting', 'audit') ORDER BY action").bind(owner as i64).fetch_all(&self.pool).await?;
         Ok((
             actors.iter().map(|r| r.try_get(0)).collect::<Result<_, _>>()?,
             actions.iter().map(|r| r.try_get(0)).collect::<Result<_, _>>()?,

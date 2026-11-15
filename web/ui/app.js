@@ -191,7 +191,7 @@
     ["Players", [["accounts", "Accounts", "/admin/accounts"], ["characters", "Characters", "/admin/characters"], ["bans", "Bans", "/admin/bans"], ["helpdesk", "Help desk", "/admin/help-desk"]]],
     ["Site", [["news", "News posts", "/admin/news"], ["content", "Site content", "/admin/content"], ["invites", "Invite codes", "/admin/invites"]]],
     ["Economy", [["items", "Items", "/admin/items"], ["auction", "Auction house", null]]],
-    ["Records", [["audit", "Audit logs", null], ["log", "Admin log", "/admin/log"]]],
+    ["Records", [["audit", "Audit logs", "/admin/audit"], ["log", "Admin log", "/admin/log"]]],
   ];
 
   function adminShell() {
@@ -205,7 +205,7 @@
         items.map(([id, label, href]) => href
           ? h("a", { class: "nav-item" + (current === id ? " active" : ""), href, title: label, "aria-current": current === id ? "page" : false }, icon(id), h("span", {}, label))
           : h("a", { class: "nav-item soon", "aria-disabled": "true", title: `${label}: later` }, icon(id), h("span", {}, label), h("em", {}, "Later"))))),
-      h("div", { class: "sidebar-foot" }, "LandSandBoat", h("br"), "Site 0.11.0"));
+      h("div", { class: "sidebar-foot" }, "LandSandBoat", h("br"), "Site 0.12.0"));
     const scrim = h("div", { class: "scrim" });
     const toggle = h("button", { class: "icon-button menu-toggle", "aria-label": "Menu", "aria-controls": "sidebar", "aria-expanded": "false" }, icon("menu"));
     const theme = h("button", { class: "icon-button theme-toggle", "aria-label": "Switch theme", title: "Switch between Light and Dark" });
@@ -361,7 +361,11 @@
 
   pages.rules = async function (main) {
     const d = await api("/public/content/rules");
-    main.append(h("h2", {}, "House rules"), h("section", { class: "card pad" }, prose(d.html)));
+    main.append(h("h2", {}, "House rules"), h("section", { class: "card pad" }, prose(d.html)),
+      // Fixed text, not the owner's: players should know before they speak.
+      h("section", { class: "card pad" }, h("h3", {}, "Logging"),
+        h("p", {}, "This server may log chat (tells included), GM commands, trades, bazaar sales and delivery box sends. " +
+          "Staff read these logs to look into reports and abuse; only the server owner can read tells.")));
   };
 
   // "Online now": the busiest zones, from the same cached list as the online page.
@@ -749,8 +753,8 @@
 
   // ---- the admin panel: players, bans and the log ----
 
-  const ACTION_LABEL = { ban: "Ban", unban: "Unban", gm_level: "GM level", site_role: "Website role", password_reset: "Password reset", totp_reset: "Two-step reset", password_change: "Password change", sign_in: "Sign-in", sign_in_failed: "Sign-in failed", news_create: "News draft", news_edit: "News edit", news_publish: "News published", news_unpublish: "News unpublished", news_pin: "News pinned", news_unpin: "News unpinned", news_delete: "News deleted", content_edit: "Content edit", content_reset: "Content reset", ticket_reply: "Help desk reply", ticket_close: "Help desk close" };
-  const ACTION_TONE = { ban: "bad", unban: "ok", gm_level: "gm", site_role: "info", password_reset: "busy", totp_reset: "busy", password_change: "info", sign_in: "off", sign_in_failed: "busy", news_publish: "ok", news_delete: "bad", news_unpublish: "busy", ticket_reply: "ok", ticket_close: "off" };
+  const ACTION_LABEL = { ban: "Ban", unban: "Unban", gm_level: "GM level", site_role: "Website role", password_reset: "Password reset", totp_reset: "Two-step reset", password_change: "Password change", sign_in: "Sign-in", sign_in_failed: "Sign-in failed", news_create: "News draft", news_edit: "News edit", news_publish: "News published", news_unpublish: "News unpublished", news_pin: "News pinned", news_unpin: "News unpinned", news_delete: "News deleted", content_edit: "Content edit", content_reset: "Content reset", ticket_reply: "Help desk reply", ticket_close: "Help desk close", audit_read: "Audit log search" };
+  const ACTION_TONE = { ban: "bad", unban: "ok", gm_level: "gm", site_role: "info", password_reset: "busy", totp_reset: "busy", password_change: "info", sign_in: "off", sign_in_failed: "busy", news_publish: "ok", news_delete: "bad", news_unpublish: "busy", ticket_reply: "ok", ticket_close: "off", audit_read: "off" };
 
   const pathId = () => location.pathname.split("/").pop();
   const fmtDT = (s) => (s ? new Date(s * 1000).toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "–");
@@ -781,6 +785,7 @@
       case "totp_reset": return { tone: "info", what: `Two-step sign-in removed by ${who}` };
       case "ticket_reply": return { tone: "ok", what: `Help desk ticket #${d.ticket} answered by ${who}` };
       case "ticket_close": return { tone: "off", what: `Help desk ticket #${d.ticket} closed without a reply by ${who}` };
+      case "audit_read": return { tone: "off", what: `${a.target_name || "Audit"} log searched by ${who}, ${fmtDT(d.from)} to ${fmtDT(d.to)}` };
       case "news_create": case "news_edit": case "news_publish": case "news_unpublish": case "news_pin": case "news_unpin": case "news_delete":
         return { tone: "info", what: `${ACTION_LABEL[a.action]}: "${a.target_name || ""}" by ${who}` };
       case "content_edit": case "content_reset":
@@ -888,6 +893,19 @@
       const items = data.items;
       tbody.replaceChildren(...(items.length ? items.map((it) => o.row(it, data, ctx)) : [h("tr", { class: "empty-row" }, h("td", { colspan: String(o.columns.length) }, o.empty || "Nothing found."))]));
       toolbarBox.replaceChildren(...(o.toolbar ? o.toolbar(ctx, data) : []));
+      // Without a total (`more` instead: the audit logs can't be counted cheaply), only
+      // Previous and Next.
+      if (data.total == null) {
+        const from = items.length ? (st.page - 1) * st.per + 1 : 0;
+        pager.replaceChildren(
+          h("span", { class: "count" }, items.length ? `${from}–${from + items.length - 1} ${o.noun}` : ""),
+          h("div", { class: "pages", "aria-label": "Pages" },
+            h("button", { type: "button", "aria-label": "Previous page", disabled: st.page <= 1, onclick: () => { st.page--; load(); } }, "‹"),
+            h("button", { type: "button", "aria-label": "Next page", disabled: !data.more, onclick: () => { st.page++; load(); } }, "›")),
+          h("label", {}, "Rows ", h("select", { onchange: (e) => ctx.set("per", Number(e.target.value)) },
+            [25, 50, 100].map((n) => h("option", { value: n, selected: n === st.per }, String(n))))));
+        return;
+      }
       const pages = Math.max(1, Math.ceil(data.total / st.per));
       const from = data.total ? (st.page - 1) * st.per + 1 : 0, to = Math.min(data.total, st.page * st.per);
       pager.replaceChildren(
@@ -1064,6 +1082,7 @@
       const actions = [];
       if (d.can_act && owner) actions.push(h("button", { type: "button", onclick: () => passwordDialog(a, draw) }, icon("key"), "Reset password"));
       if (d.can_act && owner && a.has_totp) actions.push(h("button", { type: "button", onclick: () => totpDialog(a, draw) }, "Remove two-step"));
+      actions.push(h("button", { type: "button", onclick: () => { location.href = `/admin/audit?account=${a.id}`; } }, icon("audit"), "Audit logs"));
       if (d.can_act) actions.push(banned
         ? h("button", { class: "primary", type: "button", onclick: () => unbanDialog(a.login, a.id, draw) }, "Unban")
         : h("button", { class: "danger", type: "button", onclick: () => banDialog(a, draw) }, icon("bans"), "Ban account"));
@@ -1342,6 +1361,71 @@
     });
     void facetsDone;
     main.append(view.el);
+    await view.load();
+  };
+
+  // ---- audit logs: LSB's own records of chat, GM commands and item moves ----
+
+  const AUDIT_KINDS = [["chat", "Chat"], ["gm", "GM commands"], ["trade", "Trades"], ["bazaar", "Bazaar sales"], ["dbox", "Delivery box"]];
+  const CHANNEL_LABEL = { SAY: "Say", SHOUT: "Shout", YELL: "Yell", TELL: "Tell", PARTY: "Party", LINKSHELL: "Linkshell", UNITY: "Unity", ASSISTE: "Assist (E)", ASSISTJ: "Assist (J)", BALLISTA: "Ballista" };
+  // "~" marks a column phones leave out.
+  const AUDIT_COLUMNS = {
+    chat: ["When", "Channel", "Who", "~To", "~Zone", "Message"],
+    gm: ["When", "GM", "Command", "Command line"],
+    trade: ["When", "From", "To", "Item", "Quantity"],
+    bazaar: ["When", "Seller", "Buyer", "Item", "Quantity", "Price"],
+    dbox: ["When", "From", "To", "Item", "Quantity"],
+  };
+  // A local calendar day <-> Unix seconds at its start.
+  const dayStart = (iso) => { const [y, m, d] = iso.split("-").map(Number); return Math.floor(new Date(y, m - 1, d).getTime() / 1000); };
+  const isoDay = (sec) => { const t = new Date(sec * 1000); return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`; };
+
+  pages.audit = async function (main) {
+    const charLink = (name) => name ? h("a", { href: `/admin/characters?q=${encodeURIComponent(name)}` }, name) : h("span", { class: "muted" }, "–");
+    const itemName = (r) => r.item ? r.item.replace(/_/g, " ") : `Item ${r.item_id}`;
+    const num = (n) => n == null ? "" : Number(n).toLocaleString();
+    const view = tableView({
+      endpoint: "/admin/audit",
+      defaults: { kind: "chat", channel: "", who: "", account: "", q: "", from: "", to: "", page: 1, per: 25 },
+      search: "Text in the message, command or item name",
+      noun: "rows",
+      empty: "Nothing logged matches. LSB only logs what the desktop app's Game settings switch on (Chat and moderation).",
+      get columns() { return AUDIT_COLUMNS[view.ctx.st.kind].map((l) => l[0] === "~" ? { label: l.slice(1), cls: "hide-phone" } : { label: l }); },
+      toolbar: (ctx, d) => {
+        const st = ctx.st;
+        const sel = (label, key, opts) => h("select", { "aria-label": label, onchange: (e) => { if (key === "kind") st.channel = ""; ctx.set(key, e.target.value); } },
+          opts.map(([v, t]) => h("option", { value: v, selected: v === String(st[key]) }, t)));
+        const date = (label, key, shift) => h("input", { type: "date", "aria-label": label, title: label,
+          min: isoDay(d.oldest), value: st[key] ? isoDay(Number(st[key]) - shift) : "",
+          onchange: (e) => ctx.set(key, e.target.value ? String(dayStart(e.target.value) + shift) : "") });
+        let t;
+        const who = h("input", { class: "who-filter", type: "search", placeholder: "Character", "aria-label": "Character name", value: st.who, maxlength: "15", autocomplete: "off",
+          oninput: (e) => { clearTimeout(t); t = setTimeout(() => ctx.set("who", e.target.value.trim()), 400); } });
+        return [
+          sel("Log", "kind", AUDIT_KINDS),
+          st.kind === "chat" ? sel("Channel", "channel", [["", "Any channel"], ...d.channels.map((c) => [c, CHANNEL_LABEL[c] || c])]) : null,
+          who,
+          st.account ? h("button", { type: "button", title: "Show every account", onclick: () => ctx.set("account", "") }, `Account ${st.account} ✕`) : null,
+          // `to` is kept as the start of the day after the one picked.
+          date("From", "from", 0), date("To", "to", 86400),
+        ].filter(Boolean);
+      },
+      row: (r, d, ctx) => {
+        const st = ctx.st;
+        const at = h("td", {}, new Date(r.at * 1000).toLocaleString());
+        if (st.kind === "chat") return h("tr", {}, at,
+          h("td", {}, h("span", { class: "badge " + (r.channel === "TELL" ? "busy" : "info") }, CHANNEL_LABEL[r.channel] || r.channel || "")),
+          h("td", {}, charLink(r.who)), h("td", { class: "hide-phone" }, r.channel === "LINKSHELL" ? (r.linkshell || "") : charLink(r.to)),
+          h("td", { class: "hide-phone" }, zoneLabel(r.zone)), h("td", { class: "wrap" }, r.text || ""));
+        if (st.kind === "gm") return h("tr", {}, at, h("td", {}, charLink(r.who)), h("td", {}, r.channel || ""), h("td", { class: "wrap" }, r.text || ""));
+        // LSB logs trades with NPCs (quests, shops) as trades too.
+        const to = r.to_npc ? h("span", {}, r.to || "", " ", h("span", { class: "badge off plain" }, "NPC")) : charLink(r.to);
+        return h("tr", {}, at, h("td", {}, charLink(r.who)), h("td", {}, to), h("td", {}, itemName(r)), h("td", {}, num(r.quantity)),
+          st.kind === "bazaar" ? h("td", {}, num(r.price)) : null);
+      },
+    });
+    main.append(view.el, h("p", { class: "muted" },
+      "LSB keeps these logs in the game database and never deletes them; the site shows the last 90 days. Tells are shown to the owner only."));
     await view.load();
   };
 
