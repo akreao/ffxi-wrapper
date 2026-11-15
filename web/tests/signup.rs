@@ -86,6 +86,32 @@ async fn closed_until_the_owner_opens_it() {
     assert_eq!((d["open"].clone(), d["invite_required"].clone()), (json!(false), json!(false)));
 }
 
+/// A sign-up waiting for the hash while the owner closes sign-up (or starts asking for codes)
+/// makes no account, and gets back what it took.
+#[tokio::test]
+async fn closing_stops_sign_ups_already_waiting() {
+    for (switch, value, with_code) in [("signup_open", "0", true), ("signup_needs_invite", "1", false)] {
+        let (s, owner) = open_site().await;
+        let code = if with_code { new_invite(&s, &owner, 1).await } else { String::new() };
+        if !with_code {
+            s.state.store.set_setting("signup_needs_invite", "0", "test", 0).await.unwrap();
+        }
+        let held = s.state.bcrypt_slots.acquire_many(4).await.unwrap();
+        let close = async {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            s.state.store.set_setting(switch, value, "test", 0).await.unwrap();
+            drop(held);
+        };
+        let (r, _) = tokio::join!(s.send(signup("wren", "correct-horse", &code)), close);
+        assert_eq!(r.status, StatusCode::FORBIDDEN, "{switch}: {}", r.text());
+        assert_eq!(r.json()["closed"], json!(true));
+        assert_eq!(account_named(&s, "wren").map(|a| a.id), None, "{switch}");
+        if with_code {
+            assert_eq!(uses_of(&s, &owner).await, vec![(0, "active".to_string())], "the use is given back");
+        }
+    }
+}
+
 #[tokio::test]
 async fn a_setting_other_than_on_is_closed() {
     let s = site_for(false).await;

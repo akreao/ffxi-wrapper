@@ -111,6 +111,16 @@ async fn hash_for_signup(state: &Shared, password: &str) -> ApiResult<String> {
 /// No account came of this sign-up: the day's count and any invite use are given back.
 async fn give_back(state: &Shared, invite_id: Option<i64>) {
     state.limiter.signup_not_created();
+    return_invite(state, invite_id).await;
+}
+
+/// Nothing at all came of this sign-up: every count it took (once each) and any invite use.
+async fn undo(state: &Shared, ip: &str, invite_id: Option<i64>) {
+    state.limiter.signup_undo(ip);
+    return_invite(state, invite_id).await;
+}
+
+async fn return_invite(state: &Shared, invite_id: Option<i64>) {
     if let Some(id) = invite_id {
         if let Err(e) = state.store.invite_return(id).await {
             tracing::warn!("couldn't give an invite use back: {e}");
@@ -149,11 +159,20 @@ async fn finish(state: Shared, ip: String, login: String, password: String, invi
     let hash = match hash_for_signup(&state, &password).await {
         Ok(h) => h,
         Err(e) => {
-            give_back(&state, invite_id).await;
-            state.limiter.signup_undo(&ip);
+            undo(&state, &ip, invite_id).await;
             return Err(e);
         }
     };
+    // The switches may have changed during the hash: look again, so closing sign-up (or
+    // starting to ask for codes) also stops the sign-ups already waiting. Unreadable = closed.
+    let invite_now = match invite_id {
+        Some(_) => Ok(false),
+        None => state.store.invite_required().await,
+    };
+    if !state.signup_open().await || !matches!(invite_now, Ok(false)) {
+        undo(&state, &ip, invite_id).await;
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "Sign-up is closed on this server.").with(json!({ "closed": true })));
+    }
     let accid = match state.game.create_account(&login, &hash).await {
         Ok(crate::model::Created::Account(id)) => id,
         Ok(crate::model::Created::Taken) => {
