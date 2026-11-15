@@ -223,6 +223,12 @@
 
   <!-- Play with friends: players on other networks, over Tailscale -->
   <main id="friends-page" class="page" hidden>
+    <nav class="subtabs" aria-label="Play with friends sections">
+      <button type="button" class="subtab active" data-panel="panel-friends-ts">Tailscale</button>
+      <button type="button" class="subtab" data-panel="panel-friends-wan">Port forwarding</button>
+    </nav>
+
+    <div id="panel-friends-ts" class="panel">
     <p class="hint">Players on other networks can join over <a href="#" data-tailscale="download">Tailscale</a>, a free private network. It carries the server's ports, including the game's UDP port, as they are, so nothing has to be opened on your router. You and each player install Tailscale, and you share this computer with them.</p>
 
     <section class="card group">
@@ -280,6 +286,9 @@
       </div>
     </section>
 
+    </div>
+
+    <div id="panel-friends-wan" class="panel" hidden>
     <section class="card group">
       <h2>Without Tailscale: port forwarding</h2>
       <p class="hint">Players can also connect over the internet to your network's public (WAN) address. Nothing needs installing, but your router has to forward the server's ports to this computer, and anyone on the internet can then reach them.</p>
@@ -307,6 +316,7 @@
       <p id="wan-bind-warning" class="notice" hidden></p>
       <p id="wan-error" class="error" hidden></p>
     </section>
+    </div>
   </main>
 
   <!-- Game masters -->
