@@ -266,13 +266,9 @@ details.help-row:not([open]) { gap: 0; }
 .group > .card-head { padding: 12px 18px 4px; margin: 0; align-items: center; }
 .group > .card-head + .setting { border-top: 0; }
 
-#gm-accounts { list-style: none; margin: 0; padding: 0; }
-#gm-accounts > li { padding: 10px 0; border-top: 1px solid var(--border); }
-#gm-accounts > li:first-child { border-top: 0; }
-#gm-accounts .when { font-weight: 500; margin-bottom: 4px; }
-#gm-accounts .what { font-size: 12px; }
-.gm-char { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 0 4px 12px; }
-.gm-char select { min-width: 160px; }
+#gm-list { list-style: none; margin: 0; padding: 0; }
+.gm-char { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid var(--border); }
+.gm-char:first-child { border-top: 0; }
 
 @media (max-width: 1100px) {
   .editor { grid-template-columns: 190px minmax(0, 1fr); }

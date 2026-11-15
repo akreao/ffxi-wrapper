@@ -97,6 +97,10 @@ async fn character_lists_and_details_work_for_any_account() {
     assert_eq!(online["total"], 1);
     assert_eq!(online["items"][0]["name"], "kaelynchar");
     assert_eq!(online["items"][0]["login"], "kaelyn");
+    let gms = s.send(get(&m, "/api/admin/characters?gm=1")).await.json();
+    let names: Vec<&str> = gms["items"].as_array().unwrap().iter().map(|c| c["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["halvardchar", "moirachar", "ownerbchar", "stevenchar"]);
+    assert_eq!(gms["items"][0]["gm"], 3);
     let d = s.send(get(&m, "/api/admin/characters/20")).await.json();
     assert_eq!(d["character"]["name"], "ravennachar");
     assert_eq!(d["character"]["gil"], 1234);

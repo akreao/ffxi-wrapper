@@ -207,6 +207,8 @@ pub enum CharSort {
 pub struct CharQuery {
     pub q: String,
     pub online: bool,
+    /// Only characters with a GM level above 0.
+    pub gm: bool,
     pub sort: CharSort,
     pub desc: bool,
     pub page: i64,

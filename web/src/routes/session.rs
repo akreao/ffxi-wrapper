@@ -236,6 +236,19 @@ async fn whoami(State(state): State<Shared>, Viewer(id): Viewer) -> ApiResult<Js
 #[derive(Deserialize)]
 struct OwnerQuery {
     t: Option<String>,
+    /// Where to land after signing in: an admin panel path, such as
+    /// `/admin/characters?gm=1`. Anything else lands on `/admin`.
+    next: Option<String>,
+}
+
+/// `next` when it is a path inside the admin panel and nothing more: no
+/// scheme or host, no `//`, `..` or `\`, and only plain URL characters, so the
+/// redirect can't leave the site or break the header.
+fn admin_next(next: Option<&str>) -> &str {
+    let Some(n) = next else { return "/admin" };
+    let in_panel = n == "/admin" || ["/admin/", "/admin?", "/admin#"].iter().any(|p| n.starts_with(p));
+    let plain = n.bytes().all(|b| b.is_ascii_alphanumeric() || b"/?=&-_.%#".contains(&b));
+    if in_panel && plain && !n.contains("//") && !n.contains("..") && n.len() <= 200 { n } else { "/admin" }
 }
 
 fn owner_page(status: StatusCode, message: &str) -> Response {
@@ -276,10 +289,30 @@ async fn owner_link(State(state): State<Shared>, ClientIp(ip): ClientIp, headers
         Err(e) => return ApiError::from(e).into_response(),
     };
     record(&state, NewAction { actor_kind: "owner", actor_role: "owner", ip: Some(ip), action: "sign_in", result: "ok", ..Default::default() }).await;
-    let mut res = Redirect::to("/admin").into_response();
+    let mut res = Redirect::to(admin_next(q.next.as_deref())).into_response();
     res.headers_mut().insert(
         header::SET_COOKIE,
         axum::http::HeaderValue::from_str(&format!("{COOKIE}={cookie}; HttpOnly; SameSite=Strict; Path=/")).unwrap(),
     );
     res
+}
+
+#[cfg(test)]
+mod tests {
+    use super::admin_next;
+
+    #[test]
+    fn next_stays_inside_the_admin_panel() {
+        assert_eq!(admin_next(None), "/admin");
+        for ok in ["/admin", "/admin/characters?gm=1", "/admin/accounts/12", "/admin?x=1"] {
+            assert_eq!(admin_next(Some(ok)), ok);
+        }
+        for bad in [
+            "", "/", "/me", "/adminx", "//evil.example", "/admin//evil", "https://evil.example/admin",
+            "/admin/\\evil", "/admin/x\r\nSet-Cookie: a=b", "/admin/ x", "admin", "/admin/@evil", "/admin/../me",
+        ] {
+            assert_eq!(admin_next(Some(bad)), "/admin", "{bad:?}");
+        }
+        assert_eq!(admin_next(Some(&format!("/admin/{}", "a".repeat(300)))), "/admin");
+    }
 }

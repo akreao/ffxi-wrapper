@@ -402,6 +402,18 @@ async fn the_owner_link_signs_the_owner_in_once_and_redirects_to_admin() {
 }
 
 #[tokio::test]
+async fn the_owner_link_lands_on_next_only_inside_the_admin_panel() {
+    let s = site().await;
+    let r = s.send(Req::get(&format!("/auth/owner?t={}&next=%2Fadmin%2Fcharacters%3Fgm%3D1", link(NOW)))).await;
+    assert_eq!(r.status, StatusCode::SEE_OTHER);
+    assert_eq!(r.header("location").as_deref(), Some("/admin/characters?gm=1"));
+    for bad in ["%2F%2Fevil.example", "https%3A%2F%2Fevil.example%2Fadmin", "%2Fme", "%2Fadmin%2F%2Fevil.example"] {
+        let r = s.send(Req::get(&format!("/auth/owner?t={}&next={bad}", link(NOW)))).await;
+        assert_eq!(r.header("location").as_deref(), Some("/admin"), "{bad}");
+    }
+}
+
+#[tokio::test]
 async fn expired_tampered_and_missing_links_are_refused() {
     let s = site().await;
     let old = link(NOW - 120);

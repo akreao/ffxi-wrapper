@@ -178,3 +178,14 @@ async fn the_auction_house_lists_shown_items_and_their_sides() {
     let stacks = db.auction_side(4096, true, 50, 20).await.unwrap();
     assert_eq!((stacks.listed, stacks.listings.len(), stacks.sales.len()), (1, 1, 0));
 }
+
+#[tokio::test]
+#[ignore = "needs the fixture database, see the file header"]
+async fn the_gm_filter_lists_only_characters_with_a_gm_level() {
+    let q = CharQuery { q: String::new(), online: false, gm: true, sort: CharSort::Name, desc: false, page: 1, per: 25 };
+    let list = db().admin_characters(&q).await.unwrap();
+    let who: Vec<&str> = list.items.iter().map(|c| c.summary.name.as_str()).collect();
+    assert_eq!(who, ["Ghost", "Halvard"]);
+    assert_eq!(list.total, 2);
+    assert_eq!(list.items[1].gm, 3);
+}

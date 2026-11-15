@@ -759,59 +759,54 @@ for (const button of document.querySelectorAll("[data-copy]")) {
 
 // ---------- game masters ----------
 
-const GM_LEVELS = ["Not a GM", "1", "2", "3", "4", "5 (all commands)"];
+// Read-only: GM levels are changed on the website, which checks and logs each change.
+let gmWebsiteOn = true;
 
 async function refreshGameMasters() {
   if (!configured()) return;
-  const list = $("gm-accounts");
-  let accounts;
+  const list = $("gm-list");
+  // The button needs the website on; the list needs the database.
+  invoke("website")
+    .then((w) => {
+      gmWebsiteOn = w.enabled;
+      $("gm-manage").textContent = w.enabled ? "Manage on the website" : "Website settings";
+      show($("gm-web-off"), !w.enabled);
+    })
+    .catch(() => {});
+  let gms;
   try {
-    accounts = await invoke("game_masters");
+    gms = await invoke("game_masters");
   } catch (e) {
     list.replaceChildren();
     $("gm-state").textContent = message(e);
     return;
   }
-  list.replaceChildren();
-  for (const account of accounts) {
-    const li = document.createElement("li");
-    const head = document.createElement("div");
-    head.className = "when";
-    head.textContent = account.login;
-    li.append(head);
-    if (!account.characters.length) {
-      const none = document.createElement("div");
-      none.className = "what muted";
-      none.textContent = "No characters yet.";
-      li.append(none);
-    }
-    for (const c of account.characters) {
-      const row = document.createElement("label");
-      row.className = "gm-char";
-      const name = document.createElement("span");
-      name.textContent = c.name;
-      const pick = document.createElement("select");
-      GM_LEVELS.forEach((label, level) => pick.add(new Option(label, level, false, level === c.gm_level)));
-      pick.onchange = async () => {
-        pick.disabled = true;
-        try {
-          await invoke("set_gm_level", { character: c.id, level: Number(pick.value) });
-          c.gm_level = Number(pick.value);
-        } catch (e) {
-          pick.value = c.gm_level;
-          alert(message(e));
-        }
-        pick.disabled = false;
-      };
-      row.append(name, pick);
-      li.append(row);
-    }
-    list.append(li);
-  }
-  $("gm-state").textContent = accounts.length ? "" : "No accounts yet. They show here once someone creates one in the game client.";
+  list.replaceChildren(
+    ...gms.characters.map((c) => {
+      const li = document.createElement("li");
+      li.className = "gm-char";
+      const who = document.createElement("span");
+      who.textContent = `${c.name} (account ${c.login})`;
+      const level = document.createElement("span");
+      level.textContent = `GM ${c.gm_level}`;
+      li.append(who, level);
+      return li;
+    }),
+  );
+  $("gm-state").textContent = !gms.characters.length
+    ? "No characters have a GM level yet."
+    : gms.more
+      ? `The ${gms.characters.length} highest levels; the website lists them all.`
+      : "";
 }
 
 $("gm-refresh").onclick = () => refreshGameMasters();
+$("gm-manage").onclick = () =>
+  gmWebsiteOn ? invoke("open_admin_panel", { gameMasters: true }).catch((e) => alert(message(e))) : showPage("web");
+$("gm-web-settings").onclick = (e) => {
+  e.preventDefault();
+  showPage("web");
+};
 
 // ---------- auction house bot ----------
 

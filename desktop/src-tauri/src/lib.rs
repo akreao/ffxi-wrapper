@@ -673,16 +673,10 @@ async fn backups(handle: AppHandle) -> Result<Backups, String> {
     .await?
 }
 
-/// Every account and its characters, with their GM levels.
+/// The characters with a GM level (the first [`gm::SHOWN`]); levels are changed on the website.
 #[tauri::command]
-async fn game_masters(handle: AppHandle) -> Result<Vec<gm::Account>, String> {
-    off_main(handle, |_, app| gm::accounts(&app.dir()?)).await?
-}
-
-/// Sets a character's GM level; LSB reads it when the character next logs in or zones.
-#[tauri::command]
-async fn set_gm_level(handle: AppHandle, character: u32, level: u8) -> Result<(), String> {
-    off_main(handle, move |_, app| gm::set_level(&app.dir()?, character, level)).await?
+async fn game_masters(handle: AppHandle) -> Result<gm::GameMasters, String> {
+    off_main(handle, |_, app| gm::list(&app.dir()?)).await?
 }
 
 /// The auction house bot's settings, from `.env`.
@@ -747,10 +741,11 @@ async fn set_website(handle: AppHandle, values: web::Choice) -> Result<bool, Str
 }
 
 /// Opens the website's admin panel in the default browser, signed in as the
-/// owner with a one-minute link.
+/// owner with a one-minute link; with `game_masters`, at the character list
+/// filtered to game masters.
 #[tauri::command]
-async fn open_admin_panel(handle: AppHandle) -> Result<(), String> {
-    off_main(handle, |_, app| {
+async fn open_admin_panel(handle: AppHandle, game_masters: Option<bool>) -> Result<(), String> {
+    off_main(handle, move |_, app| {
         let env = app.env().ok_or("Finish setup first.")?;
         let status = stack::status(&app.dir()?)?;
         let Some(site) = status.iter().find(|s| s.service == web::SERVICE && s.state == "running") else {
@@ -764,7 +759,7 @@ async fn open_admin_panel(handle: AppHandle) -> Result<(), String> {
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|e| e.to_string())?
             .as_secs();
-        host::open(std::ffi::OsStr::new(&web::owner_url(&env, now)?))
+        host::open(std::ffi::OsStr::new(&web::owner_url(&env, now, game_masters.unwrap_or(false).then_some(web::GAME_MASTERS_PAGE))?))
     })
     .await?
 }
@@ -873,7 +868,6 @@ pub fn run() {
             backups,
             open_backups,
             game_masters,
-            set_gm_level,
             ahbot_settings,
             set_ahbot_settings,
             open_ahbot_dir,

@@ -185,6 +185,8 @@ async fn accounts(State(state): State<Shared>, Staff(_): Staff, Query(p): Query<
 struct CharParams {
     q: Option<String>,
     online: Option<String>,
+    /// `1`: game masters only (GM level above 0).
+    gm: Option<String>,
     /// name | account | playtime | last_logout
     sort: Option<String>,
     dir: Option<String>,
@@ -197,6 +199,7 @@ async fn characters(State(state): State<Shared>, Staff(_): Staff, Query(p): Quer
     let query = CharQuery {
         q: search(&p.q),
         online: matches!(p.online.as_deref(), Some("1" | "true")),
+        gm: matches!(p.gm.as_deref(), Some("1" | "true")),
         sort: match p.sort.as_deref() {
             Some("account") => CharSort::Account,
             Some("playtime") => CharSort::Playtime,
