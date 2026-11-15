@@ -269,7 +269,7 @@ services:
   # and 443, gets and renews a certificate for WEB_DOMAIN from Let's Encrypt, sends
   # plain-HTTP visitors to HTTPS and passes everything on to `web`. Off unless .env's
   # COMPOSE_PROFILES includes public (with web). Needs WEB_DOMAIN to point at this
-  # computer and the router to forward TCP 80 and 443 to it; see the README. Its
+  # computer and the router to forward TCP 80 and 443 to it; see docs/website.md. Its
   # certificates and account key are in DATA_DIR/caddy: keep them private.
   proxy:
     image: caddy:2.11
