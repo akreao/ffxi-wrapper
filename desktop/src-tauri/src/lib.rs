@@ -413,6 +413,7 @@ fn start_task(handle: &AppHandle, app: &App, kind: String, file: Option<String>)
     }
     let ahbot_on = app.env().is_some_and(|env| ahbot::load(&env).enabled);
     let web_on = app.env().is_some_and(|env| web::load(&env).enabled);
+    let web_services = app.env().map(|env| web::services(&env)).unwrap_or_default();
     let mut slot = app.task.lock().unwrap();
     if let Some(running) = slot.as_ref() {
         return Err(format!("Wait for the current {} to finish.", running.kind));
@@ -432,7 +433,8 @@ fn start_task(handle: &AppHandle, app: &App, kind: String, file: Option<String>)
             vec![Step::Address, Step::Run(cmd)]
         }
         "stop" => {
-            cmd.arg("down");
+            // Every profile, so a proxy or bot whose profile was since taken out goes too.
+            cmd.args(["--profile", "*", "down"]);
             vec![Step::DailyBackup, Step::Run(cmd)]
         }
         "backup" => vec![Step::Backup],
@@ -459,10 +461,11 @@ fn start_task(handle: &AppHandle, app: &App, kind: String, file: Option<String>)
                 // the game servers aren't recreated.
                 let mut init = stack::compose(&dir);
                 init.args(["--progress", "plain", "up", "--detach", "--no-deps", "--force-recreate", "db-init"]);
-                cmd.args(["up", "--detach", "--no-deps", "--force-recreate", web::SERVICE]);
+                cmd.args(["up", "--detach", "--no-deps", "--force-recreate"]).args(web_services);
                 vec![Step::Ports, Step::Run(init), Step::Run(cmd)]
             } else {
-                cmd.args(["rm", "--stop", "--force", web::SERVICE]);
+                // Turning the site off took the proxy's and DNS updater's profiles out too.
+                cmd.args(["rm", "--stop", "--force", web::SERVICE, "proxy", "ddns"]);
                 vec![Step::Run(cmd)]
             }
         }
@@ -749,11 +752,13 @@ async fn set_website(handle: AppHandle, values: web::Choice) -> Result<bool, Str
 async fn open_admin_panel(handle: AppHandle) -> Result<(), String> {
     off_main(handle, |_, app| {
         let env = app.env().ok_or("Finish setup first.")?;
-        let up = stack::status(&app.dir()?)?
-            .iter()
-            .any(|s| s.service == web::SERVICE && s.state == "running");
-        if !up {
+        let status = stack::status(&app.dir()?)?;
+        let Some(site) = status.iter().find(|s| s.service == web::SERVICE && s.state == "running") else {
             return Err("The website isn't running. Start the server, or restart the website, first.".into());
+        };
+        // A site started by an older app version has no 127.0.0.1 port yet.
+        if !site.ports.contains(&web::local_port(&env).to_string()) {
+            return Err("Restart the website first, so the owner link can open it on this computer.".into());
         }
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -815,6 +820,9 @@ pub fn run() {
                             // service, so an install from before it gets one now.
                             if let Err(e) = envfile::edit(&env, web::ensure_db_password) {
                                 eprintln!("Couldn't add WEB_DB_PASSWORD to {}: {e}", env.display());
+                            }
+                            if let Err(e) = envfile::edit(&env, web::fix_ports) {
+                                eprintln!("Couldn't clear a bad website port in {}: {e}", env.display());
                             }
                         }
                     }
