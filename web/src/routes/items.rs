@@ -45,7 +45,7 @@ static MOD_NAMES: LazyLock<HashMap<i64, &'static str>> = LazyLock::new(|| {
 });
 
 #[derive(Deserialize)]
-struct ItemParams {
+pub(crate) struct ItemParams {
     q: Option<String>,
     /// Auction house category, 1-65.
     category: Option<i64>,
@@ -60,7 +60,7 @@ struct ItemParams {
 }
 
 #[derive(Serialize)]
-struct ItemOut {
+pub(crate) struct ItemOut {
     id: i64,
     name: String,
     category: Option<i64>,
@@ -74,7 +74,7 @@ struct ItemOut {
     slots: i64,
 }
 
-fn item_out(i: &ItemRaw) -> ItemOut {
+pub(crate) fn item_out(i: &ItemRaw) -> ItemOut {
     ItemOut {
         id: i.id,
         name: display_name(&i.name),
@@ -110,12 +110,12 @@ pub fn fold_search(q: Option<&str>) -> String {
 }
 
 /// Static data, but only for signed-in viewers: no shared cache may keep it.
-fn private<T: IntoResponse>(body: T) -> impl IntoResponse {
+pub(crate) fn private<T: IntoResponse>(body: T) -> impl IntoResponse {
     ([(header::CACHE_CONTROL, "private, no-store")], body)
 }
 
 /// One read counted against the viewer's account (or their owner-link session).
-fn throttle(state: &Shared, id: &Identity) -> ApiResult<()> {
+pub(crate) fn throttle(state: &Shared, id: &Identity) -> ApiResult<()> {
     if state.limiter.item_read_allowed(&id.rate_key(), state.now()) {
         Ok(())
     } else {
@@ -125,6 +125,15 @@ fn throttle(state: &Shared, id: &Identity) -> ApiResult<()> {
 
 async fn list(State(state): State<Shared>, Signed(id): Signed, Query(p): Query<ItemParams>) -> ApiResult<impl IntoResponse> {
     throttle(&state, &id)?;
+    let query = item_query(&state, p).await?;
+    let found = state.game.items(&query).await?;
+    let items: Vec<ItemOut> = found.items.iter().map(item_out).collect();
+    Ok(private(Json(json!({ "items": items, "total": found.total, "page": query.page, "per": query.per }))))
+}
+
+/// The search filters checked and bounded, with the server's level cap: shared with the
+/// auction house list, so both leave out the same items.
+pub(crate) async fn item_query(state: &Shared, p: ItemParams) -> ApiResult<ItemQuery> {
     let bad = || ApiError::bad_request("That filter isn't one of the choices.");
     let job_bit = match p.job.as_deref().filter(|j| !j.is_empty()) {
         None => 0,
@@ -144,10 +153,7 @@ async fn list(State(state): State<Shared>, Signed(id): Signed, Query(p): Query<I
     let page = p.page.unwrap_or(1).clamp(1, PAGE_MAX);
     let per = p.per.unwrap_or(PER_DEFAULT).clamp(10, PER_MAX);
     let level_cap = crate::lsb_settings::max_level_async(state.cfg.lsb_settings.clone()).await;
-    let query = ItemQuery { q: fold_search(p.q.as_deref()), category, job_bit, slot_bit, min_level: level(p.min), max_level: level(p.max), level_cap, page, per };
-    let found = state.game.items(&query).await?;
-    let items: Vec<ItemOut> = found.items.iter().map(item_out).collect();
-    Ok(private(Json(json!({ "items": items, "total": found.total, "page": page, "per": per }))))
+    Ok(ItemQuery { q: fold_search(p.q.as_deref()), category, job_bit, slot_bit, min_level: level(p.min), max_level: level(p.max), level_cap, page, per })
 }
 
 #[derive(Serialize)]

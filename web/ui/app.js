@@ -191,7 +191,7 @@
     ["Server", [["dashboard", "Dashboard", "/admin"], ["settings", "Settings", null]]],
     ["Players", [["accounts", "Accounts", "/admin/accounts"], ["characters", "Characters", "/admin/characters"], ["bans", "Bans", "/admin/bans"], ["helpdesk", "Help desk", "/admin/help-desk"]]],
     ["Site", [["news", "News posts", "/admin/news"], ["content", "Site content", "/admin/content"], ["invites", "Invite codes", "/admin/invites"]]],
-    ["Economy", [["items", "Items", "/admin/items"], ["auction", "Auction house", null]]],
+    ["Economy", [["items", "Items", "/admin/items"], ["auction", "Auction house", "/admin/auction"]]],
     ["Records", [["audit", "Audit logs", "/admin/audit"], ["log", "Admin log", "/admin/log"]]],
   ];
 
@@ -206,7 +206,7 @@
         items.map(([id, label, href]) => href
           ? h("a", { class: "nav-item" + (current === id ? " active" : ""), href, title: label, "aria-current": current === id ? "page" : false }, icon(id), h("span", {}, label))
           : h("a", { class: "nav-item soon", "aria-disabled": "true", title: `${label}: later` }, icon(id), h("span", {}, label), h("em", {}, "Later"))))),
-      h("div", { class: "sidebar-foot" }, "LandSandBoat", h("br"), "Site 0.13.0"));
+      h("div", { class: "sidebar-foot" }, "LandSandBoat", h("br"), "Site 0.14.0"));
     const scrim = h("div", { class: "scrim" });
     const toggle = h("button", { class: "icon-button menu-toggle", "aria-label": "Menu", "aria-controls": "sidebar", "aria-expanded": "false" }, icon("menu"));
     const theme = h("button", { class: "icon-button theme-toggle", "aria-label": "Switch theme", title: "Switch between Light and Dark" });
@@ -225,7 +225,7 @@
   // The public pages and My account: a top bar.
   function siteShell() {
     const links = [["home", "Home", "/"], ["news", "News", "/news"], ["online", "Who's online", "/online"], ["rankings", "Rankings", "/rankings"], ["rules", "Rules", "/rules"]];
-    if (me.accid) links.push(["items", "Items", "/items"], ["me", "My account", "/me"]);
+    if (me.accid) links.push(["items", "Items", "/items"], ["auction", "Auction house", "/auction"], ["me", "My account", "/me"]);
     const active = page === "me-character" ? "me" : page === "post" ? "news" : page;
     const toggle = h("button", { class: "icon-button menu-toggle", "aria-label": "Menu", "aria-controls": "site-nav", "aria-expanded": "false" }, icon("menu"));
     const theme = h("button", { class: "icon-button theme-toggle", "aria-label": "Switch theme", title: "Switch between Light and Dark" });
@@ -1808,25 +1808,31 @@
     find.focus();
   }
 
-  pages.items = async function (main) {
+  // The item search's filters, shared by the item database and the auction house.
+  const ITEM_FILTER_DEFAULTS = { q: "", category: 0, job: "", slot: "", min: 0, max: 0, page: 1, per: 25 };
+  function itemFilters(ctx) {
     const pick = (label, value, options, onchange) => h("select", { "aria-label": label, onchange: (e) => onchange(e.target.value) },
       options.map((o) => (Array.isArray(o[1])
         ? h("optgroup", { label: o[0] }, o[1].map(([v, t]) => h("option", { value: v, selected: String(v) === String(value) }, t)))
         : h("option", { value: o[0], selected: String(o[0]) === String(value) }, o[1]))));
-    const lvl = (label, key, ctx) => h("input", { type: "number", min: "1", max: "99", inputmode: "numeric", placeholder: label, "aria-label": label, class: "level-input",
+    const lvl = (label, key) => h("input", { type: "number", min: "1", max: "99", inputmode: "numeric", placeholder: label, "aria-label": label, class: "level-input",
       value: ctx.st[key] || "", onchange: (e) => ctx.set(key, Math.min(99, Math.max(0, parseInt(e.target.value, 10) || 0))) });
+    return [
+      pick("Category", ctx.st.category, [[0, "All categories"], ...ITEM_CATEGORIES], (v) => ctx.set("category", Number(v))),
+      pick("Job", ctx.st.job, [["", "Any job"], ...JOB_NAMES.map((n, i) => [JOBS[i].toLowerCase(), n])], (v) => ctx.set("job", v)),
+      pick("Slot", ctx.st.slot, [["", "Any slot"], ...SLOT_FILTERS], (v) => ctx.set("slot", v)),
+      lvl("Min level", "min"), lvl("Max level", "max"),
+    ];
+  }
+
+  pages.items = async function (main) {
     const view = tableView({
       endpoint: "/items",
-      defaults: { q: "", category: 0, job: "", slot: "", min: 0, max: 0, page: 1, per: 25 },
+      defaults: ITEM_FILTER_DEFAULTS,
       search: "Item name",
       noun: "items",
       columns: [{ label: "Name" }, { label: "Category", cls: "hide-phone" }, { label: "Lv", cls: "num" }, { label: "Jobs", cls: "hide-phone" }, { label: "Stack", cls: "num hide-phone" }],
-      toolbar: (ctx) => [
-        pick("Category", ctx.st.category, [[0, "All categories"], ...ITEM_CATEGORIES], (v) => ctx.set("category", Number(v))),
-        pick("Job", ctx.st.job, [["", "Any job"], ...JOB_NAMES.map((n, i) => [JOBS[i].toLowerCase(), n])], (v) => ctx.set("job", v)),
-        pick("Slot", ctx.st.slot, [["", "Any slot"], ...SLOT_FILTERS], (v) => ctx.set("slot", v)),
-        lvl("Min level", "min", ctx), lvl("Max level", "max", ctx),
-      ],
+      toolbar: itemFilters,
       empty: "No items match.",
       row: (it) => h("tr", {},
         h("td", {}, h("a", { href: `#item-${it.id}`, onclick: (e) => { e.preventDefault(); itemDialog(it.id); } }, it.name), " ", itemBadges(it)),
@@ -1834,6 +1840,75 @@
         h("td", { class: "num" }, it.level != null ? it.level : "–"),
         h("td", { class: "hide-phone job" }, jobsText(it.jobs)),
         h("td", { class: "num hide-phone" }, it.stack)),
+    });
+    main.append(view.el);
+    await view.load();
+  };
+
+  // ---- the auction house: read-only. Players see counts and sales (buying in game is a
+  // blind bid, so asking prices are staff-only); staff also see listings and names ----
+
+  const gil = (n) => (n == null ? "–" : `${num(n)} gil`);
+
+  // A seller or buyer: the bot, a name (staff only, linked to the character) or just "Player".
+  function partyCell(p) {
+    if (!p) return "–";
+    const tag = p.bot ? h("span", { class: "badge plain" }, "Bot") : null;
+    if (!p.name) return tag || h("span", { class: "muted" }, "Player");
+    return [p.charid ? h("a", { href: `/admin/characters/${p.charid}` }, p.name) : p.name, tag ? [" ", tag] : null];
+  }
+
+  async function auctionDialog(id) {
+    let d;
+    try { d = await api(`/auction/${id}`); } catch (ex) { d = { error: ex.message }; }
+    const it = d.item;
+    const table = (heads, rows, empty) => h("div", { class: "table-wrap" }, h("table", { class: "data" },
+      h("thead", {}, h("tr", {}, heads.map((t) => h("th", { class: t === "Price" ? "num" : false }, t)))),
+      h("tbody", {}, rows.length ? rows : h("tr", { class: "empty-row" }, h("td", { colspan: String(heads.length) }, empty)))));
+    const side = (sd) => {
+      const kind = sd.stack ? `Stacks of ${it.stack}` : "Singles";
+      const up = sd.listings; // staff only
+      return [
+        h("h3", {}, kind),
+        facts([["For sale", String(sd.listed)], up ? ["Cheapest", gil(up.length ? up[0].price : null)] : null,
+          ["Last sold", sd.sales.length ? `${gil(sd.sales[0].price)}, ${when(sd.sales[0].at)}` : "–"]].filter(Boolean)),
+        up ? [h("h3", {}, sd.listed > up.length ? `Cheapest ${up.length} listings` : "Listings"),
+          table(["Price", "Listed", "Seller"], up.map((r) => h("tr", {},
+            h("td", { class: "num" }, gil(r.price)), h("td", {}, when(r.at)), h("td", {}, partyCell(r.seller)))), "None up for sale.")] : null,
+        h("h3", {}, "Recent sales"),
+        table(["Price", "Sold", "Seller", "Buyer"], sd.sales.map((r) => h("tr", {},
+          h("td", { class: "num" }, gil(r.price)), h("td", {}, when(r.at)), h("td", {}, partyCell(r.seller)), h("td", {}, partyCell(r.buyer)))), "No sales yet."),
+      ];
+    };
+    const dlg = h("dialog", { class: "dialog wide", "aria-label": it ? it.name : "Auction house" },
+      h("form", { method: "dialog" },
+        h("div", { class: "dialog-head" }, h("span", { class: "icon" }, icon("auction")), h("h2", {}, it ? it.name : "Auction house"), it ? itemBadges(it) : null),
+        h("div", { class: "dialog-body" },
+          it ? [d.sides.map(side), h("p", { class: "hint" }, "Rows marked Bot are the auction house bot's. Prices are in gil.")]
+            : h("p", { class: "error", role: "alert" }, d.error)),
+        h("div", { class: "dialog-foot" }, h("button", { type: "submit", class: "primary" }, "Close"))));
+    dlg.addEventListener("close", () => dlg.remove());
+    document.body.append(dlg);
+    dlg.showModal();
+    dlg.scrollTop = 0; // showModal focuses Close, at the bottom of a long dialog
+  }
+
+  pages.auction = async function (main) {
+    // The cheapest asking price comes only for staff.
+    const forSale = (count, low) => (!count ? "–" : low != null ? `${count} · from ${gil(low)}` : String(count));
+    const view = tableView({
+      endpoint: "/auction",
+      defaults: ITEM_FILTER_DEFAULTS,
+      search: "Item name",
+      noun: "items for sale",
+      columns: [{ label: "Name" }, { label: "Category", cls: "hide-phone" }, { label: "Singles", cls: "num" }, { label: "Stacks", cls: "num hide-phone" }],
+      toolbar: itemFilters,
+      empty: "Nothing for sale matches.",
+      row: (it) => h("tr", {},
+        h("td", {}, h("a", { href: `#auction-${it.id}`, onclick: (e) => { e.preventDefault(); auctionDialog(it.id); } }, it.name), " ", itemBadges(it)),
+        h("td", { class: "hide-phone" }, categoryText(it)),
+        h("td", { class: "num" }, forSale(it.singles, it.single_low)),
+        h("td", { class: "num hide-phone" }, it.stack > 1 ? forSale(it.stacks, it.stack_low) : "–")),
     });
     main.append(view.el);
     await view.load();
