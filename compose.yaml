@@ -250,6 +250,11 @@ services:
       - ./overrides/settings:/lsb-settings:ro
     ports:
       - "${WEB_BIND_IP:-127.0.0.1}:${WEB_PORT:-54080}:8080"
+      # Always on this computer too, whatever WEB_BIND_IP says: the desktop app's
+      # owner link opens here, so its token and the owner's session never cross
+      # the LAN in plain HTTP. Its own port, since Compose can't leave out a
+      # duplicate of the line above when WEB_BIND_IP is empty.
+      - "127.0.0.1:${WEB_LOCAL_PORT:-54081}:8080"
     healthcheck:
       test: ["CMD", "/web", "healthcheck"]
       interval: 10s

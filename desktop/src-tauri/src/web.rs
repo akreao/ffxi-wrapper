@@ -5,7 +5,8 @@
 //!
 //! `.env` lines: `WEB_DB_PASSWORD` (the site's own database user's password,
 //! made when the site is turned on without one), `WEB_BIND_IP` (empty: this computer only), `WEB_PORT`
-//! (default 54080) and `ADMIN_SECRET`, the 64 hex characters that sign
+//! (default 54080), `WEB_LOCAL_PORT` (default 54081, the site on 127.0.0.1
+//! whatever `WEB_BIND_IP` says, where the owner link opens) and `ADMIN_SECRET`, the 64 hex characters that sign
 //! owner links (see `wrapper_core::owner_link`).
 
 use std::net::Ipv4Addr;
@@ -17,7 +18,11 @@ use crate::net;
 
 pub const SERVICE: &str = "web";
 const PROFILE: &str = "web";
+/// The profiles that only make sense with the site on: compose.yaml's Caddy
+/// proxy (`public`, service `proxy`) and its DNS updater (`ddns`, service `ddns`).
+pub const COMPANIONS: [&str; 2] = ["public", "ddns"];
 pub const DEFAULT_PORT: u16 = 54080;
+pub const DEFAULT_LOCAL_PORT: u16 = 54081;
 
 /// What the screen lets the user choose.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
@@ -43,7 +48,7 @@ pub struct Settings {
 pub fn load(env: &EnvFile) -> Settings {
     let get = |key: &str| env.get(key).filter(|v| !v.is_empty());
     let bind_ip = get("WEB_BIND_IP").filter(|ip| ip.parse::<Ipv4Addr>().is_ok()).unwrap_or_default();
-    let port = get("WEB_PORT").and_then(|p| p.parse().ok()).filter(|p| *p > 0).unwrap_or(DEFAULT_PORT);
+    let port = port(env, "WEB_PORT", DEFAULT_PORT);
     let host = if bind_ip.is_empty() { "127.0.0.1" } else { bind_ip.as_str() };
     Settings {
         enabled: envfile::profiles(env).iter().any(|p| p == PROFILE),
@@ -54,6 +59,31 @@ pub fn load(env: &EnvFile) -> Settings {
     }
 }
 
+fn port(env: &EnvFile, key: &str, default: u16) -> u16 {
+    env.get(key).and_then(|p| p.parse().ok()).filter(|p| *p > 0).unwrap_or(default)
+}
+
+/// The site's port on 127.0.0.1, published next to `WEB_PORT`.
+pub fn local_port(env: &EnvFile) -> u16 {
+    port(env, "WEB_LOCAL_PORT", DEFAULT_LOCAL_PORT)
+}
+
+/// The compose services `web-apply` starts or removes with the site: `web`,
+/// and the proxy and DNS updater while their profiles are on. Turning the
+/// site off takes those profiles out (see `save`), so then it's only `web`
+/// here and the caller removes the companions by name.
+pub fn services(env: &EnvFile) -> Vec<&'static str> {
+    let on = envfile::profiles(env);
+    let mut list = vec![SERVICE];
+    if on.iter().any(|p| p == "public") {
+        list.push("proxy");
+    }
+    if on.iter().any(|p| p == "ddns") {
+        list.push("ddns");
+    }
+    list
+}
+
 /// Checks `new` and writes it into `env`, making the owner-link key when the
 /// site is turned on without one. Returns whether anything changed.
 pub fn save(env: &mut EnvFile, new: &Choice) -> Result<bool, String> {
@@ -61,6 +91,12 @@ pub fn save(env: &mut EnvFile, new: &Choice) -> Result<bool, String> {
     let before = load(env);
 
     envfile::set_profile(env, PROFILE, new.enabled);
+    // Without the site, Caddy would answer on 80 and 443 with nothing behind it.
+    if !new.enabled {
+        for p in COMPANIONS {
+            envfile::set_profile(env, p, false);
+        }
+    }
     env.set("WEB_BIND_IP", &bind);
     if new.enabled && !before.owner_link_ready {
         env.set("ADMIN_SECRET", &new_secret()?);
@@ -99,17 +135,18 @@ fn new_secret() -> Result<String, String> {
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// The link that signs the owner in to the running site: its address and a
-/// token good for a minute, once.
+/// The link that signs the owner in to the running site: its 127.0.0.1
+/// address (`WEB_LOCAL_PORT`) and a token good for a minute, once. Never the
+/// `WEB_BIND_IP` address: on a LAN that is plain HTTP, and the token and then
+/// the owner's session cookie would cross it unencrypted.
 pub fn owner_url(env: &EnvFile, now: u64) -> Result<String, String> {
-    let settings = load(env);
-    if !settings.enabled {
+    if !load(env).enabled {
         return Err("Turn the website on first.".into());
     }
     let secret = env.get("ADMIN_SECRET").unwrap_or_default();
     let token = wrapper_core::owner_link::sign(&secret, now)
         .map_err(|_| "The website has no owner key yet. Save the settings once more, then restart the website.".to_owned())?;
-    Ok(format!("{}/auth/owner?t={token}", settings.url))
+    Ok(format!("http://127.0.0.1:{}/auth/owner?t={token}", local_port(env)))
 }
 
 #[cfg(test)]
@@ -198,6 +235,21 @@ mod tests {
     }
 
     #[test]
+    fn turning_it_off_also_turns_off_the_proxy_and_dns_updater() {
+        let mut env = EnvFile::parse("COMPOSE_PROFILES=ahbot,web,public,ddns\n");
+        assert_eq!(services(&env), ["web", "proxy", "ddns"]);
+        assert!(save(&mut env, &choice(false, "")).unwrap());
+        assert_eq!(env.get("COMPOSE_PROFILES").as_deref(), Some("ahbot"));
+        assert_eq!(services(&env), ["web"]);
+        // Turning it on doesn't bring them back: going public is a choice of its own.
+        save(&mut env, &choice(true, "")).unwrap();
+        assert_eq!(env.get("COMPOSE_PROFILES").as_deref(), Some("ahbot,web"));
+        let mut public = EnvFile::parse("COMPOSE_PROFILES=web,public\n");
+        save(&mut public, &choice(true, "100.101.102.103")).unwrap();
+        assert_eq!(services(&public), ["web", "proxy"]);
+    }
+
+    #[test]
     fn who_can_reach_it() {
         let mut env = EnvFile::parse("");
         save(&mut env, &choice(true, " 100.101.102.103 ")).unwrap();
@@ -214,10 +266,14 @@ mod tests {
     fn the_owner_link_is_the_sites_address_with_a_token_that_verifies() {
         let mut env = EnvFile::parse(&format!("COMPOSE_PROFILES=web\nADMIN_SECRET={KEY}\nWEB_BIND_IP=192.168.1.20\n"));
         let url = owner_url(&env, 1_800_000_000).unwrap();
-        let token = url.strip_prefix("http://192.168.1.20:54080/auth/owner?t=").expect(&url);
+        // This computer's own port, never the LAN address the site is opened to.
+        let token = url.strip_prefix("http://127.0.0.1:54081/auth/owner?t=").expect(&url);
         assert!(!token.contains(['&', '#', ' ']));
         assert!(wrapper_core::owner_link::verify(KEY, token, 1_800_000_030).is_ok());
         assert!(wrapper_core::owner_link::verify(KEY, token, 1_800_000_100).is_err());
+
+        env.set("WEB_LOCAL_PORT", "8443");
+        assert!(owner_url(&env, 1_800_000_000).unwrap().starts_with("http://127.0.0.1:8443/auth/owner?t="));
 
         env.set("COMPOSE_PROFILES", "ahbot");
         assert!(owner_url(&env, 1_800_000_000).is_err());
