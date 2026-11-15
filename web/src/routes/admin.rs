@@ -36,6 +36,9 @@ pub fn api() -> Router<Shared> {
         .route("/admin/characters/{charid}/inventory", get(inventory))
         .route("/admin/characters/{charid}/gm-level", post(gm_level))
         .route("/admin/bans", get(bans))
+        .route("/admin/tickets", get(tickets))
+        .route("/admin/tickets/{id}/reply", post(reply_ticket))
+        .route("/admin/tickets/{id}/close", post(close_ticket))
 }
 
 #[derive(Serialize)]
@@ -561,6 +564,138 @@ async fn site_role(
     // Their web sessions start over with the new role.
     state.store.end_account_sessions(accid, None).await?;
     Ok(Json(json!({ "ok": true, "role": new.as_str() })))
+}
+
+// ---- the help desk ----
+
+#[derive(Deserialize)]
+struct TicketParams {
+    q: Option<String>,
+    /// open | answered | read | closed | all
+    status: Option<String>,
+    page: Option<i64>,
+    per: Option<i64>,
+}
+
+#[derive(Serialize)]
+struct TicketOut {
+    #[serde(flatten)]
+    ticket: Ticket,
+    /// The filer's account's website role is below the viewer's.
+    can_act: bool,
+}
+
+async fn tickets(State(state): State<Shared>, Staff(id): Staff, Query(p): Query<TicketParams>) -> ApiResult<Json<Value>> {
+    let actor = id.actor();
+    let (page, per) = paging(p.page, p.per);
+    let query = TicketQuery {
+        q: search(&p.q),
+        filter: match p.status.as_deref() {
+            Some("answered") => TicketFilter::Answered,
+            Some("read") => TicketFilter::Read,
+            Some("closed") => TicketFilter::Closed,
+            Some("all") => TicketFilter::All,
+            _ => TicketFilter::Open,
+        },
+        page,
+        per,
+    };
+    let list = state.game.admin_tickets(&query).await?;
+    let counts = state.game.ticket_counts().await?;
+    let mut items = Vec::with_capacity(list.items.len());
+    for ticket in list.items {
+        items.push(TicketOut { can_act: auth::can_act_on(actor, filer_role(&state, &ticket).await?), ticket });
+    }
+    Ok(Json(json!({ "items": items, "total": list.total, "page": page, "per": per, "counts": counts })))
+}
+
+/// The longest reply the game shows (LSB cuts it there too).
+const REPLY_MAX: usize = 1024;
+
+/// A help desk reply: printable ASCII and line breaks only, because the game reads
+/// Shift-JIS, and at most [`REPLY_MAX`] bytes.
+fn clean_reply(text: Option<&str>) -> ApiResult<String> {
+    let t = text.unwrap_or("").replace("\r\n", "\n");
+    let t = t.trim();
+    if t.is_empty() {
+        return Err(ApiError::bad_request("Write a reply first."));
+    }
+    if !t.bytes().all(|b| b == b'\n' || (0x20..=0x7e).contains(&b)) {
+        return Err(ApiError::bad_request("Use plain English letters, digits and punctuation only: the game can't show other characters."));
+    }
+    if t.len() > REPLY_MAX {
+        return Err(ApiError::bad_request("Keep the reply to 1024 characters: the game shows no more."));
+    }
+    Ok(t.to_string())
+}
+
+/// The website role of the account a ticket came from; Player for a deleted character.
+async fn filer_role(state: &Shared, t: &Ticket) -> ApiResult<Role> {
+    Ok(match t.accid {
+        Some(accid) => roles::account_role(state, accid).await?,
+        None => Role::Player,
+    })
+}
+
+/// The ticket, and an action-log row for `action` on its character.
+async fn ticket_action(state: &Shared, id: &Identity, ip: &str, action: &'static str, ticket: i64) -> ApiResult<(Ticket, NewAction)> {
+    let t = state.game.admin_ticket(ticket).await?.ok_or_else(ApiError::not_found)?;
+    let name = t.character.clone().unwrap_or_else(|| format!("Character {}", t.charid));
+    let row = act(id, ip, action, "character", t.charid, &name);
+    Ok((t, row))
+}
+
+#[derive(Deserialize)]
+struct ReplyBody {
+    text: Option<String>,
+}
+
+async fn reply_ticket(
+    State(state): State<Shared>,
+    Staff(id): Staff,
+    ClientIp(ip): ClientIp,
+    Path(ticket): Path<i64>,
+    Json(body): Json<ReplyBody>,
+) -> ApiResult<Json<Value>> {
+    let text = clean_reply(body.text.as_deref())?;
+    let (t, mut row) = ticket_action(&state, &id, &ip, "ticket_reply", ticket).await?;
+    row.detail = Some(json!({ "ticket": ticket, "reply": text }).to_string());
+    let (_gate, actor) = roles::lock(&state, &id, Role::Moderator).await?;
+    if !auth::can_act_on(actor, filer_role(&state, &t).await?) {
+        row.result = "refused";
+        record(&state, row).await;
+        return Err(below_you());
+    }
+    let outcome = state.game.answer_ticket(ticket, &text).await?;
+    settle(&state, outcome, row, "This ticket already has a reply or is closed: a reply is never replaced, since the player may have read it.").await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+struct CloseBody {
+    reason: Option<String>,
+}
+
+async fn close_ticket(
+    State(state): State<Shared>,
+    Staff(id): Staff,
+    ClientIp(ip): ClientIp,
+    Path(ticket): Path<i64>,
+    Json(body): Json<CloseBody>,
+) -> ApiResult<Json<Value>> {
+    let reason = clean_reason(body.reason.as_deref(), false)?;
+    let (t, mut row) = ticket_action(&state, &id, &ip, "ticket_close", ticket).await?;
+    row.reason = reason;
+    row.detail = Some(json!({ "ticket": ticket }).to_string());
+    let (_gate, actor) = roles::lock(&state, &id, Role::Moderator).await?;
+    if !auth::can_act_on(actor, filer_role(&state, &t).await?) {
+        row.result = "refused";
+        record(&state, row).await;
+        return Err(below_you());
+    }
+    let outcome = state.game.close_ticket(ticket).await?;
+    settle(&state, outcome, row, "Only an open ticket can be closed: this one has a reply or is closed already.").await?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 // ---- timed bans ----

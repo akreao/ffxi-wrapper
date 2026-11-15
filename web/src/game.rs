@@ -97,6 +97,18 @@ pub trait Game: Send + Sync {
     async fn set_gm_level(&self, charid: i64, level: i64) -> DbResult<Acted>;
     /// Ends every ban whose end has passed (`now`, Unix seconds) and returns (account, login) of each.
     async fn lift_expired_bans(&self, now: i64) -> DbResult<Vec<(i64, String)>>;
+
+    // ---- the help desk ----
+
+    /// Tickets, newest first.
+    async fn admin_tickets(&self, q: &TicketQuery) -> DbResult<Page<Ticket>>;
+    async fn ticket_counts(&self) -> DbResult<TicketCounts>;
+    async fn admin_ticket(&self, id: i64) -> DbResult<Option<Ticket>>;
+    /// Sets the reply LSB sends the player at their next zone-in; `NoChange` unless the ticket
+    /// is open (a reply is never replaced: the player may have seen it already).
+    async fn answer_ticket(&self, id: i64, reply: &str) -> DbResult<Acted>;
+    /// Closes a ticket without a reply; `NoChange` unless it is open.
+    async fn close_ticket(&self, id: i64) -> DbResult<Acted>;
 }
 
 pub struct MariaDb {
@@ -888,6 +900,121 @@ impl Game for MariaDb {
         tx.commit().await?;
         Ok(out)
     }
+
+    async fn admin_tickets(&self, q: &TicketQuery) -> DbResult<Page<Ticket>> {
+        let like = like_pattern(&q.q);
+        let state = match q.filter {
+            TicketFilter::Open => "h.deleted_at IS NULL AND h.response IS NULL",
+            TicketFilter::Answered => "h.deleted_at IS NULL AND h.response IS NOT NULL",
+            TicketFilter::Read => "h.deleted_at IS NOT NULL AND h.response IS NOT NULL",
+            TicketFilter::Closed => "h.deleted_at IS NOT NULL AND h.response IS NULL",
+            TicketFilter::All => "TRUE",
+        };
+        let wh = format!(
+            "WHERE {state} AND (? = '' OR c.charname LIKE ? ESCAPE '|' OR a.login LIKE ? ESCAPE '|')"
+        );
+        let total: i64 = sqlx::query(&format!("SELECT CAST(COUNT(*) AS SIGNED) AS n {TICKET_FROM} {wh}"))
+            .bind(&q.q)
+            .bind(&like)
+            .bind(&like)
+            .fetch_one(&self.pool)
+            .await?
+            .try_get("n")?;
+        let rows = sqlx::query(&format!("SELECT {TICKET_COLS} {TICKET_FROM} {wh} ORDER BY h.id DESC LIMIT ? OFFSET ?"))
+            .bind(&q.q)
+            .bind(&like)
+            .bind(&like)
+            .bind(q.per)
+            .bind((q.page - 1) * q.per)
+            .fetch_all(&self.pool)
+            .await?;
+        let items = rows.iter().map(ticket_row).collect::<Result<_, _>>()?;
+        Ok(Page { items, total })
+    }
+
+    async fn ticket_counts(&self) -> DbResult<TicketCounts> {
+        let r = sqlx::query(
+            "SELECT CAST(COALESCE(SUM(deleted_at IS NULL AND response IS NULL), 0) AS SIGNED) AS open,
+                    CAST(COALESCE(SUM(deleted_at IS NULL AND response IS NOT NULL), 0) AS SIGNED) AS answered,
+                    CAST(COALESCE(SUM(deleted_at IS NOT NULL AND response IS NOT NULL), 0) AS SIGNED) AS rd,
+                    CAST(COALESCE(SUM(deleted_at IS NOT NULL AND response IS NULL), 0) AS SIGNED) AS closed
+             FROM help_desk",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(TicketCounts { open: r.try_get("open")?, answered: r.try_get("answered")?, read: r.try_get("rd")?, closed: r.try_get("closed")? })
+    }
+
+    async fn admin_ticket(&self, id: i64) -> DbResult<Option<Ticket>> {
+        let r = sqlx::query(&format!("SELECT {TICKET_COLS} {TICKET_FROM} WHERE h.id = ?")).bind(id).fetch_optional(&self.pool).await?;
+        Ok(r.as_ref().map(ticket_row).transpose()?)
+    }
+
+    async fn answer_ticket(&self, id: i64, reply: &str) -> DbResult<Acted> {
+        // One statement: two staff answering at once can't both win.
+        let done = sqlx::query("UPDATE help_desk SET response = ?, responded_at = NOW() WHERE id = ? AND response IS NULL AND deleted_at IS NULL")
+            .bind(reply.as_bytes())
+            .bind(id)
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
+        self.ticket_outcome(id, done).await
+    }
+
+    async fn close_ticket(&self, id: i64) -> DbResult<Acted> {
+        let done = sqlx::query("UPDATE help_desk SET deleted_at = NOW() WHERE id = ? AND response IS NULL AND deleted_at IS NULL")
+            .bind(id)
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
+        self.ticket_outcome(id, done).await
+    }
+}
+
+impl MariaDb {
+    /// `Done` when an UPDATE on an open ticket changed a row; else whether the ticket exists.
+    async fn ticket_outcome(&self, id: i64, rows: u64) -> DbResult<Acted> {
+        if rows > 0 {
+            return Ok(Acted::Done);
+        }
+        let exists = sqlx::query("SELECT 1 AS x FROM help_desk WHERE id = ?").bind(id).fetch_optional(&self.pool).await?;
+        Ok(if exists.is_some() { Acted::NoChange } else { Acted::NotFound })
+    }
+}
+
+/// Columns `ticket_row` reads, from [`TICKET_FROM`].
+const TICKET_COLS: &str = "CAST(h.id AS SIGNED) AS id, CAST(h.charid AS SIGNED) AS charid, c.charname,
+       CAST(NULLIF(c.accid, 0) AS SIGNED) AS accid, a.login,
+       CAST(COALESCE((SELECT MAX(g.gmlevel) FROM chars g WHERE g.accid = c.accid AND c.accid <> 0), 0) AS SIGNED) AS gm,
+       h.message, h.response,
+       CAST(UNIX_TIMESTAMP(h.created_at) AS SIGNED) AS created,
+       CAST(UNIX_TIMESTAMP(h.responded_at) AS SIGNED) AS responded,
+       CAST(UNIX_TIMESTAMP(h.deleted_at) AS SIGNED) AS closed";
+
+const TICKET_FROM: &str = "FROM help_desk h LEFT JOIN chars c ON c.charid = h.charid LEFT JOIN accounts a ON a.id = c.accid";
+
+/// Ticket text as stored: the client's bytes, NUL-padded. Non-ASCII (Shift-JIS) bytes show as U+FFFD.
+fn ticket_text(bytes: &[u8]) -> String {
+    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    String::from_utf8_lossy(&bytes[..end]).trim_end().to_string()
+}
+
+fn ticket_row(r: &sqlx::mysql::MySqlRow) -> Result<Ticket, sqlx::Error> {
+    let message: Vec<u8> = r.try_get("message")?;
+    let response: Option<Vec<u8>> = r.try_get("response")?;
+    Ok(Ticket {
+        id: r.try_get("id")?,
+        charid: r.try_get("charid")?,
+        character: r.try_get("charname")?,
+        accid: r.try_get("accid")?,
+        login: r.try_get("login")?,
+        gm: r.try_get("gm")?,
+        message: ticket_text(&message),
+        response: response.as_deref().map(ticket_text),
+        created: r.try_get("created")?,
+        responded: r.try_get("responded")?,
+        closed: r.try_get("closed")?,
+    })
 }
 
 /// The body of [`MariaDb::create_account`], run with the lock held. The statements are LSB's

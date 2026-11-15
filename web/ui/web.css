@@ -397,3 +397,7 @@ body.signin { align-items: center; justify-content: center; min-height: 100vh; h
 .block-card .editor-bar { margin: 0; }
 .count-note { margin-left: auto; color: var(--muted); font-size: 12px; }
 @media (max-width: 900px) { .editor-grid { grid-template-columns: minmax(0, 1fr); } }
+
+/* Help desk: ticket and reply text as the player or GM wrote it. */
+.ticket-text { white-space: pre-wrap; overflow-wrap: anywhere; margin: 4px 0 8px; padding: 8px 12px; border-radius: 4px; background: var(--raised); border: 1px solid var(--border); font-size: 13px; max-height: 40vh; overflow: auto; }
+.dialog-body h3 { font-size: 13px; margin: 12px 0 0; }

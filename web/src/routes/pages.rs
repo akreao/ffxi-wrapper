@@ -57,6 +57,7 @@ pub fn router() -> Router<Shared> {
         .route("/admin/characters", get(|s, v| page(s, v, "characters.html", Access::Staff)))
         .route("/admin/characters/{id}", get(|s, v, _p: Path<String>| page(s, v, "character.html", Access::Staff)))
         .route("/admin/bans", get(|s, v| page(s, v, "bans.html", Access::Staff)))
+        .route("/admin/help-desk", get(|s, v| page(s, v, "help-desk.html", Access::Staff)))
         .route("/admin/log", get(|s, v| page(s, v, "log.html", Access::Staff)))
         .route("/admin/news", get(|s, v| page(s, v, "admin-news.html", Access::Owner)))
         .route("/admin/news/{id}", get(|s, v, _p: Path<String>| page(s, v, "admin-news.html", Access::Owner)))
