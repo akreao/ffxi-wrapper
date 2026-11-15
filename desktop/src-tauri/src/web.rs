@@ -89,6 +89,7 @@ pub fn services(env: &EnvFile) -> Vec<&'static str> {
 pub fn save(env: &mut EnvFile, new: &Choice) -> Result<bool, String> {
     let bind = bind_ip(&new.bind_ip)?;
     let before = load(env);
+    let profiles_before = envfile::profiles(env);
 
     envfile::set_profile(env, PROFILE, new.enabled);
     // Without the site, Caddy would answer on 80 and 443 with nothing behind it.
@@ -102,7 +103,24 @@ pub fn save(env: &mut EnvFile, new: &Choice) -> Result<bool, String> {
         env.set("ADMIN_SECRET", &new_secret()?);
     }
     let made_password = if new.enabled { ensure_db_password(env)? } else { false };
-    Ok(made_password || load(env) != before)
+    // Taking out public or ddns is a change too: the restart removes their containers.
+    Ok(made_password || load(env) != before || envfile::profiles(env) != profiles_before)
+}
+
+/// Clears a `WEB_PORT` or `WEB_LOCAL_PORT` that isn't a port from 1 to 65535,
+/// so compose.yaml's default applies: Compose refuses the whole file over a
+/// bad one, and 0 would publish the site on a random port. Returns whether it
+/// cleared any. The app does this at startup.
+pub fn fix_ports(env: &mut EnvFile) -> Result<bool, String> {
+    let mut fixed = false;
+    for key in ["WEB_PORT", "WEB_LOCAL_PORT"] {
+        let value = env.get(key).unwrap_or_default();
+        if !value.is_empty() && !value.parse::<u16>().is_ok_and(|p| p > 0) {
+            env.set(key, "");
+            fixed = true;
+        }
+    }
+    Ok(fixed)
 }
 
 /// Gives the site's own database user (made by db-init) a password in `.env`
@@ -241,12 +259,31 @@ mod tests {
         assert!(save(&mut env, &choice(false, "")).unwrap());
         assert_eq!(env.get("COMPOSE_PROFILES").as_deref(), Some("ahbot"));
         assert_eq!(services(&env), ["web"]);
+        // Already off, with the proxy's profile left on by hand: taking it out is a change.
+        let mut stray = EnvFile::parse("COMPOSE_PROFILES=public\n");
+        assert!(save(&mut stray, &choice(false, "")).unwrap());
+        assert_eq!(stray.get("COMPOSE_PROFILES").as_deref(), Some(""));
+        assert!(!save(&mut stray, &choice(false, "")).unwrap());
         // Turning it on doesn't bring them back: going public is a choice of its own.
         save(&mut env, &choice(true, "")).unwrap();
         assert_eq!(env.get("COMPOSE_PROFILES").as_deref(), Some("ahbot,web"));
         let mut public = EnvFile::parse("COMPOSE_PROFILES=web,public\n");
         save(&mut public, &choice(true, "100.101.102.103")).unwrap();
         assert_eq!(services(&public), ["web", "proxy"]);
+    }
+
+    #[test]
+    fn a_bad_port_is_cleared_so_the_default_applies() {
+        for bad in ["0", "abc", "70000", "-1"] {
+            let mut env = EnvFile::parse(&format!("WEB_PORT=8080\nWEB_LOCAL_PORT={bad}\n"));
+            assert!(fix_ports(&mut env).unwrap(), "{bad}");
+            assert_eq!(env.get("WEB_LOCAL_PORT").as_deref(), Some(""));
+            assert_eq!(env.get("WEB_PORT").as_deref(), Some("8080"));
+            assert_eq!(local_port(&env), DEFAULT_LOCAL_PORT);
+        }
+        let mut good = EnvFile::parse("WEB_PORT=\nWEB_LOCAL_PORT=65535\n");
+        assert!(!fix_ports(&mut good).unwrap());
+        assert!(!fix_ports(&mut EnvFile::parse("")).unwrap());
     }
 
     #[test]

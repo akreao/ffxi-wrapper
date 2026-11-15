@@ -433,7 +433,8 @@ fn start_task(handle: &AppHandle, app: &App, kind: String, file: Option<String>)
             vec![Step::Address, Step::Run(cmd)]
         }
         "stop" => {
-            cmd.arg("down");
+            // Every profile, so a proxy or bot whose profile was since taken out goes too.
+            cmd.args(["--profile", "*", "down"]);
             vec![Step::DailyBackup, Step::Run(cmd)]
         }
         "backup" => vec![Step::Backup],
@@ -819,6 +820,9 @@ pub fn run() {
                             // service, so an install from before it gets one now.
                             if let Err(e) = envfile::edit(&env, web::ensure_db_password) {
                                 eprintln!("Couldn't add WEB_DB_PASSWORD to {}: {e}", env.display());
+                            }
+                            if let Err(e) = envfile::edit(&env, web::fix_ports) {
+                                eprintln!("Couldn't clear a bad website port in {}: {e}", env.display());
                             }
                         }
                     }
