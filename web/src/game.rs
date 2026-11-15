@@ -17,6 +17,8 @@ pub enum DbError {
     NotReady,
     /// Another sign-up holds the lock and didn't let go in time.
     Busy,
+    /// A query ran past its time limit (see [`SLOW_LIMIT`]).
+    TooSlow,
     Failed(String),
 }
 
@@ -26,6 +28,10 @@ impl From<sqlx::Error> for DbError {
             // 1146: table doesn't exist. 1049: unknown database.
             if matches!(d.code().as_deref(), Some("42S02") | Some("42000")) && d.message().contains("exist") {
                 return DbError::NotReady;
+            }
+            // 1969 (ER_STATEMENT_TIMEOUT): `max_statement_time` ran out.
+            if d.code().as_deref() == Some("70100") {
+                return DbError::TooSlow;
             }
         }
         DbError::Failed(e.to_string())
@@ -116,6 +122,11 @@ pub trait Game: Send + Sync {
     async fn items(&self, q: &ItemQuery) -> DbResult<Page<ItemRaw>>;
     /// `None` for a missing item or one `ITEM_SHOWN` leaves out (with `level_cap` as there).
     async fn item(&self, id: i64, level_cap: i64) -> DbResult<Option<ItemDetailRaw>>;
+
+    // ---- LSB's audit tables (staff, read-only) ----
+
+    /// One page of one audit table, newest first.
+    async fn audit(&self, q: &AuditQuery) -> DbResult<AuditPage>;
 }
 
 pub struct MariaDb {
@@ -1034,6 +1045,127 @@ impl Game for MariaDb {
             .collect::<Result<_, sqlx::Error>>()?;
         Ok(Some(ItemDetailRaw { item, weapon, mods }))
     }
+
+    async fn audit(&self, q: &AuditQuery) -> DbResult<AuditPage> {
+        let like = like_pattern(&q.q);
+        // `names` is bound once per column it is matched against; only `?` marks are
+        // interpolated, never request text.
+        let marks = vec!["?"; q.names.len()].join(",");
+        let either = |a: &str, b: &str| if q.names.is_empty() { "TRUE".to_owned() } else { format!("({a} IN ({marks}) OR {b} IN ({marks}))") };
+        let sql = match q.kind {
+            AuditKind::Chat => format!(
+                "{SLOW_LIMIT} SELECT CAST(UNIX_TIMESTAMP(a.datetime) AS SIGNED) AS at, a.speaker AS who, a.recipient AS rcpt,
+                        a.type AS channel, a.lsName AS ls, z.name AS zone, a.message AS text
+                 FROM audit_chat a LEFT JOIN zone_settings z ON z.zoneid = a.zoneid
+                 WHERE a.lineID >= ? AND a.lineID < ?
+                   AND a.datetime >= FROM_UNIXTIME(?) AND a.datetime < FROM_UNIXTIME(?)
+                   AND (? = '' OR a.type = ?) AND (? OR a.type <> 'TELL') AND {}
+                   AND (? = '' OR CONVERT(a.message USING utf8mb4) LIKE ? ESCAPE '|')
+                 ORDER BY a.lineID DESC LIMIT ? OFFSET ?",
+                either("a.speaker", "a.recipient")
+            ),
+            AuditKind::Gm => format!(
+                "{SLOW_LIMIT} SELECT CAST(UNIX_TIMESTAMP(a.date_time) AS SIGNED) AS at, a.gm_name AS who, a.command AS channel,
+                        a.full_string AS text
+                 FROM audit_gm a
+                 WHERE a.date_time >= FROM_UNIXTIME(?) AND a.date_time < FROM_UNIXTIME(?)
+                   AND {}
+                   AND (? = '' OR CONVERT(a.full_string USING utf8mb4) LIKE ? ESCAPE '|')
+                 ORDER BY a.date_time DESC, a.gm_name LIMIT ? OFFSET ?",
+                either("a.gm_name", "a.gm_name")
+            ),
+            AuditKind::Trade | AuditKind::Bazaar | AuditKind::Dbox => {
+                let (table, from, to, price) = match q.kind {
+                    AuditKind::Trade => ("audit_trade", "sender_name", "receiver_name", "NULL"),
+                    AuditKind::Bazaar => ("audit_bazaar", "seller_name", "purchaser_name", "CAST(a.price AS SIGNED)"),
+                    _ => ("audit_dbox", "sender_name", "receiver_name", "CAST(a.price AS SIGNED)"),
+                };
+                format!(
+                    "{SLOW_LIMIT} SELECT CAST(a.date AS SIGNED) AS at, a.{from} AS who, a.{to} AS rcpt,
+                            CAST(a.itemid AS SIGNED) AS item_id, b.name AS item, CAST(a.quantity AS SIGNED) AS quantity,
+                            {price} AS price
+                     FROM {table} a LEFT JOIN item_basic b ON b.itemid = a.itemid
+                     WHERE a.id >= ? AND a.id < ?
+                       AND a.date >= ? AND a.date < ?
+                       AND {}
+                       AND (? = '' OR b.name LIKE ? ESCAPE '|')
+                     ORDER BY a.id DESC LIMIT ? OFFSET ?",
+                    either(&format!("a.{from}"), &format!("a.{to}"))
+                )
+            }
+        };
+        // LSB indexes `audit_gm` by time; the others only by id, which grows with time (LSB
+        // writes a row as things happen), so the time span becomes an id span first.
+        let ids = match q.kind {
+            AuditKind::Gm => None,
+            AuditKind::Chat => Some(("audit_chat", "lineID", "UNIX_TIMESTAMP(datetime)")),
+            AuditKind::Trade => Some(("audit_trade", "id", "date")),
+            AuditKind::Bazaar => Some(("audit_bazaar", "id", "date")),
+            AuditKind::Dbox => Some(("audit_dbox", "id", "date")),
+        };
+        let span = match ids {
+            // A minute's slack each way: LSB's writes queue on a worker thread, so ids and
+            // times may disagree by a little. The exact time test stays in the query.
+            Some((table, id, time)) => Some((
+                self.first_id_at(table, id, time, q.from - 60).await?,
+                self.first_id_at(table, id, time, q.to + 60).await?,
+            )),
+            None => None,
+        };
+        let mut query = sqlx::query(&sql);
+        if let Some((lo, hi)) = span {
+            query = query.bind(lo).bind(hi);
+        }
+        query = query.bind(q.from).bind(q.to);
+        if q.kind == AuditKind::Chat {
+            query = query.bind(&q.channel).bind(&q.channel).bind(q.tells);
+        }
+        for _ in 0..2 {
+            for n in &q.names {
+                query = query.bind(n);
+            }
+        }
+        let mut rows = query
+            .bind(&q.q)
+            .bind(&like)
+            .bind(q.per + 1)
+            .bind((q.page - 1) * q.per)
+            .fetch_all(&self.pool)
+            .await?;
+        let more = rows.len() as i64 > q.per;
+        rows.truncate(q.per as usize);
+        let items = rows.iter().map(|r| audit_row(q.kind, r)).collect::<Result<_, _>>()?;
+        Ok(AuditPage { items, more })
+    }
+}
+
+/// How long one audit search may run. Even within its id span, a search that matches little
+/// (a rare word over a busy week) reads every row there; this stops it.
+const SLOW_LIMIT: &str = "SET STATEMENT max_statement_time = 5 FOR";
+
+fn audit_row(kind: AuditKind, r: &sqlx::mysql::MySqlRow) -> Result<AuditRow, sqlx::Error> {
+    let chat = kind == AuditKind::Chat;
+    let text = matches!(kind, AuditKind::Chat | AuditKind::Gm);
+    let items = !text;
+    Ok(AuditRow {
+        at: r.try_get::<Option<i64>, _>("at")?.unwrap_or(0),
+        who: r.try_get::<Option<String>, _>("who")?.unwrap_or_default(),
+        to: if kind == AuditKind::Gm { None } else { r.try_get("rcpt")? },
+        channel: if text { r.try_get("channel")? } else { None },
+        linkshell: if chat { r.try_get("ls")? } else { None },
+        zone: if chat { r.try_get("zone")? } else { None },
+        text: if text { r.try_get::<Option<Vec<u8>>, _>("text")?.map(|b| plain_text(&b)) } else { None },
+        item_id: if items { r.try_get("item_id")? } else { None },
+        item: if items { r.try_get("item")? } else { None },
+        quantity: if items { r.try_get("quantity")? } else { None },
+        price: if items { r.try_get("price")? } else { None },
+    })
+}
+
+/// A logged message as text: invalid UTF-8 (the game's own encodings, auto-translate
+/// phrases) becomes U+FFFD, and control characters become spaces.
+pub fn plain_text(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).chars().map(|c| if c.is_control() { ' ' } else { c }).collect()
 }
 
 /// An item: `item_basic b`, and `item_equipment e` when it is equipment.
@@ -1164,4 +1296,30 @@ async fn lock_account(tx: &mut sqlx::Transaction<'_, sqlx::MySql>, id: i64) -> D
         .await?;
     let Some(r) = r else { return Ok(Locked::Missing) };
     Ok(Locked::Ok { status: r.try_get("status")?, gm: r.try_get("gm")? })
+}
+
+impl MariaDb {
+    /// The first id in `table` whose time (`time`, Unix seconds) is at or after `t`, or one past
+    /// the last id when none is: a binary search over the primary key, a few dozen one-row
+    /// reads, where a time test alone would read every row. `table`, `id` and `time` are fixed
+    /// names from [`Game::audit`], never request text.
+    async fn first_id_at(&self, table: &str, id: &str, time: &str, t: i64) -> DbResult<i64> {
+        let ends = sqlx::query(&format!("SELECT CAST(MIN({id}) AS SIGNED) AS lo, CAST(MAX({id}) AS SIGNED) AS hi FROM {table}"))
+            .fetch_one(&self.pool)
+            .await?;
+        let (Some(mut lo), Some(last)) = (ends.try_get::<Option<i64>, _>("lo")?, ends.try_get::<Option<i64>, _>("hi")?) else {
+            return Ok(0);
+        };
+        // The answer is in lo..=hi; hi (one past the last id) has no row, so it counts as late enough.
+        let mut hi = last + 1;
+        let probe = format!("SELECT CAST({id} AS SIGNED) AS id, CAST({time} AS SIGNED) AS t FROM {table} WHERE {id} >= ? ORDER BY {id} LIMIT 1");
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            match sqlx::query(&probe).bind(mid).fetch_optional(&self.pool).await? {
+                Some(r) if r.try_get::<Option<i64>, _>("t")?.unwrap_or(0) < t => lo = r.try_get::<i64, _>("id")? + 1,
+                _ => hi = mid,
+            }
+        }
+        Ok(lo)
+    }
 }

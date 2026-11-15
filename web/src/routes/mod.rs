@@ -3,6 +3,7 @@
 //! module's `router()`; a page needs a file in `web/ui/` and a line in `pages.rs`.
 
 pub mod admin;
+pub mod audit;
 pub mod cms;
 pub mod items;
 pub mod me;
@@ -23,6 +24,7 @@ pub fn router(state: Shared) -> Router {
         .merge(session::api())
         .merge(me::api())
         .merge(admin::api())
+        .merge(audit::api())
         .merge(cms::api())
         .merge(items::api())
         .merge(public::api())

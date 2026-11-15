@@ -472,3 +472,79 @@ pub struct ItemQuery {
     pub page: i64,
     pub per: i64,
 }
+
+/// Which of LSB's audit tables a search reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AuditKind {
+    /// `audit_chat`: what players said, by channel.
+    #[default]
+    Chat,
+    /// `audit_gm`: GM commands.
+    Gm,
+    /// `audit_trade`: items handed over in a trade.
+    Trade,
+    /// `audit_bazaar`: bazaar sales.
+    Bazaar,
+    /// `audit_dbox`: delivery box sends.
+    Dbox,
+}
+
+/// The chat channels LSB writes to `audit_chat.type`.
+pub const CHAT_CHANNELS: &[&str] = &["SAY", "SHOUT", "YELL", "TELL", "PARTY", "LINKSHELL", "UNITY", "ASSISTE", "ASSISTJ", "BALLISTA"];
+
+/// An audit search, newest first. Times are Unix seconds, `from` included, `to` not.
+#[derive(Debug, Clone, Default)]
+pub struct AuditQuery {
+    pub kind: AuditKind,
+    /// One of [`CHAT_CHANNELS`], or empty for any (chat only).
+    pub channel: String,
+    /// Whether tells may be listed (Owner only).
+    pub tells: bool,
+    /// Character names: rows where any of them is the speaker, GM, sender or receiver.
+    /// Empty means anyone.
+    pub names: Vec<String>,
+    /// Text in the message or command line (chat and GM commands), or in the item's name.
+    pub q: String,
+    pub from: i64,
+    pub to: i64,
+    pub page: i64,
+    pub per: i64,
+}
+
+/// One audit row. Which fields are set depends on the table.
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
+pub struct AuditRow {
+    pub at: i64,
+    /// Speaker, GM, sender or seller.
+    pub who: String,
+    /// Tell recipient, receiver or buyer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    /// Chat channel; for a GM command, the command.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
+    /// Linkshell name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub linkshell: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zone: Option<String>,
+    /// The message or command line, as the player typed it (plain text).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quantity: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub price: Option<i64>,
+}
+
+/// A page of audit rows; `more` when another page follows (audit tables are never counted:
+/// LSB gives them no index to count by).
+#[derive(Debug, Clone, Default)]
+pub struct AuditPage {
+    pub items: Vec<AuditRow>,
+    pub more: bool,
+}

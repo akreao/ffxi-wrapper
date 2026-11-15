@@ -325,7 +325,29 @@ pub const SETTINGS: &[Setting] = &[
     // Chat and moderation
     whole("map", "YELL_COOLDOWN", CHAT, "Time between yells", "", (0.0, 3600.0, 120.0), SECONDS, 30.0),
     on("map", "BLOCK_TELL_TO_HIDDEN_GM", CHAT, "Block tells to hidden GMs", "Other GMs can still send them.", false),
-    on("map", "AUDIT_CHAT", CHAT, "Log chat to the database", "", false),
+    // LSB logs a chat line only when AUDIT_CHAT and that channel's switch are both on.
+    // The website's Audit logs page reads these logs; tells there are the owner's alone.
+    on("map", "AUDIT_CHAT", CHAT, "Log chat to the database", "Also switch on each channel to log below.", false),
+    on("map", "AUDIT_SAY", CHAT, "Log say", "", false),
+    on("map", "AUDIT_SHOUT", CHAT, "Log shout", "", false),
+    on("map", "AUDIT_YELL", CHAT, "Log yell", "", false),
+    on("map", "AUDIT_TELL", CHAT, "Log tells", "Private messages between two players.", false),
+    on("map", "AUDIT_PARTY", CHAT, "Log party chat", "", false),
+    on("map", "AUDIT_LINKSHELL", CHAT, "Log linkshell chat", "", false),
+    on("map", "AUDIT_UNITY", CHAT, "Log Unity chat", "", false),
+    on("map", "AUDIT_ASSISTE", CHAT, "Log Assist channel (English)", "", false),
+    on("map", "AUDIT_ASSISTJ", CHAT, "Log Assist channel (Japanese)", "", false),
+    on("map", "AUDIT_BALLISTA", CHAT, "Log Ballista chat", "", false),
+    // A level, not a switch: LSB logs commands that need at least this GM level (0 is off).
+    choice(
+        "map",
+        "AUDIT_GM_CMD",
+        CHAT,
+        "Log GM commands",
+        "Player commands (GM level 0) are never logged.",
+        &[(0, "Off"), (1, "All GM commands"), (2, "Level 2 and up"), (3, "Level 3 and up"), (4, "Level 4 and up"), (5, "Level 5 only")],
+        0.0,
+    ),
     on("map", "AUDIT_PLAYER_TRADES", CHAT, "Log trades between players", "", false),
     on("map", "AUDIT_PLAYER_BAZAAR", CHAT, "Log bazaar sales", "", false),
     on("map", "AUDIT_PLAYER_DBOX", CHAT, "Log delivery box sends", "", false),

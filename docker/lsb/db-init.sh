@@ -59,7 +59,7 @@ sql "UPDATE zone_settings SET zoneip = '$PUBLIC_IP'"
 if [ -n "${DB_ROOT_PASSWORD:-}" ] && [ -n "${WEB_DB_PASSWORD:-}" ]; then
     web_pw="$(printf '%s' "$WEB_DB_PASSWORD" | sed -e 's/\\/\\\\/g' -e "s/'/''/g")"
     db="$XI_NETWORK_SQL_DATABASE"
-    tables="accounts accounts_totp accounts_sessions chars char_stats char_jobs char_exp char_skills char_inventory char_flags zone_settings item_basic item_equipment item_weapon item_mods help_desk"
+    tables="accounts accounts_totp accounts_sessions chars char_stats char_jobs char_exp char_skills char_inventory char_flags zone_settings item_basic item_equipment item_weapon item_mods help_desk audit_chat audit_gm audit_trade audit_bazaar audit_dbox"
     grants=""
     for t in $tables; do
         grants="$grants GRANT SELECT ON \`$db\`.\`$t\` TO 'xiweb'@'%';"

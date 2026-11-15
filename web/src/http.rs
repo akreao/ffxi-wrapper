@@ -65,6 +65,10 @@ impl From<DbError> for ApiError {
                 "The game database isn't ready yet. If this lasts, the database update failed: check the server's log.",
             ),
             DbError::Busy => ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "The site is busy. Try again in a moment."),
+            DbError::TooSlow => ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "That search took too long. Pick a character or a shorter time and try again.",
+            ),
             DbError::Failed(m) => {
                 tracing::error!("database error: {m}");
                 ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "Something went wrong on the server.")
@@ -123,6 +127,13 @@ impl Identity {
     }
     pub fn actor(&self) -> auth::Actor {
         auth::Actor { role: self.role, owner_link: self.owner_link() }
+    }
+    /// Who a read limit counts against: the account, or the owner-link session.
+    pub fn rate_key(&self) -> String {
+        match self.accid() {
+            Some(a) => format!("acct:{a}"),
+            None => format!("session:{}", self.session.id_hash.iter().map(|b| format!("{b:02x}")).collect::<String>()),
+        }
     }
 }
 

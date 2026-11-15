@@ -16,7 +16,8 @@ INIT = (ROOT / "docker/lsb/db-init.sh").read_text()
 
 def statements():
     for lit in re.findall(r'"((?:[^"\\]|\\.)*)"', SRC, re.S):
-        if re.match(r"\s*(SELECT|UPDATE|INSERT|DELETE)\b", lit):
+        # A statement may start with an interpolated prefix such as `{SLOW_LIMIT} `.
+        if re.match(r"\s*(?:\{\w+\}\s*)?(SELECT|UPDATE|INSERT|DELETE)\b", lit):
             yield re.sub(r"\s+", " ", lit)
 
 
@@ -101,6 +102,15 @@ class WebGrants(unittest.TestCase):
             self.assertTrue(covered(g, "SELECT", t), t)
             for priv in ("INSERT", "UPDATE", "DELETE"):
                 self.assertNotIn((priv, t), g, f"{priv} on {t}")
+
+    def test_audit_logs_are_read_only(self):
+        # The audit logs page only reads LSB's audit tables; the site never edits or prunes them.
+        g = grants()
+        for t in ("audit_chat", "audit_gm", "audit_trade", "audit_bazaar", "audit_dbox"):
+            self.assertTrue(covered(g, "SELECT", t), t)
+            for priv in ("INSERT", "UPDATE", "DELETE"):
+                self.assertNotIn((priv, t), g, f"{priv} on {t}")
+            self.assertIn(t, SRC, f"the web code never reads {t}")
 
 
 if __name__ == "__main__":
