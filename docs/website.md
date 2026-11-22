@@ -7,7 +7,7 @@ The optional `web` service is a website for the server.
 **What it has**
 
 - A home page.
-- **My account** for every game account: its characters (read-only) and a password change.
+- **My account** for every game account: its characters (read-only), a password change, and, while the server has player bots on, a per-character switch that hides the AI adventurers (the same as `!bots off` in game; it counts from the character's next login).
 - An admin panel for accounts with the Moderator or Owner website role:
   - a dashboard (who is online, busiest zones, service status, recent actions);
   - searchable Accounts and Characters, with a game-masters-only filter (`/admin/characters?gm=1`);

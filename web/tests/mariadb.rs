@@ -4,7 +4,7 @@
 //! 1. Start `mariadb:12.3` with a database `xidb`, load LSB's `sql/` tables at the
 //!    pinned commit (accounts, chars, char_stats, char_jobs, char_exp, char_flags,
 //!    char_skills, char_inventory, accounts_sessions, zone_settings, item_basic,
-//!    item_equipment, auction_house, delivery_box and its `delivery_box_insert` trigger from
+//!    item_equipment, auction_house, char_vars, delivery_box and its `delivery_box_insert` trigger from
 //!    `triggers.sql`), `tests/fixtures/public.sql`, then `tests/fixtures/auction.sql`.
 //! 2. Create the website's user with the grants from `docker/lsb/db-init.sh`
 //!    (the xiweb block), so a missing grant fails here.
@@ -188,4 +188,31 @@ async fn the_gm_filter_lists_only_characters_with_a_gm_level() {
     assert_eq!(who, ["Ghost", "Halvard"]);
     assert_eq!(list.total, 2);
     assert_eq!(list.items[1].gm, 3);
+}
+
+#[tokio::test]
+#[ignore = "needs the fixture database, see the file header"]
+async fn the_bots_switch_writes_only_its_own_char_var() {
+    let db = db();
+    // Torvald (1) is on account 1001; Pipiru (2) is not.
+    assert_eq!(db.my_bots_hidden(1001, 2).await.unwrap(), None);
+    assert_eq!(db.set_my_bots_hidden(1001, 2, true).await.unwrap(), None);
+    assert_eq!(db.my_bots_hidden(1001, 1).await.unwrap(), Some(false));
+    assert_eq!(db.set_my_bots_hidden(1001, 1, true).await.unwrap(), Some(()));
+    assert_eq!(db.set_my_bots_hidden(1001, 1, true).await.unwrap(), Some(()));
+    assert_eq!(db.my_bots_hidden(1001, 1).await.unwrap(), Some(true));
+    assert_eq!(db.set_my_bots_hidden(1001, 1, false).await.unwrap(), Some(()));
+    assert_eq!(db.my_bots_hidden(1001, 1).await.unwrap(), Some(false));
+
+    // The view is all of char_vars the site may touch: no other variable, and not the table.
+    let mut conn = xiweb().await;
+    let other = "INSERT INTO web_bots_opt_out (charid, varname, value) VALUES (1, 'MissionStatus', 9)";
+    assert!(sqlx::query(other).execute(&mut conn).await.is_err());
+    db.set_my_bots_hidden(1001, 1, true).await.unwrap();
+    let moved = "UPDATE web_bots_opt_out SET varname = 'MissionStatus' WHERE charid = 1";
+    assert!(sqlx::query(moved).execute(&mut conn).await.is_err());
+    assert_eq!(db.my_bots_hidden(1001, 1).await.unwrap(), Some(true));
+    db.set_my_bots_hidden(1001, 1, false).await.unwrap();
+    assert!(sqlx::query("SELECT * FROM char_vars").execute(&mut conn).await.is_err());
+    assert!(sqlx::query("DELETE FROM char_vars").execute(&mut conn).await.is_err());
 }

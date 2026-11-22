@@ -60,6 +60,13 @@ pub trait Game: Send + Sync {
     async fn my_character(&self, accid: i64, charid: i64) -> DbResult<Option<CharDetail>>;
     /// `None` when the character isn't on this account (or doesn't exist).
     async fn my_inventory(&self, accid: i64, charid: i64) -> DbResult<Option<Vec<InventoryItem>>>;
+    /// Whether the character hides LSB's player bots ("AI adventurers"): its `BotsOptOut`
+    /// char var is above 0, as LSB's `!bots off` sets it. `None` when the character isn't on
+    /// this account (or doesn't exist).
+    async fn my_bots_hidden(&self, accid: i64, charid: i64) -> DbResult<Option<bool>>;
+    /// Sets (`BotsOptOut` = 1) or clears (no row, as LSB's `!bots on` leaves it) the switch
+    /// above. `None` when the character isn't on this account; nothing is written then.
+    async fn set_my_bots_hidden(&self, accid: i64, charid: i64, hidden: bool) -> DbResult<Option<()>>;
     async fn set_password(&self, accid: i64, hash: &str) -> DbResult<()>;
     /// Makes an account exactly as LSB's login server does (`LOGIN_CREATE`): the login must be
     /// unused, the id is `MAX(id) + 1` but at least 1000, status NORMAL, privilege USER.
@@ -485,6 +492,41 @@ impl Game for MariaDb {
             });
         }
         Ok(Some(out))
+    }
+
+    // `web_bots_opt_out` is db-init's view of `char_vars` rows named `BotsOptOut` (WITH CHECK
+    // OPTION), the only part of `char_vars` the site may touch.
+    async fn my_bots_hidden(&self, accid: i64, charid: i64) -> DbResult<Option<bool>> {
+        let row = sqlx::query(
+            "SELECT CAST(COALESCE(v.value, 0) AS SIGNED) AS value FROM chars c
+             LEFT JOIN web_bots_opt_out v ON v.charid = c.charid
+             WHERE c.charid = ? AND c.accid = ?",
+        )
+        .bind(charid)
+        .bind(accid)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| r.try_get::<i64, _>("value")).transpose()?.map(|v| v > 0))
+    }
+
+    async fn set_my_bots_hidden(&self, accid: i64, charid: i64, hidden: bool) -> DbResult<Option<()>> {
+        let owned = sqlx::query("SELECT 1 FROM chars WHERE charid = ? AND accid = ?")
+            .bind(charid)
+            .bind(accid)
+            .fetch_optional(&self.pool)
+            .await?;
+        if owned.is_none() {
+            return Ok(None);
+        }
+        if hidden {
+            sqlx::query("INSERT INTO web_bots_opt_out (charid, varname, value) VALUES (?, 'BotsOptOut', 1) ON DUPLICATE KEY UPDATE value = VALUES(value)")
+                .bind(charid)
+                .execute(&self.pool)
+                .await?;
+        } else {
+            sqlx::query("DELETE FROM web_bots_opt_out WHERE charid = ?").bind(charid).execute(&self.pool).await?;
+        }
+        Ok(Some(()))
     }
 
     async fn set_password(&self, accid: i64, hash: &str) -> DbResult<()> {

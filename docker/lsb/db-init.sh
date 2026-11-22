@@ -80,6 +80,15 @@ if [ -n "${DB_ROOT_PASSWORD:-}" ] && [ -n "${WEB_DB_PASSWORD:-}" ]; then
         GRANT UPDATE (response, responded_at, deleted_at) ON \`$db\`.\`help_desk\` TO 'xiweb'@'%';
         GRANT SELECT (charid, box, slot, itemid), INSERT (charid, box, itemid, quantity, senderid, sender)
             ON \`$db\`.\`delivery_box\` TO 'xiweb'@'%';"
+    # A player's AI adventurers switch on My account is LSB's BotsOptOut char var (what !bots off
+    # sets). The site gets this view of those rows only, not char_vars: WITH CHECK OPTION refuses
+    # any other varname, and the view's DELETE and UPDATE only ever see BotsOptOut rows.
+    player_grants="
+        CREATE OR REPLACE SQL SECURITY DEFINER VIEW \`$db\`.\`web_bots_opt_out\` AS
+            SELECT charid, varname, value FROM \`$db\`.\`char_vars\` WHERE varname = 'BotsOptOut'
+            WITH CHECK OPTION;
+        GRANT SELECT, INSERT (charid, varname, value), UPDATE (charid, varname, value), DELETE
+            ON \`$db\`.\`web_bots_opt_out\` TO 'xiweb'@'%';"
     if MYSQL_PWD="$DB_ROOT_PASSWORD" mariadb --skip-ssl-verify-server-cert -h"$XI_NETWORK_SQL_HOST" -P"$XI_NETWORK_SQL_PORT" -uroot -e "
         CREATE USER IF NOT EXISTS 'xiweb'@'%' IDENTIFIED BY '$web_pw';
         ALTER USER 'xiweb'@'%' IDENTIFIED BY '$web_pw';
@@ -88,6 +97,7 @@ if [ -n "${DB_ROOT_PASSWORD:-}" ] && [ -n "${WEB_DB_PASSWORD:-}" ]; then
         GRANT UPDATE (password) ON \`$db\`.\`accounts\` TO 'xiweb'@'%';
         GRANT INSERT (id, login, password, timecreate, timelastmodify, status, priv) ON \`$db\`.\`accounts\` TO 'xiweb'@'%';
         $admin_grants
+        $player_grants
         FLUSH PRIVILEGES;"; then
         echo "Website database user ready."
     else
