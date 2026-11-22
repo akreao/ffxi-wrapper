@@ -41,10 +41,10 @@ pub const POST_KEYS: [&str; 6] = ["author", "body_html", "id", "pinned", "publis
 /// The keys of `/api/public/news`.
 pub const NEWS_KEYS: [&str; 4] = ["items", "page", "per", "total"];
 /// The keys of `/api/public/content/{key}`.
-pub const CONTENT_KEYS: [&str; 1] = ["html"];
+pub const CONTENT_KEYS: [&str; 2] = ["bots_html", "html"];
 
 /// The keys of `/api/public/online`, and of each of its players.
-pub const ONLINE_KEYS: [&str; 3] = ["count", "players", "updated"];
+pub const ONLINE_KEYS: [&str; 4] = ["bots", "count", "players", "updated"];
 pub const ONLINE_PLAYER_KEYS: [&str; 8] = ["anonymous", "mjob", "mlvl", "name", "nation", "sjob", "slvl", "zone"];
 /// The keys of `/api/public/rankings/{board}`, and of each of its rows.
 pub const RANKING_KEYS: [&str; 7] = ["board", "page", "pages", "per_page", "rows", "total", "updated"];
@@ -140,7 +140,9 @@ async fn home(State(state): State<Shared>, ClientIp(ip): ClientIp) -> ApiResult<
 async fn online(State(state): State<Shared>, ClientIp(ip): ClientIp) -> ApiResult<Json<Value>> {
     limited(&state, &ip)?;
     let (at, list) = online_list(&state).await?;
-    Ok(Json(json!({ "updated": at, "count": list.len(), "players": *list })))
+    // Player bots are never in this list (no session rows); the page says so while they're on.
+    let bots = crate::lsb_settings::read_async(state.cfg.lsb_settings.clone()).await.bots_enabled;
+    Ok(Json(json!({ "updated": at, "count": list.len(), "players": *list, "bots": bots })))
 }
 
 #[derive(Deserialize)]
@@ -248,12 +250,15 @@ async fn content_block(State(state): State<Shared>, ClientIp(ip): ClientIp, Path
     if key != "rules" {
         return Err(ApiError::not_found());
     }
-    let ck = format!("content:{key}");
+    // The AI adventurers notice comes with the rules while the server has bots on.
+    let bots = crate::lsb_settings::read_async(state.cfg.lsb_settings.clone()).await.bots_enabled;
+    let ck = format!("content:{key}:{bots}");
     if let Some(hit) = cached(&state, &ck) {
         return Ok(hit);
     }
     let stored = state.store.content_all().await?;
-    let out = json!({ "html": markdown::render(&content::effective(&key, &stored, &state.cfg).0) });
+    let bots_html = bots.then(|| markdown::render(&content::effective("bots", &stored, &state.cfg).0));
+    let out = json!({ "html": markdown::render(&content::effective(&key, &stored, &state.cfg).0), "bots_html": bots_html });
     remember(&state.news_cache, &ck, &out, state.now(), gen);
     Ok(Json(out))
 }

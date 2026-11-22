@@ -17,13 +17,22 @@ pub struct Block {
     pub plain: bool,
 }
 
-pub const BLOCKS: [Block; 5] = [
+pub const BLOCKS: [Block; 6] = [
     Block { key: "home_title", label: "Home page title", hint: "The big heading on the home page. Plain text; the server's name until you change it.", max: 80, plain: true },
     Block { key: "home_description", label: "Home page description", hint: "A few lines under the title.", max: 1_000, plain: false },
     Block { key: "connect", label: "How to connect", hint: "The steps in the box next to the title. The server's address, when the site knows it, is shown below your text with a Copy button.", max: 2_000, plain: false },
     Block { key: "rules", label: "House rules", hint: "The text of the Rules page.", max: 20_000, plain: false },
+    Block { key: "bots", label: "AI adventurers", hint: "Shown on the Rules page, and linked from Who's online, only while the server has AI adventurers (player bots) switched on.", max: 5_000, plain: false },
     Block { key: "footer", label: "Footer", hint: "The line at the bottom of every public page.", max: 400, plain: false },
 ];
+
+/// What players are told about LSB's player bots until the owner edits it.
+pub const BOTS_NOTICE: &str = "**AI adventurers.** Some of the adventurers you meet on this server are run by the server, not by people. \
+They hunt, travel, rest in town, say a few lines, and can join your party, where they take a share of experience like a trust. \
+They show up in /sea like anyone else. Their /check comment reads \"AI adventurer\". \
+They never trade, bid at the auction house, or join linkshells, and nothing about them is saved. \
+If you'd rather not have them around, type `!bots off` in game or use the switch on [your character's page](/me) on this site. \
+They are then hidden from you, their chat doesn't reach you, and they won't hunt near you. `!bots on` brings them back.";
 
 pub fn block(key: &str) -> Option<&'static Block> {
     BLOCKS.iter().find(|b| b.key == key)
@@ -49,6 +58,7 @@ pub fn default_body(key: &str, cfg: &Config) -> String {
             )
         }
         "rules" => "The server owner hasn't written the house rules yet.".into(),
+        "bots" => BOTS_NOTICE.into(),
         "footer" => format!("{} runs on [LandSandBoat](https://github.com/LandSandBoat/server). Not affiliated with Square Enix.", cfg.server_name),
         _ => String::new(),
     }

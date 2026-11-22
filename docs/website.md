@@ -54,6 +54,7 @@ The optional `web` service is a website for the server.
   - Limits: 3 sign-ups an hour per address, and 30 accounts a day for the whole server.
   - The new account is signed in and taken to **My account**, which shows how to connect.
 - **Audit logs.** Staff read LSB's own logs in the admin panel: chat, GM commands, trades, bazaar sales and delivery box sends. They can filter by log, chat channel, character or account, dates and text. Newest comes first. Tells are shown to the owner only. The Rules page tells players that the server may log chat.
+- **AI adventurers.** While the server has player bots on (`PLAYER_BOTS_ENABLED`), the Rules page adds a section that tells players some adventurers are run by the server and how to hide them, and Who's online says it lists real players only, with a link to that section. The owner can reword the section under Site content (*AI adventurers*).
   - LSB writes these logs only for what the desktop app's Game settings switch on (Chat and moderation: *Log chat to the database* plus each channel, *Log GM commands*, trades, bazaar, delivery box). All are off by default.
   - **Retention:** LSB never deletes from `audit_chat`, `audit_gm`, `audit_trade`, `audit_bazaar` or `audit_dbox`, and the site only reads them (`SELECT`). They grow for as long as logging is on.
   - The site shows the last 90 days, at most 40 pages per search. It runs at most two searches at once and stops a search after 5 seconds.

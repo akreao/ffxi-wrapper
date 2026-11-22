@@ -101,3 +101,27 @@ fn the_bots_setting_is_read_like_lsb_loads_it() {
     assert_eq!(last_flag("PLAYER_BOTS_ENABLED = trueish", key), None);
     assert_eq!(last_flag("PLAYER_BOTS_ENABLED = 1", key), None);
 }
+
+#[tokio::test]
+async fn the_rules_and_online_list_tell_visitors_about_bots_only_while_they_are_on() {
+    for (name, setting) in [("public-off", Some(false)), ("public-on", Some(true))] {
+        let on = setting == Some(true);
+        let s = players(settings_dir(name, setting)).await;
+        let rules = s.send(Req::get("/api/public/content/rules")).await.json();
+        assert_eq!(rules["bots_html"].is_string(), on, "{name}: {rules}");
+        if on {
+            let html = rules["bots_html"].as_str().unwrap();
+            assert!(html.contains("<strong>AI adventurers.</strong>"), "{html}");
+            assert!(html.contains("<code>!bots off</code>") && html.contains("<a href=\"/me\""), "{html}");
+        }
+        assert_eq!(s.send(Req::get("/api/public/online")).await.json()["bots"], on, "{name}");
+    }
+}
+
+#[tokio::test]
+async fn the_owner_can_reword_the_bots_notice() {
+    let s = players(settings_dir("edited", Some(true))).await;
+    s.state.store.content_set("bots", "Our *helpers* are bots.", "owner", NOW).await.unwrap();
+    let rules = s.send(Req::get("/api/public/content/rules")).await.json();
+    assert_eq!(rules["bots_html"].as_str().unwrap().trim(), "<p>Our <em>helpers</em> are bots.</p>");
+}
