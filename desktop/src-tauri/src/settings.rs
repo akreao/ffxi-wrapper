@@ -48,6 +48,7 @@ const NEW: &str = "New characters";
 const COMBAT: &str = "Combat and jobs";
 const POWER: &str = "Spell and ability power";
 const MOBS: &str = "Monsters and trusts";
+const BOTS: &str = "AI adventurers";
 const SKILLS: &str = "Skills and crafting";
 const WORLD: &str = "World and travel";
 const EXPANSIONS: &str = "Expansions";
@@ -61,6 +62,8 @@ const CHAT: &str = "Chat and moderation";
 const X: &str = "×";
 const SECONDS: &str = "seconds";
 const HOURS: &str = "hours";
+const MINUTES: &str = "minutes";
+const YALMS: &str = "yalms";
 
 /// A multiplier: 1 is LSB's (retail's) value.
 const fn rate(file: &'static str, key: &'static str, group: &'static str, label: &'static str, hint: &'static str) -> Setting {
@@ -210,6 +213,36 @@ pub const SETTINGS: &[Setting] = &[
     frac("main", "NM_LOTTERY_CHANCE", MOBS, "Notorious monster spawn chance", "0 stops lottery spawns; -1 makes them always spawn.", (-1.0, 100.0, 5.0), X, 1.0),
     frac("main", "NM_LOTTERY_COOLDOWN", MOBS, "Notorious monster cooldown", "0 removes the wait between spawns.", (0.0, 100.0, 5.0), X, 1.0),
     whole("main", "FORCE_SPAWN_QM_RESET_TIME", MOBS, "??? hidden after its monster leaves", "", (0.0, 86_400.0, 0.0), SECONDS, 300.0),
+    // AI adventurers: LSB's player bots (map.lua PLAYER_BOTS_*), custom, not retail. A key
+    // ending in [1] or [2] is one end of a { lowest, highest } table setting.
+    on("map", "PLAYER_BOTS_ENABLED", BOTS, "AI adventurers", "Server-run adventurers that hunt, travel, chat and join parties, in zones that have players. Nothing about them is saved. Players can hide them with !bots off.", false),
+    whole("map", "PLAYER_BOTS_MAX_TOTAL", BOTS, "Most on the server", "200 cost about 2 ms per zone tick and 11 MB.", (0.0, 1000.0, 500.0), "", 200.0),
+    whole("map", "PLAYER_BOTS_MAX_PER_ZONE", BOTS, "Most in one zone", "Caps the counts below. Real players are drawn first when more than 32 people are close by.", (0.0, 100.0, 50.0), "", 20.0),
+    whole("map", "PLAYER_BOTS_CITY_COUNT[1]", BOTS, "Fewest in a city", "Each zone picks its count once, between the fewest and the most for its kind.", (0.0, 100.0, 50.0), "", 8.0),
+    whole("map", "PLAYER_BOTS_CITY_COUNT[2]", BOTS, "Most in a city", "", (0.0, 100.0, 50.0), "", 14.0),
+    whole("map", "PLAYER_BOTS_OUTDOORS_COUNT[1]", BOTS, "Fewest in an outdoor zone", "", (0.0, 100.0, 50.0), "", 8.0),
+    whole("map", "PLAYER_BOTS_OUTDOORS_COUNT[2]", BOTS, "Most in an outdoor zone", "", (0.0, 100.0, 50.0), "", 14.0),
+    whole("map", "PLAYER_BOTS_DUNGEON_COUNT[1]", BOTS, "Fewest in a dungeon", "", (0.0, 100.0, 50.0), "", 6.0),
+    whole("map", "PLAYER_BOTS_DUNGEON_COUNT[2]", BOTS, "Most in a dungeon", "", (0.0, 100.0, 50.0), "", 10.0),
+    whole("map", "PLAYER_BOTS_SEEKING_PERCENT", BOTS, "Looking for a party", "Part of the bots on their own that show the seeking party flag and list as seeking in /sea.", (0.0, 100.0, 100.0), "%", 100.0),
+    whole("map", "PLAYER_BOTS_MAX_LEVEL", BOTS, "Highest bot level", "Zones pick lower levels from their monsters.", LEVEL, "", 75.0),
+    whole("map", "PLAYER_BOTS_MAX_HUNTERS", BOTS, "Hunters per zone", "The rest roam.", (0.0, 100.0, 20.0), "", 4.0),
+    on("map", "PLAYER_BOTS_HUNTERS_YIELD", BOTS, "Hunters make room for players", "Each player whose level fits the zone takes one hunter away; three or more stop bot hunting there.", true),
+    whole("map", "PLAYER_BOTS_CAMP_RANGE", BOTS, "Distance kept from players' camps", "Bots don't hunt this close to where a player fought lately.", (0.0, 500.0, 200.0), YALMS, 50.0),
+    whole("map", "PLAYER_BOTS_CAMP_MINUTES", BOTS, "A camp counts for", "", (0.0, 255.0, 60.0), MINUTES, 5.0),
+    whole("map", "PLAYER_BOTS_OPT_OUT_RANGE", BOTS, "Distance kept from players who hid them", "Bots don't hunt this close to a player who typed !bots off.", (0.0, 500.0, 200.0), YALMS, 60.0),
+    whole("map", "PLAYER_BOTS_RAISE_WAIT", BOTS, "A dead bot waits for a raise", "Then it comes back at a zone entrance.", (0.0, 3600.0, 600.0), SECONDS, 180.0),
+    whole("map", "PLAYER_BOTS_STAY_MIN", BOTS, "Shortest stay", "A bot plays this long or longer, then logs out once it's alone and not fighting. Party bots stay while the party lasts.", (1.0, 1440.0, 240.0), MINUTES, 30.0),
+    whole("map", "PLAYER_BOTS_STAY_MAX", BOTS, "Longest stay", "", (1.0, 1440.0, 240.0), MINUTES, 120.0),
+    whole("map", "PLAYER_BOTS_ARRIVAL_INTERVAL", BOTS, "Time between arrivals", "In a zone with players, one bot at a time.", (1.0, 3600.0, 120.0), SECONDS, 20.0),
+    whole("map", "PLAYER_BOTS_LEAVE_DELAY", BOTS, "Stay after the last player leaves a zone", "", (0.0, 65_535.0, 7200.0), SECONDS, 1800.0),
+    whole("map", "PLAYER_BOTS_PARTY_LEVEL_ABOVE", BOTS, "Join parties up to this many levels above", "Counted from the party's highest real member.", (0.0, 98.0, 30.0), "", 10.0),
+    whole("map", "PLAYER_BOTS_PARTY_LEVEL_BELOW", BOTS, "Join parties up to this many levels below", "", (0.0, 98.0, 30.0), "", 10.0),
+    whole("map", "PLAYER_BOTS_MAX_PER_PARTY", BOTS, "Most in one party", "So people still need people.", (0.0, 5.0, 5.0), "", 2.0),
+    whole("map", "PLAYER_BOTS_CATCH_UP_DISTANCE", BOTS, "Catch up from farther than", "A party bot this far from its leader turns up 15 to 70 yalms away, out of sight, instead of running. 0 always runs.", (0.0, 1000.0, 300.0), YALMS, 100.0),
+    whole("map", "PLAYER_BOTS_CATCH_UP_STUCK", BOTS, "Catch up when stuck for", "A party bot that gets nowhere this long turns up near its leader. 0 never; it leaves after a minute stuck.", (0.0, 600.0, 60.0), SECONDS, 10.0),
+    on("map", "PLAYER_BOTS_CHAT", BOTS, "Bot chat", "Party greetings and goodbyes, refusals, tell replies and some city chatter.", true),
+    whole("map", "PLAYER_BOTS_SAY_INTERVAL", BOTS, "Time between city chatter", "0 never.", (0.0, 36_000.0, 3600.0), SECONDS, 600.0),
     // Skills and crafting
     rate("map", "SKILLUP_CHANCE_MULTIPLIER", SKILLS, "Combat skill-up chance", ""),
     frac("map", "SKILLUP_AMOUNT_MULTIPLIER", SKILLS, "Combat skill-up size", "Above 1 lets one skill-up go past 0.5, up to 0.9. 5 is the most it does.", (0.0, 5.0, 5.0), X, 1.0),
@@ -415,12 +448,17 @@ pub fn save(stack: &Path, values: &Values) -> Result<bool, String> {
     if all.get("main.INITIAL_LEVEL_CAP") > all.get("main.MAX_LEVEL") {
         return Err("The starting level cap can't be above the highest level.".into());
     }
+    for (low, high) in ordered_pairs() {
+        if all[&id(low)] > all[&id(high)] {
+            return Err(format!("{} can't be above {}.", low.label, high.label.to_lowercase()));
+        }
+    }
     let changed: Values = SETTINGS
         .iter()
         .filter(|s| all[&id(s)] != s.default)
         .map(|s| (id(s), all[&id(s)]))
         .collect();
-    let lua = lua(&changed);
+    let lua = lua(&changed, &all);
     let before = fs::read_to_string(lua_path(stack)).ok();
     let dir = json_path(stack).parent().unwrap().to_owned();
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -435,7 +473,28 @@ pub fn save(stack: &Path, values: &Values) -> Result<bool, String> {
     Ok(before != after)
 }
 
-fn lua(changed: &Values) -> String {
+/// The two ends of a `{ lowest, highest }` table setting (`KEY[1]`, `KEY[2]`) and other
+/// lowest/highest pairs, low first.
+fn ordered_pairs() -> Vec<(&'static Setting, &'static Setting)> {
+    let find = |file: &str, key: &str| SETTINGS.iter().find(|s| s.file == file && s.key == key);
+    let mut pairs: Vec<_> = SETTINGS
+        .iter()
+        .filter_map(|low| {
+            let base = low.key.strip_suffix("[1]")?;
+            Some((low, find(low.file, &format!("{base}[2]"))?))
+        })
+        .collect();
+    pairs.extend(find("map", "PLAYER_BOTS_STAY_MIN").zip(find("map", "PLAYER_BOTS_STAY_MAX")));
+    pairs
+}
+
+/// `KEY` and the index for one end of a table setting (`KEY[1]`).
+fn table_part(key: &str) -> Option<(&str, usize)> {
+    let (base, rest) = key.split_once('[')?;
+    Some((base, rest.strip_suffix(']')?.parse().ok()?))
+}
+
+fn lua(changed: &Values, all: &Values) -> String {
     let mut out = String::from(
         "-- Written by the ffxi-wrapper desktop app from its Game settings, and\n\
          -- replaced when they're saved: change these there. LSB loads this file\n\
@@ -453,7 +512,24 @@ fn lua(changed: &Values) -> String {
             continue;
         }
         out.push_str(&format!("xi.settings.{file} = xi.settings.{file} or {{}}\n"));
+        let mut tables_done: Vec<&str> = Vec::new();
         for s in mine {
+            // A table setting is written whole, from every part's value, when any part changed.
+            if let Some((base, _)) = table_part(s.key) {
+                if tables_done.contains(&base) {
+                    continue;
+                }
+                tables_done.push(base);
+                let mut parts: Vec<(usize, f64)> = SETTINGS
+                    .iter()
+                    .filter(|o| o.file == file)
+                    .filter_map(|o| table_part(o.key).filter(|(b, _)| *b == base).map(|(_, i)| (i, all[&id(o)])))
+                    .collect();
+                parts.sort_by_key(|(i, _)| *i);
+                let values: Vec<String> = parts.iter().map(|(_, v)| v.to_string()).collect();
+                out.push_str(&format!("xi.settings.{file}.{base} = {{ {} }}\n", values.join(", ")));
+                continue;
+            }
             let v = changed[&id(s)];
             let value = match s.kind {
                 Kind::Bool => (if v == 1.0 { "true" } else { "false" }).to_owned(),
@@ -517,6 +593,40 @@ mod tests {
         assert!(save(&stack, &one("map.FISHING_ENABLE", 2.0)).is_err());
         assert!(save(&stack, &one("main.MAX_LEVEL", 40.0)).unwrap_err().contains("level cap"));
         assert!(save(&stack, &one("main.UNLOCK_OUTPOST_WARPS", 2.0)).is_ok());
+        fs::remove_dir_all(stack).unwrap();
+    }
+
+    #[test]
+    fn a_range_setting_is_written_as_one_table() {
+        let stack = temp("table");
+        let mut v = Values::new();
+        v.insert("map.PLAYER_BOTS_ENABLED".into(), 1.0);
+        v.insert("map.PLAYER_BOTS_CITY_COUNT[2]".into(), 20.0);
+        assert!(save(&stack, &v).unwrap());
+        let lua = fs::read_to_string(lua_path(&stack)).unwrap();
+        assert!(lua.contains("xi.settings.map.PLAYER_BOTS_ENABLED = true\n"), "{lua}");
+        // The unchanged low end goes in too, from LSB's default.
+        assert!(lua.contains("xi.settings.map.PLAYER_BOTS_CITY_COUNT = { 8, 20 }\n"), "{lua}");
+        assert_eq!(lua.matches("PLAYER_BOTS_CITY_COUNT").count(), 1);
+        assert!(!lua.contains("[1]") && !lua.contains("[2]"));
+        assert!(!lua.contains("OUTDOORS_COUNT"));
+        assert_eq!(load(&stack)["map.PLAYER_BOTS_CITY_COUNT[1]"], 8.0);
+        assert_eq!(load(&stack)["map.PLAYER_BOTS_CITY_COUNT[2]"], 20.0);
+        fs::remove_dir_all(stack).unwrap();
+    }
+
+    #[test]
+    fn the_low_end_of_a_range_cant_pass_the_high_end() {
+        let stack = temp("pairs");
+        let one = |k: &str, v: f64| Values::from([(k.to_owned(), v)]);
+        let err = save(&stack, &one("map.PLAYER_BOTS_DUNGEON_COUNT[1]", 11.0)).unwrap_err();
+        assert!(err.contains("Fewest in a dungeon"), "{err}");
+        assert!(save(&stack, &one("map.PLAYER_BOTS_STAY_MIN", 121.0)).unwrap_err().contains("Shortest stay"));
+        assert!(save(&stack, &one("map.PLAYER_BOTS_DUNGEON_COUNT[1]", 10.0)).is_ok());
+        // Both ends moved in one save.
+        let both = Values::from([("map.PLAYER_BOTS_CITY_COUNT[1]".to_owned(), 30.0), ("map.PLAYER_BOTS_CITY_COUNT[2]".to_owned(), 40.0)]);
+        assert!(save(&stack, &both).is_ok());
+        assert_eq!(ordered_pairs().len(), 4);
         fs::remove_dir_all(stack).unwrap();
     }
 
