@@ -363,6 +363,7 @@
   pages.rules = async function (main) {
     const d = await api("/public/content/rules");
     main.append(h("h2", {}, "House rules"), h("section", { class: "card pad" }, prose(d.html)),
+      d.bots_html ? h("section", { class: "card pad", id: "ai-adventurers" }, prose(d.bots_html)) : null,
       // Fixed text, not the owner's: players should know before they speak.
       h("section", { class: "card pad" }, h("h3", {}, "Logging"),
         h("p", {}, "This server may log chat (tells included), GM commands, trades, bazaar sales and delivery box sends. " +
@@ -413,7 +414,8 @@
           h("thead", {}, h("tr", {}, h("th", {}, "Character"), h("th", {}, "Job"), h("th", {}, "Zone"), h("th", { class: "hide-phone" }, "Nation"))),
           h("tbody", {}, rows)))
         : h("p", { class: "empty" }, "Nobody is in game right now."),
-      h("div", { class: "pager" }, h("span", { class: "count" }, "Characters set to /anon show only their name and nation, as in the game's search. Game masters are not listed."))));
+      h("div", { class: "pager" }, h("span", { class: "count" }, "Characters set to /anon show only their name and nation, as in the game's search. Game masters are not listed.",
+        j.bots ? [" This list shows real players only. The server also has AI adventurers, which you'll see in game and in /sea. ", h("a", { href: "/rules#ai-adventurers" }, "About AI adventurers")] : null))));
   };
 
   const BOARDS = [["level", "Level"], ["job", "By job"], ["craft", "Crafting"], ["playtime", "Play time"]];
@@ -663,6 +665,36 @@
         h("thead", {}, h("tr", {}, h("th", { class: "num" }, "Slot"), h("th", {}, "Item"), h("th", { class: "num" }, "Qty"))), tbody)));
   }
 
+  // The character's AI adventurers switch: LSB's `!bots off` / `!bots on`, shown while the server has bots on.
+  function botsCard(id) {
+    const card = h("section", { class: "card pad", hidden: true });
+    const url = `/me/characters/${encodeURIComponent(id)}/bots`;
+    api(url).then((b) => {
+      if (!b.enabled) return;
+      const box = h("input", { type: "checkbox", class: "switch", id: "bots-shown", checked: !b.hidden });
+      const msg = h("p", { class: "hint", role: "status" });
+      box.addEventListener("change", async () => {
+        box.disabled = true;
+        try {
+          await api(url, { method: "POST", body: { hidden: !box.checked } });
+          msg.classList.remove("error");
+          msg.textContent = "Saved.";
+        } catch (ex) {
+          box.checked = !box.checked;
+          msg.classList.add("error");
+          msg.textContent = ex.message;
+        }
+        box.disabled = false;
+      });
+      card.append(h("h2", {}, "AI adventurers"),
+        h("label", { class: "editor-filter", for: "bots-shown" }, box, " Show the server's AI adventurers to this character"),
+        h("p", { class: "hint" }, "When it's off they're hidden, their chat doesn't reach you, and they won't hunt near you. This is the same as typing !bots off in game. It takes effect the next time this character logs in."),
+        msg);
+      card.hidden = false;
+    }).catch(() => {});
+    return card;
+  }
+
   pages["me-character"] = async function (main) {
     const id = location.pathname.split("/").pop();
     let c, inv;
@@ -686,7 +718,8 @@
         stat("Zone", c.zone || "–", c.online ? "In game now" : `Last played ${date(c.last_logout)}`),
         stat("Gil", num(c.gil), "In inventory"),
         stat("Play time", playtime(c.playtime), "")),
-      h("p", { class: "hint" }, "What the server has saved for this character. While you're in game it updates when you zone or log out.")));
+      h("p", { class: "hint" }, "What the server has saved for this character. While you're in game it updates when you zone or log out."),
+      botsCard(id)));
 
     main.append(panel("jobs", false, jobsCard(c)));
     main.append(panel("inventory", false, inventoryCard(inv)));

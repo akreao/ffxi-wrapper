@@ -366,7 +366,7 @@ async fn content_blocks_default_save_and_reset() {
 
     let blocks = s.send(with(&owner, Req::get("/api/admin/content"))).await.json();
     let list = blocks["blocks"].as_array().unwrap();
-    assert_eq!(list.iter().map(|b| b["key"].as_str().unwrap()).collect::<Vec<_>>(), ["home_title", "home_description", "connect", "rules", "footer"]);
+    assert_eq!(list.iter().map(|b| b["key"].as_str().unwrap()).collect::<Vec<_>>(), ["home_title", "home_description", "connect", "rules", "bots", "footer"]);
     assert!(list.iter().all(|b| b["is_default"] == true));
 
     let put = |key: &str, body: &str| with(&owner, Req::put(&format!("/api/admin/content/{key}"), json!({ "body": body })));

@@ -145,6 +145,8 @@ pub struct Data {
     pub audit_queries: Vec<AuditQuery>,
     /// Delivery box rows the site wrote: (charid, itemid, quantity, sender).
     pub gives: Vec<(i64, i64, i64, String)>,
+    /// Characters whose `BotsOptOut` char var is set.
+    pub bots_hidden: Vec<i64>,
     /// Auction house rows: (itemid, stack, row); a row with a buyer name is a sale.
     pub auction: Vec<(i64, bool, AuctionRow)>,
 }
@@ -309,6 +311,26 @@ impl Game for Fake {
         let mut d = self.0.lock().unwrap();
         d.char_queries.push((accid, charid));
         Ok(d.chars.iter().find(|c| c.accid == accid && c.charid == charid).map(|_| vec![InventoryItem { location: 0, slot: 1, item_id: 4116, name: Some("Hi-Potion".into()), quantity: 3 }]))
+    }
+    async fn my_bots_hidden(&self, accid: i64, charid: i64) -> DbResult<Option<bool>> {
+        self.check()?;
+        let mut d = self.0.lock().unwrap();
+        d.char_queries.push((accid, charid));
+        let owned = d.chars.iter().any(|c| c.accid == accid && c.charid == charid);
+        Ok(owned.then(|| d.bots_hidden.contains(&charid)))
+    }
+    async fn set_my_bots_hidden(&self, accid: i64, charid: i64, hidden: bool) -> DbResult<Option<()>> {
+        self.check()?;
+        let mut d = self.0.lock().unwrap();
+        d.char_queries.push((accid, charid));
+        if !d.chars.iter().any(|c| c.accid == accid && c.charid == charid) {
+            return Ok(None);
+        }
+        d.bots_hidden.retain(|c| *c != charid);
+        if hidden {
+            d.bots_hidden.push(charid);
+        }
+        Ok(Some(()))
     }
     async fn set_password(&self, accid: i64, hash: &str) -> DbResult<()> {
         self.check()?;

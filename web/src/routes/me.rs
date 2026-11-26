@@ -19,6 +19,7 @@ pub fn api() -> Router<Shared> {
         .route("/me/account", get(account))
         .route("/me/characters/{charid}", get(character))
         .route("/me/characters/{charid}/inventory", get(inventory))
+        .route("/me/characters/{charid}/bots", get(bots).post(set_bots))
         .route("/me/password", post(change_password))
 }
 
@@ -36,6 +37,31 @@ async fn character(State(state): State<Shared>, Player(_, accid): Player, Path(c
 async fn inventory(State(state): State<Shared>, Player(_, accid): Player, Path(charid): Path<i64>) -> ApiResult<Json<Value>> {
     let items = state.game.my_inventory(accid, charid).await?.ok_or_else(ApiError::not_found)?;
     Ok(Json(json!({ "items": items })))
+}
+
+/// The character's AI adventurers switch. `enabled` is whether the server has player bots
+/// on at all (its settings); the page shows the switch only then.
+async fn bots(State(state): State<Shared>, Player(_, accid): Player, Path(charid): Path<i64>) -> ApiResult<Json<Value>> {
+    let hidden = state.game.my_bots_hidden(accid, charid).await?.ok_or_else(ApiError::not_found)?;
+    let enabled = crate::lsb_settings::read_async(state.cfg.lsb_settings.clone()).await.bots_enabled;
+    Ok(Json(json!({ "enabled": enabled, "hidden": hidden })))
+}
+
+#[derive(Deserialize)]
+struct BotsBody {
+    hidden: bool,
+}
+
+/// Writes the same char var as `!bots off` / `!bots on`. The map server reads it when the
+/// character logs in, so a change made while in game counts from the next login.
+async fn set_bots(
+    State(state): State<Shared>,
+    Player(_, accid): Player,
+    Path(charid): Path<i64>,
+    Json(body): Json<BotsBody>,
+) -> ApiResult<Json<Value>> {
+    state.game.set_my_bots_hidden(accid, charid, body.hidden).await?.ok_or_else(ApiError::not_found)?;
+    Ok(Json(json!({ "hidden": body.hidden })))
 }
 
 #[derive(Deserialize)]
